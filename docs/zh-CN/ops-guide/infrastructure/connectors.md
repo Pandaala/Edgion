@@ -102,10 +102,10 @@ TLS 配置审计警告在准备阶段记录，不会每次查询重复打印。�
 与 Webhook 一样不受 `linkSys.maxInstancesPerKind` 限制。上面的连接池参数限制每个
 准备好的客户端保留的空闲连接；HTTPDNS 不配置重试或主动健康检查后台任务。
 
-Controller 后台解析也在查询前准备客户端，并在 Service 配置未变化时跨刷新周期复用。
-该路径读取的 Kubernetes LinkSys 原始对象不包含 Controller 解析后的 TLS Secret 字段，
-需要这些字段的自定义 CA 或 mTLS 引用仍使用配置指定的 fallback。
-Gateway 则使用 conf_sync 传来的已解析配置。
+Controller DNS 解析（用于 `controller` 模式的 ExternalName Service）也在查询前准备客户端，
+并在 Service 配置未变化时跨刷新周期复用。它读取的是处理后的 LinkSys，包含 Controller
+解析后的 TLS Secret 字段，因此自定义 CA 和 mTLS 引用在这里同样可用；Gateway 则使用
+conf_sync 传来的已解析配置。
 
 检查覆盖 URL 中的 IP 字面量和服务域名解析出的地址，也覆盖 IPv4-mapped IPv6。
 允许 IPv4 私网和 IPv6 unique-local 地址；即使开启 `allowLoopback`，

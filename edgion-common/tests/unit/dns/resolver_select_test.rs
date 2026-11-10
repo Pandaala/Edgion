@@ -88,7 +88,7 @@ fn service_inline_wins_over_gateway_and_egc() {
         lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
-        cache_ttl: "5s".to_string(),
+        ..Default::default()
     });
     let spec = resolve_effective_spec(&[service, gateway, egc], lookup_aliyun);
     match spec {
@@ -104,7 +104,7 @@ fn gateway_wins_when_service_absent() {
         lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
-        cache_ttl: "5s".to_string(),
+        ..Default::default()
     });
     let spec = resolve_effective_spec(&[None, gateway, egc], lookup_aliyun);
     match spec {
@@ -119,7 +119,7 @@ fn egc_default_wins_when_service_and_gateway_absent() {
         lookup_family: Default::default(),
         link_sys_ref: None,
         servers: Some(vec!["8.8.8.8".to_string()]),
-        cache_ttl: "5s".to_string(),
+        ..Default::default()
     });
     let spec = resolve_effective_spec(&[None, None, egc], lookup_aliyun);
     match spec {
@@ -161,7 +161,7 @@ fn egc_link_sys_ref_candidate_built_from_struct() {
             name: "aliyun".to_string(),
         }),
         servers: None,
-        cache_ttl: "5s".to_string(),
+        ..Default::default()
     });
     assert_eq!(
         egc,
@@ -281,7 +281,7 @@ fn owning_candidate_reference_failures_preserve_only_independent_inline_settings
             name: "resolver".into(),
         }),
         servers: Some(vec!["192.0.2.53".into()]),
-        cache_ttl: "5s".into(),
+        ..Default::default()
     });
     egc.metadata.namespace = Some("".into());
     assert!(

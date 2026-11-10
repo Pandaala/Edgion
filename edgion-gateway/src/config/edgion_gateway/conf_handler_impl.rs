@@ -9,7 +9,6 @@ use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
 use edgion_common::dns::{DnsCachePolicy, DnsLookupFamily};
-use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_gateway_config::{resolve_tcp_connect_timeout, resolve_tcp_idle_timeout};
 use kube::ResourceExt;
@@ -206,6 +205,7 @@ pub struct ResolvedDnsResolverDefault {
     candidate: Option<ResolverCandidate>,
     cache_policy: DnsCachePolicy,
     lookup_family: DnsLookupFamily,
+    refresh_policy: crate::backends::DnsRefreshPolicy,
 }
 
 impl ResolvedDnsResolverDefault {
@@ -215,14 +215,16 @@ impl ResolvedDnsResolverDefault {
             .dns_resolver
             .as_ref()
             .expect("selected DNS owner has a DNS field");
+        let refresh_policy = crate::backends::DnsRefreshPolicy::from_config(config);
         Self {
             candidate: candidate_from_egc_default(owner),
-            // `cacheTtl` is the freshness of answers without a record TTL;
-            // reported record TTLs are honored within the cache's fixed bounds.
-            cache_policy: DnsCachePolicy::new(
-                parse_duration(&config.cache_ttl).unwrap_or(crate::backends::DEFAULT_DNS_CACHE_TTL),
-            ),
+            // The effective `fallbackRefreshSeconds` (unset: 5 clamped into
+            // [min, max]) is the freshness of answers without a record TTL;
+            // the request-driven cache honors reported TTLs within its own
+            // fixed bounds and caps the fallback at 300 s.
+            cache_policy: DnsCachePolicy::new(refresh_policy.fallback_refresh),
             lookup_family: config.lookup_family,
+            refresh_policy,
         }
     }
 
@@ -236,6 +238,11 @@ impl ResolvedDnsResolverDefault {
 
     pub fn lookup_family(&self) -> DnsLookupFamily {
         self.lookup_family
+    }
+
+    /// Endpoint-table switch and refresh policy.
+    pub fn refresh_policy(&self) -> &crate::backends::DnsRefreshPolicy {
+        &self.refresh_policy
     }
 }
 
@@ -358,6 +365,9 @@ fn publish_snapshot(
         true
     });
     EDGION_GATEWAY_CONFIG_STORE.store(snapshot);
+    // The endpoint table reads its switch, refresh policy, default resolver
+    // and family from the published snapshot.
+    crate::backends::dns_endpoint_table().on_settings_changed();
 }
 
 #[derive(Default, serde::Serialize)]

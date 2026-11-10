@@ -5,19 +5,18 @@ pub mod k8s {
     /// Service name label on EndpointSlice
     /// Used to identify which Service an EndpointSlice belongs to
     pub const SERVICE_NAME: &str = "kubernetes.io/service-name";
-
-    /// Standard EndpointSlice `managed-by` label key.
-    pub const ENDPOINTSLICE_MANAGED_BY: &str = "endpointslice.kubernetes.io/managed-by";
 }
 
-/// Labels written by the control-plane DNS resolver loop on the synthetic
-/// EndpointSlices it publishes for controller-mode ExternalName Services.
+/// Labels on the synthetic EndpointSlices built from resolved `ExternalName`
+/// hostnames (Gateway endpoint table and Controller resolver).
 pub mod dns {
-    /// Marks an EndpointSlice as synthesized by the DNS resolver loop.
-    pub const SYNTHETIC: &str = "edgion.io/dns-synthetic";
-    /// `endpointslice.kubernetes.io/managed-by` value identifying resolver-owned
-    /// slices. Also used as the Server-Side-Apply field-manager name.
-    pub const MANAGED_BY_VALUE: &str = "edgion-dns-resolver";
+    /// Origin of a synthetic DNS EndpointSlice built from a resolved
+    /// `ExternalName` hostname. Values: [`ORIGIN_GATEWAY`], [`ORIGIN_CONTROLLER`].
+    pub const ENDPOINT_ORIGIN: &str = "edgion.io/endpoint-origin";
+    /// Built in-process by the Gateway endpoint table; never leaves the Gateway.
+    pub const ORIGIN_GATEWAY: &str = "gateway-dns";
+    /// Built in-process by the Controller and relayed to Gateways by conf_sync.
+    pub const ORIGIN_CONTROLLER: &str = "controller-dns";
 }
 
 /// `edgion.io/managed-by` label — provenance marker for a system-managed resource.

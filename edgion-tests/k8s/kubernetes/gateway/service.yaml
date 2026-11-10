@@ -471,6 +471,22 @@ spec:
     port: 31360
     targetPort: 31360
     protocol: TCP
+  - name: p31362
+    port: 31362
+    targetPort: 31362
+    protocol: TCP
+  - name: p31363
+    port: 31363
+    targetPort: 31363
+    protocol: TCP
+  - name: p31364
+    port: 31364
+    targetPort: 31364
+    protocol: TCP
+  - name: p31365-udp
+    port: 31365
+    targetPort: 31365
+    protocol: UDP
   - name: p31381
     port: 31381
     targetPort: 31381

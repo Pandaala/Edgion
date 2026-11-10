@@ -1,0 +1,19 @@
+# L4 gateway mode: the Gateway endpoint table resolves externalName=localhost
+# (default system resolver) in the background and publishes Gateway-local
+# endpoints; TCP connections select from them like any EndpointSlice-backed
+# Service. Backend: the local TCP echo server on 30010.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-gateway
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: gateway
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP

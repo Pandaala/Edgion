@@ -11,8 +11,10 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-The three leader-only services (ACME, conf_sync CA rotation, control-plane DNS resolver)
-are started/stopped through exactly two associated fns on `KubernetesCenter` —
+The leader-only services (ACME, conf_sync CA rotation, credential manager; the
+control-plane DNS resolver left this list on 2026-11-10 and is now owned by
+`ControllerRuntime`, see
+[Controller DNS resolver](dns-resolver-cache-driven-work-set.md)) are started/stopped through exactly two associated fns on `KubernetesCenter` —
 `start_leader_jobs(client)` / `stop_leader_jobs()` in
 `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — the single source of
 truth for the leader-only job list. The two formerly hand-copied stop triples in
@@ -85,8 +87,8 @@ Re-open this decision only if:
 - Original task: `tasks/todo/leader-job-call-site-cleanup.md` (2026-07-16, closed with the fix)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — `start_leader_jobs` /
   `stop_leader_jobs` and their four call sites
-- Black-box regression: `edgion-tests` `AcmeTestSuite` (leader-only start path),
-  `DnsResolutionTestSuite` (DNS resolver); conf_sync CA rotation has no integration suite
+- Black-box regression: `edgion-tests` `AcmeTestSuite` (leader-only start path); conf_sync
+  CA rotation has no integration suite
 
 ## Resolution references
 

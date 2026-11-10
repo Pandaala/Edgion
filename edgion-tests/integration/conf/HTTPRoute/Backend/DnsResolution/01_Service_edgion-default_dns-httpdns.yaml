@@ -1,13 +1,13 @@
-# httpdns via LinkSys ref, per-request mode: every request resolves through the
-# httpdns endpoint (so resolver hit-count == request-count), which returns
-# 127.0.0.1 → the local test backend. Proves the httpdns resolver path serves.
+# httpdns via LinkSys ref in the default gateway mode: the Gateway endpoint
+# table resolves in the background through the httpdns endpoint (resolver hits
+# grow with refreshes, not with requests), which returns 127.0.0.1 → the local
+# test backend. Proves the httpdns resolver path serves.
 apiVersion: v1
 kind: Service
 metadata:
   name: dns-httpdns
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
     edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-local
 spec:
   type: ExternalName

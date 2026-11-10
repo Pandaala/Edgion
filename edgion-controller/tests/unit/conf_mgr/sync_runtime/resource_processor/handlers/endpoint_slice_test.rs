@@ -98,3 +98,57 @@ async fn on_change_namespace_scoped_lookup_uses_eps_namespace() {
     handler.on_change(&eps, &ctx).await;
     // No panic and no cross-namespace confusion — the handler uses eps.namespace.
 }
+
+#[tokio::test]
+async fn synthetic_dns_slices_enter_the_pipeline_only_when_unsourced() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, WorkItemResult};
+    use edgion_common::dns::endpoint_slices::{build_dns_endpoint_slices, DnsSliceOrigin};
+    use k8s_openapi::api::core::v1::ServicePort;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = ResourceProcessor::<EndpointSlice>::new(
+        "EndpointSlice",
+        16,
+        Arc::new(EndpointSliceHandler::new()),
+        runtime.clone(),
+    );
+    let ports = [ServicePort {
+        port: 80,
+        ..Default::default()
+    }];
+    let synthetic = build_dns_endpoint_slices(
+        "app",
+        "svc",
+        &ports,
+        &["10.0.0.1".parse().unwrap()],
+        DnsSliceOrigin::Controller,
+    );
+    let key = "app/svc-edgion-ctl-dns";
+    runtime.dns_synthetic_slices.replace_service(0, "app/svc", synthetic);
+
+    let result = processor
+        .process_work_item(key, None, None, TriggerChain::default())
+        .await;
+    assert!(matches!(result, WorkItemResult::Processed { .. }));
+    let cached = processor.get(key).expect("synthetic slice is published");
+    assert_eq!(cached.endpoints[0].addresses, vec!["10.0.0.1".to_string()]);
+
+    // A sourced object with the same key wins over the synthetic one.
+    let mut sourced = cached.clone();
+    sourced.endpoints[0].addresses = vec!["10.9.9.9".to_string()];
+    processor
+        .process_work_item(key, Some(sourced), None, TriggerChain::default())
+        .await;
+    assert_eq!(
+        processor.get(key).unwrap().endpoints[0].addresses,
+        vec!["10.9.9.9".to_string()]
+    );
+
+    // Withdrawn and unsourced: the cached slice is deleted.
+    runtime.dns_synthetic_slices.replace_service(0, "app/svc", Vec::new());
+    let result = processor
+        .process_work_item(key, None, None, TriggerChain::default())
+        .await;
+    assert!(matches!(result, WorkItemResult::Deleted { .. }));
+    assert!(processor.get(key).is_none());
+}

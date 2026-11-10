@@ -1,0 +1,18 @@
+# L4 controller mode: the Controller resolves externalName=localhost and
+# publishes in-memory EndpointSlices through conf_sync; TCP connections select
+# from those endpoints only. Backend: the local TCP echo server on 30010.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-controller
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: controller
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP

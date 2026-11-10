@@ -557,6 +557,7 @@ where
         let extended_chain = trigger_chain.extend(self.kind, key);
         let ctx = self.create_context(extended_chain);
         let cache_obj = self.get(key);
+        let store_obj = store_obj.or_else(|| self.handler.synthetic_object(key, &self.runtime));
 
         if store_obj.is_none() {
             crate::fed_sync::center_watch::publication::delete(

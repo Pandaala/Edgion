@@ -24,7 +24,7 @@ use super::route_unit::TlsRouteUnit;
 use super::sni_parser;
 use super::TlsDuplexHooks;
 use super::TlsRouteManager;
-use crate::backends::{select_service_endpoint, validate_endpoint_backend_addr, ServiceDegradePolicy};
+use crate::backends::validate_endpoint_backend_addr;
 use crate::observe::log_tls;
 use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
@@ -243,25 +243,21 @@ impl EdgionTlsPassthroughProxy {
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
-            let (target, backend) =
-                match super::resolve_tls_backend_attempt(&unit, ctx, Some(selected.owner.gateway_key()), |target| {
-                    select_service_endpoint(
-                        target.key(),
-                        target.section().clone(),
-                        &None,
-                        ServiceDegradePolicy::Live,
-                        None,
-                        "",
-                        None,
-                    )
-                }) {
-                    super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint.backend),
-                    super::TlsBackendAttempt::Terminal => return,
-                    super::TlsBackendAttempt::Retryable(target) => {
-                        last_err = format!("no endpoint: {}", target.key());
-                        continue;
-                    }
-                };
+            let (target, backend) = match super::resolve_tls_service_attempt(
+                &unit,
+                ctx,
+                Some(selected.owner.gateway_key()),
+                gateway_config.allow_loopback_upstream,
+            )
+            .await
+            {
+                super::TlsBackendAttempt::Ready(target, backend) => (target, backend),
+                super::TlsBackendAttempt::Terminal => return,
+                super::TlsBackendAttempt::Retryable(target) => {
+                    last_err = format!("no endpoint: {}", target.key());
+                    continue;
+                }
+            };
             let upstream_addr = &backend.inner().addr;
             let upstream_addr_str = upstream_addr.to_string();
             let outlier_store = crate::backends::get_outlier_detection_store();

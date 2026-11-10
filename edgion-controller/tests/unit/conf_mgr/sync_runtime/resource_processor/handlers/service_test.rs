@@ -212,12 +212,17 @@ async fn publication_hooks_maintain_dns_resolver_targets() {
     let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
     let handler = ServiceHandler::new();
     let mut service: Service = serde_json::from_value(serde_json::json!({
-        "metadata": {"namespace": "app", "name": "external", "uid": "uid"},
+        "metadata": {"namespace": "app", "name": "external", "uid": "uid",
+            "annotations": {"edgion.io/dns-resolution-mode": "controller"}},
         "spec": {"type": "ExternalName", "externalName": "example.com", "ports": [{"port": 80}]}
     }))
     .unwrap();
 
     handler.after_publish(&service, &ctx).await;
+    assert!(
+        runtime.dns_resolver_task.is_running(),
+        "the first target starts the runtime-owned resolver"
+    );
     let keys = |runtime: &ControllerRuntime| {
         runtime
             .dns_resolver_targets
@@ -243,4 +248,8 @@ async fn publication_hooks_maintain_dns_resolver_targets() {
     handler.after_publish(&service, &ctx).await;
     runtime.reset();
     assert!(keys(&runtime).is_empty(), "runtime reset clears the targets");
+    assert!(
+        !runtime.dns_resolver_task.is_running(),
+        "runtime reset stops the resolver"
+    );
 }

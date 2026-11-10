@@ -521,11 +521,56 @@ spec:
                       description: "Inline standard-DNS server list (ip[:port]); mutually exclusive with linkSysRef"
                       items:
                         type: string
-                    cacheTtl:
-                      type: string
-                      description: "Freshness of data-plane DNS answers whose resolver reports no record TTL (default 5s, capped at 300s; 0s disables caching). Reported record TTLs are honored within 5-300s."
-                      default: "5s"
-                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                    endpointTable:
+                      type: boolean
+                      default: true
+                      description: "Global default for ExternalName Services without edgion.io/dns-resolution-mode: true resolves through the Gateway-local endpoint table (gateway mode); false uses the OS resolver per request/connection (system mode)"
+                    ttlFactor:
+                      type: number
+                      default: 0.5
+                      minimum: 0.01
+                      maximum: 1
+                      description: "Endpoint-table refresh interval as a fraction of the reported record TTL, in [0.01, 1]"
+                    minRefreshSeconds:
+                      type: integer
+                      format: int64
+                      default: 5
+                      minimum: 2
+                      maximum: 2147483647
+                      description: "Lower bound of the computed refresh interval in seconds (default 5, at least 2)"
+                    maxRefreshSeconds:
+                      type: integer
+                      format: int64
+                      default: 300
+                      minimum: 2
+                      maximum: 2147483647
+                      description: "Upper bound of the computed refresh interval in seconds (default 300, at most the largest DNS TTL 2147483647)"
+                    fallbackRefreshSeconds:
+                      type: integer
+                      format: int64
+                      minimum: 2
+                      maximum: 2147483647
+                      description: "Refresh interval when the resolver reports no record TTL (must lie within min/max; unset: 5 clamped into [min, max]); also the fallback answer freshness for AI endpoints and external jumps (capped at 300 there)"
+                    refreshIntervalSeconds:
+                      type: integer
+                      format: int64
+                      minimum: 2
+                      maximum: 2147483647
+                      description: "Fixed refresh interval in seconds; when set, record TTLs are ignored"
+                    maxStaleSeconds:
+                      type: integer
+                      format: int64
+                      default: 300
+                      minimum: 0
+                      maximum: 2147483647
+                      description: "How long the last good address set is kept while the resolver fails transiently"
+                    maxEntries:
+                      type: integer
+                      format: int64
+                      default: 4096
+                      minimum: 1
+                      maximum: 65536
+                      description: "Most distinct hostname/resolver/family targets in the endpoint table; new targets beyond it fail closed"
 
             status:
               type: object

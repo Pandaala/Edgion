@@ -1,8 +1,9 @@
 // DnsResolutionFlap dynamic scenario.
 //
-// Proves an ExternalName Service's DNS resolver is hot-reloadable: flipping the
-// `edgion.io/dns-resolver-ref` annotation at runtime takes effect on the gateway
-// without a restart.
+// Proves an ExternalName Service's DNS resolver is hot-reloadable through the
+// Gateway endpoint table: flipping the `edgion.io/dns-resolver-ref` annotation
+// or updating the referenced LinkSys at runtime re-keys the table entry and
+// takes effect without a restart.
 //
 //   initial:  resolver-ref → dns-flap-dead (down httpdns, fallback: none) → 5xx
 //   working:  resolver-ref → dns-flap-local (live httpdns → backend IP)     → 200
@@ -88,10 +89,12 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
                 for (update, phase) in [
                     ("family_default", "family-v4"),
                     ("family_service_v6", "family-v6"),
-                    // Observe inherited IPv4 before testing the Gateway override;
+                    // Observe inherited IPv4 before checking the Gateway annotation;
                     // an old Service IPv6 snapshot cannot satisfy the next phase.
                     ("family_default", "family-v4"),
-                    ("family_gateway_v6", "family-v6"),
+                    // A Gateway-level family annotation does not apply to
+                    // ExternalName Services (Service -> EGC -> ipv4Only only).
+                    ("family_gateway_v6", "family-v4"),
                     ("family_service_v4", "family-v4"),
                     ("family_egc_v6", "family-v6"),
                     ("family_egc_v4", "family-v4"),

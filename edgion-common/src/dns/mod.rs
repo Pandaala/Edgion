@@ -4,6 +4,7 @@
 //! and the no-config path falls back to the system resolver.
 
 pub mod cache;
+pub mod endpoint_slices;
 mod hickory;
 pub mod http_fetcher;
 pub mod httpdns;

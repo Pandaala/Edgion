@@ -1,11 +1,12 @@
 # Dedicated EdgionGatewayConfig for the DnsResolution suite's gateway.
 #
-# The ExternalName self-resolve path (unlike the EndpointSlice path) gates
-# loopback upstreams on securityProtect.allowLoopbackUpstream rather than on
-# integration-testing mode, and the test backend binds 127.0.0.1. A dedicated,
-# uniquely-named EGC guarantees the flag is set regardless of which suites are
-# loaded (the shared base `example-gateway` EGC is shadowed by other suites in a
-# full-conf run, so it cannot be relied on here).
+# `system`-mode ExternalName resolution (unlike the EndpointSlice-backed
+# `gateway` / `controller` modes) gates loopback upstreams on
+# securityProtect.allowLoopbackUpstream rather than on integration-testing mode,
+# and the test backend binds 127.0.0.1. A dedicated, uniquely-named EGC
+# guarantees the flag is set regardless of which suites are loaded (the shared
+# base `example-gateway` EGC is shadowed by other suites in a full-conf run, so
+# it cannot be relied on here).
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:

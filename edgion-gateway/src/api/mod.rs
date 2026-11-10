@@ -305,6 +305,7 @@ fn create_admin_router_with_testing_mode(
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))
         .route("/api/v1/access-log/backfill", post(access_log_backfill))
+        .route("/api/v1/dns/endpoint-table", get(dns_endpoint_table_view))
         .with_state(config_client.clone());
 
     // Add testing endpoints (incl. /api/v1/server-info) only in integration testing mode.
@@ -319,6 +320,19 @@ fn create_admin_router_with_testing_mode(
         auth_state,
         admin_auth::admin_auth_middleware,
     ))
+}
+
+/// Gateway DNS endpoint table: counts plus up to 256 entries (hostname,
+/// resolver kind, family, status, normalized addresses, referring Services).
+async fn dns_endpoint_table_view() -> Json<serde_json::Value> {
+    let table = crate::backends::dns_endpoint_table();
+    Json(serde_json::json!({
+        "success": true,
+        "data": {
+            "stats": table.stats(),
+            "entries": table.entries_view(),
+        }
+    }))
 }
 
 /// Create the probe router: only the non-sensitive liveness/readiness endpoints.
@@ -490,6 +504,9 @@ struct StoreStatsResponse {
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
     dns_answer_cache: DnsAnswerCacheStoreStats,
+    /// Gateway DNS endpoint table. Every count returns to zero once no
+    /// `ExternalName` Service uses the table (entries die with their last Service).
+    dns_endpoint_table: crate::backends::DnsEndpointTableStats,
 }
 
 /// DNS answer caches. `in_flight` must return to zero once requests settle;
@@ -747,6 +764,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         plugin_store_v2,
         stream_plugin_store_v2,
         dns_answer_cache: DnsAnswerCacheStoreStats::snapshot(),
+        dns_endpoint_table: crate::backends::dns_endpoint_table().stats(),
     }))
 }
 

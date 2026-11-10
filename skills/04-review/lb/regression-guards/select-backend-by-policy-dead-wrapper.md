@@ -15,8 +15,8 @@ HTTP/gRPC capture it from the actual permitted compiled Service target, preservi
 one Service source, checked section and membership-matched runtime per attempt.
 The existing `select_service_endpoint` entry for L4, mirrors and custom consumers
 loads their live projection and delegates to the same body. Native ordinary and
-controller-resolved ExternalName use this same selector; self DNS uses Common's
-resolver and the shared safe peer builder.
+`gateway`/`controller`-mode ExternalName use this same selector; `system` mode uses
+the OS resolver and the shared safe peer builder.
 
 Do not add a duplicate selector or retain detached native wrappers solely for
 tests. Re-evaluate real callers and failure mappings whenever strategy dispatch,

@@ -13,7 +13,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{select_service_endpoint, validate_endpoint_backend_addr, ServiceDegradePolicy};
+use crate::backends::validate_endpoint_backend_addr;
 use crate::config::ResolvedGatewayConfig;
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
@@ -322,25 +322,21 @@ impl EdgionTlsTcpProxy {
 
         for attempt in 0..max_attempts {
             // 4a. Select backend (re-select on each retry for load-balancing rotation)
-            let (target, backend) =
-                match super::resolve_tls_backend_attempt(&unit, ctx, Some(selected.owner.gateway_key()), |target| {
-                    select_service_endpoint(
-                        target.key(),
-                        target.section().clone(),
-                        &None,
-                        ServiceDegradePolicy::Live,
-                        None,
-                        "",
-                        None,
-                    )
-                }) {
-                    super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint.backend),
-                    super::TlsBackendAttempt::Terminal => return,
-                    super::TlsBackendAttempt::Retryable(target) => {
-                        last_err = format!("no endpoint: {}", target.key());
-                        continue;
-                    }
-                };
+            let (target, backend) = match super::resolve_tls_service_attempt(
+                &unit,
+                ctx,
+                Some(selected.owner.gateway_key()),
+                gateway_config.allow_loopback_upstream,
+            )
+            .await
+            {
+                super::TlsBackendAttempt::Ready(target, backend) => (target, backend),
+                super::TlsBackendAttempt::Terminal => return,
+                super::TlsBackendAttempt::Retryable(target) => {
+                    last_err = format!("no endpoint: {}", target.key());
+                    continue;
+                }
+            };
             let upstream_addr = &backend.inner().addr;
             let upstream_addr_str = upstream_addr.to_string();
             let outlier_store = crate::backends::get_outlier_detection_store();

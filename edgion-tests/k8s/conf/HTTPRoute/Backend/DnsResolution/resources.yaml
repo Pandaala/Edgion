@@ -41,14 +41,22 @@ spec:
       port: 30001
       targetPort: 30001
       protocol: TCP
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+    - name: udp
+      port: 30011
+      targetPort: 30011
+      protocol: UDP
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: dns-per-request
+  name: dns-system
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolution-mode: system
 spec:
   type: ExternalName
   externalName: dns-test-server.edgion-test.svc.cluster.local
@@ -63,7 +71,6 @@ metadata:
   name: dns-httpdns
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
     edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-local
 spec:
   type: ExternalName
@@ -95,7 +102,6 @@ metadata:
   name: dns-httpdns-fallback
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
     edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-dead
 spec:
   type: ExternalName
@@ -119,20 +125,44 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    - name: tcp-gateway
+      protocol: TCP
+      port: 31362
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp-system
+      protocol: TCP
+      port: 31363
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp-controller
+      protocol: TCP
+      port: 31364
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: udp-system
+      protocol: UDP
+      port: 31365
+      allowedRoutes:
+        namespaces:
+          from: All
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: dns-per-request-route
+  name: dns-system-route
   namespace: edgion-default
 spec:
   parentRefs:
     - name: dns-res-gateway
       namespace: edgion-test
-  hostnames: ["per-request.dns.test"]
+  hostnames: ["system.dns.test"]
   rules:
     - backendRefs:
-        - name: dns-per-request
+        - name: dns-system
           kind: Service
           port: 30001
 ---
@@ -183,3 +213,146 @@ spec:
         - name: dns-httpdns-fallback
           kind: Service
           port: 30001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-controller
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: controller
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-controller-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+  hostnames: ["controller.dns.test"]
+  rules:
+    - backendRefs:
+        - name: dns-controller
+          kind: Service
+          port: 30001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-gateway
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: gateway
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: dns-l4-gateway-tcp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: tcp-gateway
+  rules:
+    - backendRefs:
+        - name: dns-l4-gateway
+          port: 30010
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-system
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: system
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+    - name: udp
+      port: 30011
+      targetPort: 30011
+      protocol: UDP
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: dns-l4-system-tcp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: tcp-system
+  rules:
+    - backendRefs:
+        - name: dns-l4-system
+          port: 30010
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-controller
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: controller
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: dns-l4-controller-tcp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: tcp-controller
+  rules:
+    - backendRefs:
+        - name: dns-l4-controller
+          port: 30010
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: dns-l4-system-udp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: udp-system
+  rules:
+    - backendRefs:
+        - name: dns-l4-system
+          port: 30011

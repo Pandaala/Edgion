@@ -3,6 +3,7 @@
 pub mod byte_size;
 pub mod controller_status;
 pub mod dns_lookup_family;
+pub mod dns_resolution_mode;
 pub mod external_http;
 pub mod group_name;
 pub(crate) mod kubernetes_name;
@@ -22,6 +23,7 @@ pub use controller_status::{
     ConditionsStatus, ControllerEnvelope, ControllerObservation, ControllerStatus, MAX_CONTROLLER_OBSERVATIONS,
 };
 pub use dns_lookup_family::DnsLookupFamily;
+pub use dns_resolution_mode::DnsResolutionMode;
 pub use external_http::{
     validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck,
     ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookServiceRef, WebhookTarget,

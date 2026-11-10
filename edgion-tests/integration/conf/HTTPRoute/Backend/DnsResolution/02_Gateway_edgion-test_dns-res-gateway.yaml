@@ -12,3 +12,28 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    # L4 ExternalName coverage, one listener per resolution mode.
+    - name: tcp-gateway
+      protocol: TCP
+      port: 31362
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp-system
+      protocol: TCP
+      port: 31363
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp-controller
+      protocol: TCP
+      port: 31364
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: udp-system
+      protocol: UDP
+      port: 31365
+      allowedRoutes:
+        namespaces:
+          from: All

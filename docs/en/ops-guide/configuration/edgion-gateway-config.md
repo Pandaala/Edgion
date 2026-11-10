@@ -541,7 +541,6 @@ spec:
 spec:
   dnsResolver:
     lookupFamily: ipv4Only
-    cacheTtl: 5s
 ```
 
 Each `servers` entry must be an `ip`, `ip:port` or bracketed IPv6 address
@@ -550,48 +549,91 @@ string, makes the EGC `Accepted=False`.
 
 `lookupFamily` accepts `ipv4Only` (default), `ipv6Only`, or `all`. It may be set
 without `servers` or `linkSysRef`. The existing selected global EGC owner publishes
-this setting live together with its resolver candidate and TTL. Service then
-Gateway annotations override it independently of resolver choice. AI external
-hostnames use the Gateway override, then this default. Controller-owned slices use
-the Controller/Service policy instead; no connection racing is introduced.
-See the [backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).
+this setting live together with its resolver candidate. An ExternalName Service
+annotation overrides it; AI external hostnames use the Gateway override, then this
+default. `controller`-mode Services use the Controller/Service policy instead; no
+connection racing is introduced. See the
+[backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).
 
 The DNS default owner is the existing deterministic minimum store-key winner across EGC resources defining DNS settings, not the current GatewayClass alone. A family-only DNS block participates in that selection.
 
-## Backend DNS answer caching
+## Backend DNS endpoint table
 
-Cached ExternalName self-resolution (`gateway` mode and the `controller`-mode
-bridge), AI provider hostnames and external destinations of the RegionRoute and
-DynamicExternalUpstream plugins share one bounded DNS answer cache in the
-Gateway, sized from the `lru_cache` defaults. All of them use this resolver and
+ExternalName Services in `gateway` mode (the default; see
+[ExternalName resolution](../../user-guide/http-route/backends/service-ref.md#externalname-resolution))
+are resolved by a background table in each Gateway. Every returned address becomes
+an ordinary load-balanced endpoint for HTTP, gRPC, TCP, UDP and TLS routes.
+
+```yaml
+spec:
+  dnsResolver:
+    endpointTable: true          # false: ExternalName uses the OS resolver per request
+    ttlFactor: 0.5               # refresh = clamp(ttl * ttlFactor, min, max)
+    minRefreshSeconds: 5         # at least 2
+    maxRefreshSeconds: 300       # at most 2147483647 (largest DNS TTL)
+    # fallbackRefreshSeconds: 5  # no TTL; unset = 5 clamped into [min, max]
+    # refreshIntervalSeconds: 30 # fixed interval; record TTLs are ignored
+    maxStaleSeconds: 300
+    maxEntries: 4096
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `endpointTable` | `true` | Default mode for ExternalName Services without `edgion.io/dns-resolution-mode`: `true` = `gateway`, `false` = `system`. |
+| `ttlFactor` | `0.5` | Refresh after `ttl x ttlFactor`, 0.01–1. |
+| `minRefreshSeconds` | `5` | Shortest refresh interval; at least 2. |
+| `maxRefreshSeconds` | `300` | Longest refresh interval; up to 2147483647, the largest DNS TTL. |
+| `fallbackRefreshSeconds` | unset (5) | Refresh interval when the resolver reports no TTL (operating-system resolver, HTTP DNS without `ttlPath`). If set it must lie between min and max; unset means 5 moved into [min, max], so changing only one bound stays valid. |
+| `refreshIntervalSeconds` | unset | Fixed refresh interval; record TTLs and the min/max bounds are ignored (never below 2 s). |
+| `maxStaleSeconds` | `300` | How long the last good addresses are kept while the resolver fails. |
+| `maxEntries` | `4096` | Most distinct hostname / resolver / address-family targets; a Service needing a new target beyond it gets no endpoints. |
+
+The durations are integer seconds because the largest DNS TTL (2147483647 s,
+RFC 2181) cannot be written as a duration string.
+
+- Services with the same hostname, resolver and family share one entry and one
+  query. An entry is deleted together with its last Service, so deleted Services
+  and changed hostnames never leave endpoints behind.
+- Answers are sorted before comparison; an unchanged answer changes nothing, so
+  health checks and outlier ejection keep their state across refreshes.
+- A failing resolver keeps the last good addresses for `maxStaleSeconds`, retrying
+  from `minRefreshSeconds` and doubling up to 60 seconds. An authoritative empty
+  answer withdraws the endpoints at once. The operating-system resolver cannot
+  tell NXDOMAIN from an outage, so a removed name stays until `maxStaleSeconds`.
+- A request or TCP/TLS connection for a target that has never been resolved waits
+  at most 2 seconds for the first answer. UDP never waits; a datagram that arrives
+  before the first answer is dropped and the client's retransmission succeeds.
+- Link-local answers (169.254.0.0/16, fe80::/10) are dropped and never become
+  endpoints or health-check targets.
+- Each refresh is jittered by ±10 % and stays within the min/max bounds.
+- `GET /api/v1/dns/endpoint-table` on the Gateway admin API lists the entries,
+  their addresses, status and referring Services.
+
+## Request-driven DNS answer cache
+
+AI provider hostnames and external destinations of the RegionRoute and
+DynamicExternalUpstream plugins are chosen per request, so they use a bounded
+answer cache instead of the endpoint table. They use this resolver and
 `lookupFamily` default (or the Gateway's override); IP-literal destinations are
-used as written. At most 256 addresses are kept per answer. Answers are keyed by resolver,
+used as written. At most 256 addresses are kept per answer, keyed by resolver,
 hostname and address family, and every use still applies the upstream address
 safety checks.
 
 - An answer is fresh for the record TTL reported by the resolver, clamped to
-  5–300 seconds (the 5-second floor matches Envoy's `dns_min_refresh_rate`). Standard DNS servers report record TTLs; HTTP DNS reports one
+  5–300 seconds. Standard DNS servers report record TTLs; HTTP DNS reports one
   when its JSON response format has a `ttlPath` (the `aliyun` preset does).
-- `cacheTtl` (default `5s`, capped at 300 seconds) is the freshness of answers
-  whose resolver reports no TTL, such as the system resolver. `cacheTtl: 0s`
-  disables caching.
+- `fallbackRefreshSeconds` (effective value) is the freshness of answers whose
+  resolver reports no TTL, such as the system resolver, capped at 300 seconds for
+  this cache. Raising `minRefreshSeconds` therefore also lengthens it; this cache
+  cannot be disabled.
 - For 30 seconds after an answer expires it is still served while one request
   refreshes it. If the resolver is failing, the last good answer keeps being
-  served while it is still requested (as Envoy keeps its last resolution), but
-  never more than 5 minutes past its freshness; an answer nobody requests for 30
-  seconds expires. Refreshes during an outage back off exponentially from 1 to
-  10 seconds, and a request stops waiting for a system-resolver lookup after 30
-  seconds (the OS lookup itself finishes in the background).
-- An authoritative empty answer (NXDOMAIN, or no records with SOA evidence)
-  replaces the answer immediately. The system resolver cannot distinguish
-  NXDOMAIN from an outage, and standard DNS treats an empty answer without SOA
-  evidence as ambiguous; in those cases a removed name keeps being served until
-  the resolver answers successfully, the name stops being requested, or the
-  5-minute limit is reached.
+  served while it is still requested, but never more than 5 minutes past its
+  freshness. Refreshes during an outage back off exponentially from 1 to 10
+  seconds.
 - A failed lookup with no answer to fall back on is cached for 1 second,
   doubling per consecutive failure up to 10 seconds, and concurrent lookups of
   the same cold name share a single resolver query.
-- `edgion.io/dns-resolution-mode: per-request` bypasses the cache.
 
 Requests rotate their starting address across the resolved set, so traffic is
 spread over every address and one dead address does not capture every request.

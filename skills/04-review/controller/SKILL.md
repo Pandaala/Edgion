@@ -12,11 +12,11 @@ before applying a decision to current code.
 ## Intentional design
 
 - [Non-Kubernetes runtime events start after initialization](intentional-design/non-kubernetes-pre-init-runtime-events-unsupported.md)
+- [DNS resolver refreshes on a fixed interval, not record TTLs](intentional-design/dns-resolver-fixed-interval-refresh.md)
 
 ## Regression guards
 
-- [DNS-owned family slice convergence](regression-guards/dns-owned-family-slice-convergence.md)
-- [DNS resolver work set comes from processed caches](regression-guards/dns-resolver-cache-driven-work-set.md)
+- [Controller DNS resolver: cache-driven work set and in-memory publication](regression-guards/dns-resolver-cache-driven-work-set.md)
 
 - [FS initialization delivery and backpressure](regression-guards/fs-initial-delivery-backpressure.md)
 
@@ -32,3 +32,7 @@ before applying a decision to current code.
 - [Etcd resource keys are authoritative over content identity — FIXED](regression-guards/etcd-key-content-identity.md)
 - [Leader-Job Call Sites — FIXED (helpers), three hardening proposals REJECTED](regression-guards/leader-jobs-call-site-consolidation.md)
 - [Wedged Leader Never Restarts / Never Fails Over — FIXED (supervised loop + single startup deadline + deadman + gauge; ctrl-center-02)](regression-guards/liveness-probe-and-lifecycle-supervision.md)
+
+## Superseded
+
+- [DNS-owned family slice convergence — SUPERSEDED (no apiserver-written DNS slices)](superseded/dns-owned-family-slice-convergence.md)

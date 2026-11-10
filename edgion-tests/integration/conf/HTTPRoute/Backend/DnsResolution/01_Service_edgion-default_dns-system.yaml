@@ -1,0 +1,17 @@
+# system mode: the gateway asks the OS resolver on every request (no Edgion
+# cache, no endpoint table). externalName=localhost resolves to 127.0.0.1 → the
+# local test backend on port 30001.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-system
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: system
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

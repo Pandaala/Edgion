@@ -303,8 +303,8 @@ pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, L
         .collect();
 
     // Precompute the gateway-layer DNS resolver candidate from the two
-    // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
-    // self-resolution path reads it off GatewayInfo without re-parsing.
+    // `edgion.io/dns-resolver{,-ref}` annotations, so AI endpoint and external
+    // jump resolution reads it off GatewayInfo without re-parsing.
     let dns_resolver_candidate = candidate_from_dns_owner(DnsResolverOwner::Gateway(gateway));
     let dns_lookup_family = DnsLookupFamily::from_annotation(
         gateway

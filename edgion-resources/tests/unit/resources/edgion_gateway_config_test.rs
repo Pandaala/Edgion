@@ -153,21 +153,82 @@ fn egc_dns_resolver_link_sys_ref_roundtrips() {
     let r = dr.link_sys_ref.as_ref().unwrap();
     assert_eq!(r.namespace, "dns");
     assert_eq!(r.name, "aliyun");
-    // cacheTtl defaults to 5s when omitted.
-    assert_eq!(dr.cache_ttl, "5s");
     assert!(s.validate_dns_resolver().is_empty());
 }
 
 #[test]
-fn egc_dns_resolver_servers_roundtrip_and_cache_ttl() {
+fn egc_dns_resolver_refresh_defaults() {
+    let dr: DnsResolverConfig = serde_json::from_str("{}").unwrap();
+    assert!(dr.endpoint_table);
+    assert_eq!(dr.ttl_factor, 0.5);
+    assert_eq!(dr.min_refresh_seconds, 5);
+    assert_eq!(dr.max_refresh_seconds, 300);
+    assert_eq!(dr.fallback_refresh_seconds, None);
+    assert_eq!(dr.refresh_interval_seconds, None);
+    assert_eq!(dr.max_stale_seconds, 300);
+    assert_eq!(dr.max_entries, 4096);
+    assert!(dr.refresh_errors().is_empty());
+    let default = DnsResolverConfig::default();
+    assert_eq!(
+        serde_json::to_value(&default).unwrap(),
+        serde_json::to_value(&dr).unwrap()
+    );
+}
+
+#[test]
+fn egc_dns_resolver_servers_roundtrip_and_refresh_fields() {
     let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-        "dnsResolver": {"servers": ["1.1.1.1", "8.8.8.8:5353"], "cacheTtl": "10s"}
+        "dnsResolver": {
+            "servers": ["1.1.1.1", "8.8.8.8:5353"],
+            "endpointTable": false,
+            "ttlFactor": 0.25,
+            "minRefreshSeconds": 2,
+            "maxRefreshSeconds": 2147483647,
+            "refreshIntervalSeconds": 30
+        }
     }))
     .unwrap();
     let dr = s.dns_resolver.as_ref().unwrap();
     assert_eq!(dr.servers.as_ref().unwrap().len(), 2);
-    assert_eq!(dr.cache_ttl, "10s");
+    assert!(!dr.endpoint_table);
+    assert_eq!(dr.ttl_factor, 0.25);
+    assert_eq!(dr.min_refresh_seconds, 2);
+    assert_eq!(dr.max_refresh_seconds, DNS_MAX_TTL_SECONDS);
+    assert_eq!(dr.refresh_interval_seconds, Some(30));
     assert!(s.validate_dns_resolver().is_empty());
+}
+
+#[test]
+fn egc_dns_resolver_rejects_out_of_range_refresh_settings() {
+    let cases = [
+        (serde_json::json!({"minRefreshSeconds": 1}), "minRefreshSeconds"),
+        (
+            serde_json::json!({"minRefreshSeconds": 60, "maxRefreshSeconds": 30, "fallbackRefreshSeconds": 30}),
+            "must not exceed",
+        ),
+        (
+            serde_json::json!({"fallbackRefreshSeconds": 600}),
+            "fallbackRefreshSeconds",
+        ),
+        (
+            serde_json::json!({"refreshIntervalSeconds": 1}),
+            "refreshIntervalSeconds",
+        ),
+        (serde_json::json!({"ttlFactor": 0.0}), "ttlFactor"),
+        (serde_json::json!({"ttlFactor": 0.005}), "ttlFactor"),
+        (serde_json::json!({"ttlFactor": 1.5}), "ttlFactor"),
+        (serde_json::json!({"maxEntries": 0}), "maxEntries"),
+        (serde_json::json!({"maxEntries": 65537}), "maxEntries"),
+        (serde_json::json!({"maxStaleSeconds": 2147483648u64}), "maxStaleSeconds"),
+    ];
+    for (config, needle) in cases {
+        let dr: DnsResolverConfig = serde_json::from_value(config.clone()).unwrap();
+        let errs = dr.refresh_errors();
+        assert!(
+            errs.iter().any(|error| error.contains(needle)),
+            "{config} must report {needle}: {errs:?}"
+        );
+    }
 }
 
 #[test]
@@ -305,4 +366,43 @@ fn downstream_tls_curves_round_trip_without_implicit_default() {
         serde_json::to_value(spec).unwrap()["downstreamTls"]["ecdhCurves"],
         serde_json::json!(["P-384", "X25519"])
     );
+}
+
+#[test]
+fn egc_dns_resolver_single_bound_edits_need_no_fallback() {
+    // Moving the range away from the default 5 s fallback never requires an
+    // explicit fallbackRefreshSeconds: the unset fallback is clamped into range.
+    for config in [
+        serde_json::json!({"minRefreshSeconds": 10}),
+        serde_json::json!({"minRefreshSeconds": 2, "maxRefreshSeconds": 3}),
+        serde_json::json!({"minRefreshSeconds": 2, "maxRefreshSeconds": 4}),
+    ] {
+        let dr: DnsResolverConfig = serde_json::from_value(config.clone()).unwrap();
+        assert!(dr.refresh_errors().is_empty(), "{config}: {:?}", dr.refresh_errors());
+    }
+    // A max below the default min is an inverted range, not a fallback problem.
+    let dr: DnsResolverConfig = serde_json::from_value(serde_json::json!({"maxRefreshSeconds": 3})).unwrap();
+    let errors = dr.refresh_errors();
+    assert!(
+        errors.iter().any(|e| e.contains("must not exceed maxRefreshSeconds")),
+        "{errors:?}"
+    );
+    assert!(
+        !errors.iter().any(|e| e.contains("fallbackRefreshSeconds")),
+        "{errors:?}"
+    );
+    let dr: DnsResolverConfig = serde_json::from_value(serde_json::json!({"fallbackRefreshSeconds": 3})).unwrap();
+    assert!(
+        dr.refresh_errors().iter().any(|e| e.contains("fallbackRefreshSeconds")),
+        "an explicit fallback below min is still rejected"
+    );
+}
+
+#[test]
+fn egc_dns_resolver_rejects_non_finite_ttl_factor() {
+    let yaml = "ttlFactor: .nan\n";
+    assert!(yaml_serde::from_str::<DnsResolverConfig>(yaml).is_err());
+    let yaml = "ttlFactor: .inf\n";
+    assert!(yaml_serde::from_str::<DnsResolverConfig>(yaml).is_err());
+    assert!(yaml_serde::from_str::<DnsResolverConfig>("ttlFactor: 0.25\n").is_ok());
 }

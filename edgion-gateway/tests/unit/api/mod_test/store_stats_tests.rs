@@ -132,6 +132,7 @@ fn store_stats_response_serializes() {
             egress: Default::default(),
             request_egress: Default::default(),
         },
+        dns_endpoint_table: Default::default(),
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert!(json.is_object());

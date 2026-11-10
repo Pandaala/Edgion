@@ -202,11 +202,18 @@ spec:
       # caCertificateRefs: [{ kind: ConfigMap, name: corporate-ca, namespace: edgion-system }]
     # clientCertificateRef: { kind: Secret, name: outbound-client, namespace: edgion-system }
 
-  # ─── Data-plane ExternalName DNS fallback ───
+  # ─── Data-plane DNS: ExternalName endpoint table + default resolver ───
   dnsResolver:
+    endpointTable: true                    # false = OS resolver per request (system mode)
     servers: ["1.1.1.1:53"]                # Mutually exclusive with linkSysRef
     # linkSysRef: { namespace: edgion-system, name: corporate-httpdns }
-    cacheTtl: "5s"
+    ttlFactor: 0.5                         # refresh = clamp(ttl * ttlFactor, min, max)
+    minRefreshSeconds: 5                   # >= 2
+    maxRefreshSeconds: 300                 # <= 2147483647 (RFC 2181 max TTL)
+    # fallbackRefreshSeconds: 5            # no TTL; unset = 5 clamped into [min, max]
+    # refreshIntervalSeconds: 30           # fixed interval; ignores TTL
+    maxStaleSeconds: 300
+    maxEntries: 4096
 ```
 
 ## spec Field Details
@@ -381,10 +388,20 @@ Hostname/SAN pinning remains rejected by the existing Phase1 validation guard.
 | `linkSysRef` | `LinkSysRef?` | — | Namespaced httpdns LinkSys reference. |
 | `servers` | `Vec<String>?` | — | Inline `ip[:port]` DNS servers. |
 | `lookupFamily` | `DnsLookupFamily` | `ipv4Only` | Backend DNS family: `ipv4Only`, `ipv6Only`, or `all`; independent of resolver selection. |
-| `cacheTtl` | `Duration` | `5s` | Fallback freshness of upstream DNS answers (cached ExternalName self-resolution and AI provider hosts) whose resolver reports no record TTL (capped at 300 s); `0s` disables caching. Record TTLs are honored within 5–300 s; see `edgion_common::dns::DnsAnswerCache`. |
+| `endpointTable` | `bool` | `true` | Global default mode for `ExternalName` Services without `edgion.io/dns-resolution-mode`: `true` = `gateway` (endpoint table), `false` = `system` (OS resolver per request / connection). |
+| `ttlFactor` | `f64` | `0.5` | Refresh interval as a fraction of the record TTL, in [0.01, 1]; non-finite values are rejected at parse time. |
+| `minRefreshSeconds` | `u32` | `5` | Lower bound of the computed refresh interval; at least 2. |
+| `maxRefreshSeconds` | `u32` | `300` | Upper bound of the computed refresh interval; at most 2147483647 (RFC 2181 maximum TTL). |
+| `fallbackRefreshSeconds` | `u32?` | unset | Refresh when the resolver reports no TTL (OS resolver, TTL-less HTTPDNS). When set it must lie within [min, max]; unset means 5 clamped into [min, max], so editing only one bound never invalidates it. Also the fallback answer freshness of the request-driven cache used by AI endpoints, external jumps and UDP `system` sessions, which caps it at 300 s and cannot be disabled. |
+| `refreshIntervalSeconds` | `u32?` | — | Fixed refresh interval (2..=2147483647); record TTLs and the [min, max] bounds are then ignored (only the 2 s floor applies). |
+| `maxStaleSeconds` | `u32` | `300` | How long the last good set is kept while resolution fails transiently. |
+| `maxEntries` | `u32` | `4096` | Most distinct hostname / resolver / family targets (1..=65536); new targets beyond it fail closed. |
 
-`linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
-data-plane fallback; Controller-side resolution uses Controller YAML.
+`linkSysRef` and `servers` are mutually exclusive and validated at ingest, as are the
+refresh ranges (`refresh_errors`). Duration fields are integer seconds because GEP-2257
+strings cannot express the RFC 2181 maximum TTL. `controller`-mode resolution uses the
+Controller YAML instead. See
+[service backends](../03-resources/16-service-backends.md#externalname-resolution-modes).
 
 ### spec.pluginPolicy
 
@@ -563,6 +580,6 @@ Do not use `EdgionGatewayConfig` to solve these problems:
   Kubernetes structural schema.
 - Whether the Controller uses file_system, etcd, or kubernetes: that is `conf_center` in the Controller YAML.
 
-`spec.dnsResolver.lookupFamily` is the typed live Gateway DNS default: `ipv4Only` (default), `ipv6Only`, or `all`. A family-only EGC is valid and participates in the existing global-owner selection. Service > Gateway > selected EGC family inheritance is independent of resolver selection. AI external-hostname dispatch uses Gateway > EGC.
+`spec.dnsResolver.lookupFamily` is the typed live Gateway DNS default: `ipv4Only` (default), `ipv6Only`, or `all`. A family-only EGC is valid and participates in the existing global-owner selection. `ExternalName` family inheritance is Service > selected EGC, independent of resolver selection; AI external-hostname dispatch and external jumps use Gateway > EGC.
 
 DNS defaults use the deterministic minimum store-key owner across configured EGCs, not only the active GatewayClass parametersRef. A family-only DNS block participates in this existing global selection.

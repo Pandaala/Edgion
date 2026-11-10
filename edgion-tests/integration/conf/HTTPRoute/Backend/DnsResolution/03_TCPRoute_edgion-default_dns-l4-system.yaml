@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: dns-l4-system-tcp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: tcp-system
+  rules:
+    - backendRefs:
+        - name: dns-l4-system
+          port: 30010

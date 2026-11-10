@@ -16,9 +16,7 @@ use crate::backends::discovery::{
     get_service_discovery_coordinator, ServicePublishedState, ServiceSectionInvalid, ServiceSectionKey,
     ServiceSelectorGeneration, ServiceUnavailableReason,
 };
-use crate::backends::{
-    select_service_endpoint, validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError, ServiceDegradePolicy,
-};
+use crate::backends::{validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError};
 use crate::observe::{log_udp, UdpLogEntry};
 use crate::routes::common::{
     L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
@@ -127,11 +125,18 @@ fn is_pinned_upstream_source(src: std::net::SocketAddr, pinned: std::net::Socket
 struct PinnedServiceEndpoint {
     service_key: Box<str>,
     section: ServiceSectionKey,
+    /// Set when the address came from a per-session OS lookup of this
+    /// hostname (`system`-mode `ExternalName`): no published slot holds it, so
+    /// the session stays only while the Service is still a `system`-mode
+    /// `ExternalName` of the same hostname with the pinned port.
+    per_session_hostname: Option<Box<str>>,
 }
 
 /// True only when the published discovery generation proves the pinned endpoint
 /// is gone: the Service is absent, its section port was removed, or the section
-/// no longer publishes the address. Indeterminate states keep the session.
+/// no longer publishes the address. Indeterminate states keep the session. A
+/// per-session resolved address also retires when the Service stops being a
+/// `system`-mode `ExternalName` of the same hostname.
 fn pinned_endpoint_removed(
     generation: &ServiceSelectorGeneration,
     pinned: &PinnedServiceEndpoint,
@@ -140,6 +145,13 @@ fn pinned_endpoint_removed(
     match generation.service(&pinned.service_key) {
         None | Some(ServicePublishedState::Unavailable(ServiceUnavailableReason::MissingService)) => true,
         Some(ServicePublishedState::Unavailable(ServiceUnavailableReason::InvalidEpoch)) => false,
+        Some(ServicePublishedState::Available(service)) if pinned.per_session_hostname.is_some() => {
+            crate::backends::system_mode_hostname(service) != pinned.per_session_hostname.as_deref()
+                || matches!(
+                    service.resolve_section(&pinned.section),
+                    Err(ServiceSectionInvalid::MissingRequestedPort)
+                )
+        }
         Some(ServicePublishedState::Available(service)) => match service.resolve_section(&pinned.section) {
             Ok(section) => section.slot_for_addr(upstream_addr).is_none(),
             Err(ServiceSectionInvalid::MissingRequestedPort) => true,
@@ -401,25 +413,25 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
+        let prep = crate::backends::prepare_l4_service(
+            selected,
+            Some(owner.gateway_key()),
+            gateway_config.allow_loopback_upstream,
+            crate::backends::L4Transport::Datagram,
+        )
+        .await;
         let (pinned_endpoint, upstream_addr) =
             match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
-                select_service_endpoint(
-                    target.key(),
-                    target.section().clone(),
-                    &None,
-                    ServiceDegradePolicy::Live,
-                    None,
-                    "",
-                    None,
-                )
+                prep.resolve(target)
             }) {
-                Ok((target, endpoint)) => {
-                    let PingoraSocketAddr::Inet(addr) = &endpoint.backend.inner().addr else {
+                Ok((target, backend)) => {
+                    let PingoraSocketAddr::Inet(addr) = &backend.inner().addr else {
                         return;
                     };
                     let pinned = PinnedServiceEndpoint {
                         service_key: target.key().into(),
                         section: target.section().clone(),
+                        per_session_hostname: prep.direct_hostname().map(Box::from),
                     };
                     (pinned, *addr)
                 }

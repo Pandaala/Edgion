@@ -7,7 +7,7 @@ metadata:
   name: dns-flap
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolution-mode: gateway
     edgion.io/dns-resolver-ref: edgion-default/dns-flap-local
 spec:
   type: ExternalName

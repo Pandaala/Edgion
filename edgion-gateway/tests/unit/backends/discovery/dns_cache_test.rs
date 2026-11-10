@@ -4,58 +4,6 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::task::{Context, Poll, Waker};
 
-// ── mode parsing ──────────────────────────────────────────────────────────
-
-#[test]
-fn mode_parse_defaults_to_controller() {
-    assert_eq!(DnsResolutionMode::parse(None), DnsResolutionMode::Controller);
-    assert_eq!(DnsResolutionMode::parse(Some("bogus")), DnsResolutionMode::Controller);
-    assert_eq!(DnsResolutionMode::parse(Some("  gateway ")), DnsResolutionMode::Gateway);
-    assert_eq!(
-        DnsResolutionMode::parse(Some("per-request")),
-        DnsResolutionMode::PerRequest
-    );
-}
-
-// ── decision function ─────────────────────────────────────────────────────
-
-#[test]
-fn per_request_never_consults_slice() {
-    // Even with a ready slice, per-request self-resolves without caching.
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::PerRequest, true),
-        ExternalNamePath::SelfResolve { cache: false }
-    );
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::PerRequest, false),
-        ExternalNamePath::SelfResolve { cache: false }
-    );
-}
-
-#[test]
-fn gateway_never_consults_slice_and_caches() {
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::Gateway, true),
-        ExternalNamePath::SelfResolve { cache: true }
-    );
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::Gateway, false),
-        ExternalNamePath::SelfResolve { cache: true }
-    );
-}
-
-#[test]
-fn controller_uses_slice_when_ready_else_bridges() {
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::Controller, true),
-        ExternalNamePath::EndpointSlice
-    );
-    assert_eq!(
-        decide_external_name_path(DnsResolutionMode::Controller, false),
-        ExternalNamePath::SelfResolve { cache: true }
-    );
-}
-
 // ── upstream answer cache ─────────────────────────────────────────────────
 
 #[test]

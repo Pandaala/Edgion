@@ -50,9 +50,9 @@ pub struct GatewayInfo {
 
     /// Gateway-layer DNS resolver candidate, precomputed from the Gateway's
     /// `edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref` annotations. Used
-    /// as the middle layer of the data-plane resolver precedence
-    /// (Service → Gateway → EGC → system) when self-resolving an `ExternalName`
-    /// backend. `None` when the Gateway sets neither annotation.
+    /// as the first layer (Gateway → EGC → system) for AI external hostnames and
+    /// external jumps; `ExternalName` Services do not use it. `None` when the
+    /// Gateway sets neither annotation.
     pub dns_resolver_candidate: Option<ResolverCandidate>,
     /// Cold-parsed override: absence inherits; invalid values fail DNS resolution.
     pub dns_lookup_family: Option<Result<DnsLookupFamily, &'static str>>,

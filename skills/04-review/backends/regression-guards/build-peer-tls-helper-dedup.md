@@ -10,9 +10,9 @@ The May 24, 2026 correction removed a duplicated inline `BackendTlsInfo` write
 from `build_peer_from_lb_selection`. That historical implementation had four
 native mode arms; those pseudo-kind arms have since been removed.
 
-Current ordinary Service and controller-resolved ExternalName selection use
-`build_peer_from_lb_selection`; self-resolved ExternalName uses
-`build_external_name_peer_with_resolver`. Both call `record_tls_to_upstream`
+Current ordinary Service and `gateway`/`controller`-mode ExternalName selection
+use `build_peer_from_lb_selection`; `system`-mode ExternalName uses
+`build_system_external_name_peer`. Both call `record_tls_to_upstream`
 before the canonical TLS peer builder. Its unconditional assignment clears old
 TLS metadata when a later attempt is plaintext. Absent BackendTLSPolicy stays
 plaintext even for Service port 443.

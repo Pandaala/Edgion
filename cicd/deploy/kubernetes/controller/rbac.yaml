@@ -39,9 +39,9 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["discovery.k8s.io"]
-  # create/update/patch/delete are required by the control-plane DNS resolver,
-  # which writes/GCs synthetic EndpointSlices for controller-mode ExternalName
-  # Services (edgion.io/dns-resolution-mode: controller).
+  # create/update/patch/delete back the Admin API resource writes and wipe.
+  # The DNS resolver never writes EndpointSlices: controller-mode ExternalName
+  # endpoints are published in memory through conf_sync.
   resources: ["endpointslices"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["edgion.io"]

@@ -47,7 +47,9 @@ pub fn service_section_key_from_port(port: Option<i32>) -> Result<ServiceSection
         .ok_or(EdgionErrorCode::BackendPortResolutionFailed)
 }
 
-fn load_active_projection(service_key: &str) -> Option<(Arc<AvailableServiceProjection>, Arc<ServiceRuntimeSnapshot>)> {
+pub(crate) fn load_active_projection(
+    service_key: &str,
+) -> Option<(Arc<AvailableServiceProjection>, Arc<ServiceRuntimeSnapshot>)> {
     let coordinator = get_service_discovery_coordinator();
     let generation = coordinator.load_generation();
     let available = generation.available(service_key)?;
@@ -245,11 +247,9 @@ impl CapturedServiceSelection {
         })
     }
 
-    pub(crate) fn dns_resolver_candidate(&self) -> Option<&edgion_common::dns::resolver_select::ResolverCandidate> {
-        self.available.dns_resolver_candidate.as_ref()
-    }
-
-    pub(crate) fn dns_resolution_mode(&self) -> super::DnsResolutionMode {
+    pub(crate) fn dns_resolution_mode(
+        &self,
+    ) -> Result<Option<edgion_resources::resources::common::DnsResolutionMode>, &'static str> {
         self.available.dns_resolution_mode
     }
 
@@ -356,6 +356,22 @@ pub(crate) fn select_service_endpoint(
         session,
         remote_ip,
         query,
+    )
+}
+
+/// Plain L4 selection (no LB policy, live degrade) from an already loaded
+/// projection, so a caller that inspected it does not load it twice.
+pub(crate) fn select_l4_endpoint_from(
+    available: Arc<AvailableServiceProjection>,
+    active: Arc<ServiceRuntimeSnapshot>,
+    section: &ServiceSectionKey,
+) -> Result<ResolvedServiceEndpoint, EdgionErrorCode> {
+    CapturedServiceSelection::from_projection(available, active, section)?.select(
+        &None,
+        ServiceDegradePolicy::Live,
+        None,
+        "",
+        None,
     )
 }
 

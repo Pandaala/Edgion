@@ -227,9 +227,10 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   operator-configured destinations, the Gateway request-influenced egress cache
   for DSL `http.call` (`request_egress_answer_cache()`), and the Gateway
   upstream cache (`upstream_dns_cache()` in
-  `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI, cached
-  ExternalName and ExternalJump (RegionRoute, DynamicExternalUpstream)
-  resolution. Callers do not add another DNS cache type.
+  `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI and ExternalJump
+  (RegionRoute, DynamicExternalUpstream) resolution and UDP `system`-mode
+  ExternalName sessions. ExternalName `gateway` mode uses the background endpoint
+  table instead of a cache. Callers do not add another DNS cache type.
 - **Rule**: any resolution driven by operator resolver configuration MUST go
   through `ResolverSpec`; do not embed another resolver library or hand-roll
   lookups.
@@ -242,10 +243,11 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   HTTP clients. Redis likewise adapts redis-rs's resolver hook to `EgressResolver`
   with `ResolverSpec::System`, so every actual topology dial is classified.
 - **Native Service strategy**: ordinary Services dial proven EndpointSlice IPs.
-  HTTP/gRPC references to an actual `Service.spec.type: ExternalName` select
-  controller EndpointSlices or the canonical `ResolverSpec` DNS path from one
-  captured discovery projection; pseudo reference kinds do not select a strategy.
-  L4 has no Gateway self-resolution branch. The separate upstream-authority
+  References to an actual `Service.spec.type: ExternalName` select, per
+  `edgion.io/dns-resolution-mode`, Gateway endpoint-table slices (`gateway`),
+  Controller-published slices (`controller`) or a per-attempt OS lookup
+  (`system`), on HTTP, gRPC, TCP, UDP and TLS alike; pseudo reference kinds do
+  not select a strategy. The separate upstream-authority
   outbound path uses `AnchorPinnedResolver`.
 
 ### 6. Redis access — Unified

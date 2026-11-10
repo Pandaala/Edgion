@@ -311,7 +311,7 @@ The old cold-slot extraction decision concerned boilerplate, not this lifetime/c
 | edgion_controller_status_writes_skipped_total | Counter | controller | Fixed | kind |
 | edgion_controller_status_conditions_max | Gauge | controller | Dynamic snapshot | kind, namespace, name |
 | edgion_controller_unexpected_apply_during_init_total | Counter | controller | Fixed | kind |
-| edgion_controller_leader_job_alive | Gauge | controller | Fixed | leader_job (acme/conf_sync_rotation/credential_manager/dns_resolver) |
+| edgion_controller_leader_job_alive | Gauge | controller | Fixed | leader_job (acme/conf_sync_rotation/credential_manager) |
 | edgion_metrics_series_rejected_total | Counter | both | Fixed | none |
 | edgion_metrics_cardinality_limit_active | Gauge | both | Fixed | none |
 | edgion_backend_requests_total | Counter | gateway | Dynamic | configurable (see backend_requests.labels) |

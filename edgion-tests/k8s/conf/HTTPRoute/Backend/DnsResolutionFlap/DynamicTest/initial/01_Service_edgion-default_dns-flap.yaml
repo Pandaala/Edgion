@@ -1,13 +1,13 @@
 # ExternalName Service whose resolver-ref starts pointing at the DOWN httpdns
-# (dns-flap-dead). per-request mode so every request re-resolves and there is no
-# cache to mask the runtime annotation change.
+# (dns-flap-dead). Gateway endpoint-table mode: changing the resolver annotation
+# re-keys the table entry at once, so no stale answer masks the change.
 apiVersion: v1
 kind: Service
 metadata:
   name: dns-flap
   namespace: edgion-default
   annotations:
-    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolution-mode: gateway
     edgion.io/dns-resolver-ref: edgion-default/dns-flap-dead
 spec:
   type: ExternalName

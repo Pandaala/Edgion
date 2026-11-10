@@ -599,16 +599,27 @@ For the full `center.rbac` model, default policy, and security notes, see [Feder
 - [Working Directory Behavior](../../dev-guide/work-directory.md)
 - [Federation RBAC](../federation-rbac.md)
 
-## ExternalName DNS family default
+## ExternalName DNS resolution (`controller` mode)
 
 ```yaml
 dns_resolver:
+  refresh_interval: 15s          # fixed; record TTLs are not honored
   lookup_family: ipv4Only
+  # servers: ["192.0.2.53"]      # default resolver; or:
+  # link_sys_ref: dns/corporate-httpdns
 ```
 
-`lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all`. It controls
-Controller-owned ExternalName EndpointSlice publication and requires a Controller
-restart to change. A Service `edgion.io/dns-lookup-family` annotation overrides it
-live. Gateway/EGC defaults do not alter this publication. Narrowing withdraws
-forbidden owned family slices even during DNS failure; errors never justify
-continuing to serve a forbidden family. See the [backend family contract](../../user-guide/http-route/backends/service-ref.md#dns-address-families).
+These settings apply only to ExternalName Services annotated
+`edgion.io/dns-resolution-mode: controller`; every other ExternalName Service is
+resolved by the Gateway. There is no enable switch. The Controller resolves each
+such Service every `refresh_interval` and publishes the addresses as in-memory
+EndpointSlices that reach Gateways through config sync; nothing is written to the
+Kubernetes API, so it works the same with the file-system and etcd configuration
+centers. An unchanged answer publishes nothing. A failed lookup keeps the last
+good addresses; an authoritative empty answer removes them.
+
+`lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all` and requires a
+Controller restart to change. A Service `edgion.io/dns-lookup-family` annotation
+overrides it live; narrowing republishes the last good answer without the
+forbidden family at once. Gateway/EGC defaults do not alter Controller
+publication. See [ExternalName resolution](../../user-guide/http-route/backends/service-ref.md#externalname-resolution).

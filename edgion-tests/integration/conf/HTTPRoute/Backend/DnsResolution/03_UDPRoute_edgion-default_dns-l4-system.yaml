@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: dns-l4-system-udp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+      sectionName: udp-system
+  rules:
+    - backendRefs:
+        - name: dns-l4-system
+          port: 30011

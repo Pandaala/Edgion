@@ -43,6 +43,7 @@ before applying a decision to current code.
 - [backends-F013 — no-port EndpointSlices fail closed instead of defaulting to 8080](regression-guards/ep-slice-no-port-fail-closed.md)
 - [EndpointSlice ownership transitions rebuild both Service generations](regression-guards/endpoint-slice-ownership-transitions.md)
 - [DNS Answer Cache Identity and Lifecycle (common-02; origin D0001) — FIXED](regression-guards/dns-answer-cache-identity-and-lifecycle.md)
+- [Gateway DNS endpoint table lifecycle (ExternalName gateway mode)](regression-guards/dns-endpoint-table-lifecycle.md)
 - [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)
 - [backends-F001 — IPv6 health-probe URLs are bracketed; gRPC probe no longer panics](regression-guards/ipv6-probe-url-brackets.md)
 - [Service section port proofs and DirectEndpoint authorization](regression-guards/named-port-resolve-against-originating-slice.md)

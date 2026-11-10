@@ -1,9 +1,9 @@
-//! Work set of the control-plane DNS resolver.
+//! Work set of the Controller DNS resolver.
 //!
 //! `ServiceHandler` keeps this table in step with the processed Service cache:
-//! only Services the resolver must publish for (controller-mode ExternalName)
-//! are present. The leader-only resolver iterates the table instead of listing
-//! Services from the apiserver.
+//! only `ExternalName` Services explicitly annotated
+//! `edgion.io/dns-resolution-mode: controller` are present. The resolver
+//! iterates the table instead of listing Services.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,9 +13,7 @@ use parking_lot::RwLock;
 use tokio::sync::Notify;
 
 use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
-
-use super::slice_builder::{decide_action, SliceAction};
-use crate::config::dns_resolver_config;
+use edgion_resources::resources::common::DnsResolutionMode;
 
 /// One processed Service and the revision of its last content change.
 #[derive(Clone)]
@@ -30,7 +28,7 @@ struct Inner {
     next_revision: u64,
 }
 
-/// Controller-mode ExternalName Services keyed by `namespace/name`.
+/// `controller`-mode ExternalName Services keyed by `namespace/name`.
 #[derive(Default)]
 pub(crate) struct DnsResolverTargets {
     inner: RwLock<Inner>,
@@ -89,6 +87,15 @@ impl DnsResolverTargets {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.read().entries.is_empty()
+    }
+
+    /// Number of targets (store-stats leak detection).
+    pub(crate) fn len(&self) -> usize {
+        self.inner.read().entries.len()
+    }
+
     /// Point-in-time copy of every target.
     pub(crate) fn snapshot(&self) -> Vec<(String, DnsResolverTarget)> {
         self.inner
@@ -120,6 +127,8 @@ fn service_key(service: &Service) -> Option<String> {
     Some(format!("{namespace}/{name}"))
 }
 
+/// Only an explicit, valid `controller` annotation opts a Service in; absent,
+/// other or invalid values leave it to the Gateway.
 fn is_resolver_target(service: &Service) -> bool {
     let is_external_name = service
         .spec
@@ -131,7 +140,21 @@ fn is_resolver_target(service: &Service) -> bool {
         .as_ref()
         .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
         .map(String::as_str);
-    decide_action(dns_resolver_config().enabled, is_external_name, mode) == SliceAction::Resolve
+    let parsed = DnsResolutionMode::from_annotation(mode);
+    if is_external_name {
+        if let Err(error) = parsed {
+            // Fails closed on the Gateway (`BackendDnsResolutionFailed`); say why here.
+            tracing::warn!(
+                component = "dns_resolver_service",
+                namespace = service.metadata.namespace.as_deref().unwrap_or("default"),
+                service = service.metadata.name.as_deref().unwrap_or(""),
+                value = mode.unwrap_or_default(),
+                error,
+                "Invalid edgion.io/dns-resolution-mode; the ExternalName backend fails closed"
+            );
+        }
+    }
+    is_external_name && parsed == Ok(Some(DnsResolutionMode::Controller))
 }
 
 #[cfg(test)]

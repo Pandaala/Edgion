@@ -1,36 +1,47 @@
 // DnsResolution test suite
 //
-// End-to-end coverage of the gateway's ExternalName self-resolution paths
-// (Part B data plane), driven hermetically via the test_server's fake HTTP DNS
-// endpoint (`/dns/resolve`, `/dns/hits/{host}`). No real DNS is involved.
+// End-to-end coverage of ExternalName resolution modes, driven hermetically via
+// the test_server's fake HTTP DNS endpoint (`/dns/resolve`, `/dns/hits/{host}`).
+// No real DNS is involved.
 //
 // Scenarios (all resolve to the local test backend 127.0.0.1:30001):
-//   1. per-request  — `dns-resolution-mode: per-request`, system resolver,
-//      externalName=localhost. Re-resolves every request (no cache).
-//   2. httpdns      — `dns-resolver-ref` → httpdns LinkSys, per-request. Proves
-//      the httpdns endpoint is hit and the resolved backend serves.
-//   3. gateway      — `dns-resolution-mode: gateway`, httpdns resolver. Caches
-//      (5s TTL): a second request within the TTL is served without re-resolving
-//      (the httpdns hit-count does not increase).
-//   4. httpdns-fallback — httpdns endpoint DOWN + `fallback: system`: resolution
+//   1. system       — `dns-resolution-mode: system`, OS resolver per request,
+//      externalName=localhost.
+//   2. httpdns      — default gateway mode, `dns-resolver-ref` → httpdns
+//      LinkSys. The Gateway endpoint table resolves through the httpdns
+//      endpoint in the background and the resolved backend serves.
+//   3. gateway      — gateway mode with the httpdns resolver: consecutive
+//      requests trigger no resolution (the table, not requests, resolves).
+//   4. httpdns-fallback — httpdns endpoint DOWN + `fallback: system`: the table
 //      falls back to the OS resolver and still serves.
-//
-// The controller-resolved path (`mode: controller` → real EndpointSlice) is
-// K8s-conf_center-only and cannot run in this FileSystem-mode harness; it is
-// covered by the C-1 unit tests in
-// `edgion-controller/src/services/dns_resolver/`.
+//   5. controller   — `dns-resolution-mode: controller`: the Controller resolves
+//      and publishes in-memory EndpointSlices through conf_sync; works in this
+//      FileSystem-mode harness as in Kubernetes.
+//   6. L4 (TCP) in every mode — `dns-l4-{gateway,system,controller}` behind one
+//      TCP listener each, echoing through the local TCP backend (30010).
+//   7. L4 (UDP) system mode — `dns-l4-system` behind a UDP listener: a new
+//      session resolves through the OS resolver and echoes via 30011.
 //
 // Required config (edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolution/):
 //   - 00_LinkSys_*_dns-httpdns-local        # httpdns → /dns/resolve, returns 127.0.0.1
 //   - 00_LinkSys_*_dns-httpdns-dead         # httpdns → down endpoint, fallback: system
-//   - 01_Service_*_dns-{per-request,gateway-cached,httpdns,httpdns-fallback}
-//   - 02_Gateway_edgion-test_dns-res-gateway  # HTTP listener on port 31360
+//   - 01_Service_*_dns-{system,gateway-cached,httpdns,httpdns-fallback,controller}
+//   - 01_Service_*_dns-l4-{gateway,system,controller}
+//   - 02_Gateway_edgion-test_dns-res-gateway  # HTTP 31360; TCP 31362-31364; UDP 31365
 //   - 03_HTTPRoute_*                          # hostname → backend Service
-// Requires securityProtect.allowLoopbackUpstream=true (base EdgionGatewayConfig).
+//   - 03_{TCP,UDP}Route_*_dns-l4-*            # L4 listener → backend Service
+// The L4 listeners map onto ports.json fields: `tcp` = gateway mode,
+// `tcp_filtered` = system mode, `tcp_bare` = controller mode, `udp` = system mode.
+// Requires securityProtect.allowLoopbackUpstream=true (dedicated EdgionGatewayConfig).
 
 use crate::framework::{env_host_or, TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
+
+const SUITE_PORT_KEY: &str = "HTTPRoute/Backend/DnsResolution";
+const L4_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct DnsResolutionTestSuite;
 
@@ -69,19 +80,19 @@ impl DnsResolutionTestSuite {
         Ok(resp.status().as_u16())
     }
 
-    /// per-request mode resolves via the system resolver (externalName=localhost)
+    /// system mode resolves via the OS resolver per request (externalName=localhost)
     /// and serves from the local backend.
-    fn test_per_request_resolves_and_serves() -> TestCase {
+    fn test_system_mode_resolves_and_serves() -> TestCase {
         TestCase::new(
-            "per_request_resolves_and_serves",
-            "per-request ExternalName resolves (system resolver) and serves 200",
+            "system_mode_resolves_and_serves",
+            "system-mode ExternalName resolves (OS resolver) and serves 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match Self::get_status(&ctx, "per-request.dns.test").await {
+                    match Self::get_status(&ctx, "system.dns.test").await {
                         Ok(200) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "per-request self-resolution reached the backend (200)".to_string(),
+                            "system-mode resolution reached the backend (200)".to_string(),
                         ),
                         Ok(other) => TestResult::failed(start.elapsed(), format!("expected 200, got {other}")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -91,60 +102,40 @@ impl DnsResolutionTestSuite {
         )
     }
 
-    /// httpdns (per-request) resolves through the fake HTTP DNS endpoint (hit
-    /// count increases) and serves.
+    /// httpdns resolves through the fake HTTP DNS endpoint (hit count > 0) via
+    /// the Gateway endpoint table and serves.
     fn test_httpdns_resolves_and_serves() -> TestCase {
         TestCase::new(
             "httpdns_resolves_and_serves",
-            "httpdns resolver hits the endpoint each request and serves 200",
+            "httpdns resolver feeds the endpoint table and serves 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let host = "httpdns.dns.test";
-
-                    let before = match Self::dns_hits(&ctx.http_client, host).await {
-                        Ok(n) => n,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
-
                     for _ in 0..2 {
-                        match Self::get_status(&ctx, host).await {
-                            Ok(200) => {}
-                            Ok(other) => {
-                                return TestResult::failed(start.elapsed(), format!("expected 200, got {other}"))
-                            }
-                            Err(e) => return TestResult::failed(start.elapsed(), e),
+                        if let Err(e) = Self::expect_ok(&ctx, host).await {
+                            return TestResult::failed(start.elapsed(), e);
                         }
                     }
-
-                    let after = match Self::dns_hits(&ctx.http_client, host).await {
-                        Ok(n) => n,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
-
-                    // per-request re-resolves every request → at least +2 hits.
-                    if after >= before + 2 {
-                        TestResult::passed_with_message(
+                    match Self::dns_hits(&ctx.http_client, host).await {
+                        Ok(hits) if hits > 0 => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("httpdns endpoint hit per request (before={before}, after={after})"),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("expected httpdns hits to grow by >=2, before={before}, after={after}"),
-                        )
+                            format!("served through httpdns-resolved endpoints (hits={hits})"),
+                        ),
+                        Ok(_) => TestResult::failed(start.elapsed(), "200 without any httpdns resolution".to_string()),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
             },
         )
     }
 
-    /// gateway mode caches: a second request within the 5s TTL is served without
-    /// a new httpdns resolution (hit count unchanged between the two requests).
-    fn test_gateway_mode_caches_within_ttl() -> TestCase {
+    /// gateway mode resolves in the background: requests right after the first
+    /// trigger no httpdns resolution (at most one background refresh lands).
+    fn test_gateway_mode_requests_do_not_resolve() -> TestCase {
         TestCase::new(
-            "gateway_mode_caches_within_ttl",
-            "gateway mode serves a second in-TTL request from cache (no re-resolve)",
+            "gateway_mode_requests_do_not_resolve",
+            "gateway mode serves consecutive requests from the endpoint table (no per-request resolve)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -154,7 +145,8 @@ impl DnsResolutionTestSuite {
                     let route_host = "gateway-cached.dns.test";
                     let resolver_key = "gwcached.dns.test"; // == Service.spec.externalName
 
-                    // First request resolves (cold cache) → hit count becomes >= 1.
+                    // The table has resolved at least once before the first request
+                    // is served (bounded first-answer wait) → hit count >= 1.
                     if let Err(e) = Self::expect_ok(&ctx, route_host).await {
                         return TestResult::failed(start.elapsed(), e);
                     }
@@ -171,25 +163,30 @@ impl DnsResolutionTestSuite {
                         );
                     }
 
-                    // Second request immediately after (well within the 5s TTL).
-                    if let Err(e) = Self::expect_ok(&ctx, route_host).await {
-                        return TestResult::failed(start.elapsed(), e);
+                    // Several more requests immediately after. A per-request resolver
+                    // would add one hit each; the endpoint table adds at most one
+                    // background refresh (TTL-less httpdns refreshes every ~5 s).
+                    const FOLLOW_UPS: u64 = 5;
+                    for _ in 0..FOLLOW_UPS {
+                        if let Err(e) = Self::expect_ok(&ctx, route_host).await {
+                            return TestResult::failed(start.elapsed(), e);
+                        }
                     }
-                    let hits_after_second = match Self::dns_hits(&ctx.http_client, resolver_key).await {
+                    let hits_after_follow_ups = match Self::dns_hits(&ctx.http_client, resolver_key).await {
                         Ok(n) => n,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
-
-                    if hits_after_second == hits_after_first {
+                    let grown = hits_after_follow_ups.saturating_sub(hits_after_first);
+                    if grown <= 1 {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("second in-TTL request served from cache (hits stayed at {hits_after_second})"),
+                            format!("{FOLLOW_UPS} requests triggered no per-request resolution (hits {hits_after_first} -> {hits_after_follow_ups})"),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "expected no re-resolve within TTL, hits went {hits_after_first} -> {hits_after_second}"
+                                "expected no per-request resolution, hits went {hits_after_first} -> {hits_after_follow_ups} over {FOLLOW_UPS} requests"
                             ),
                         )
                     }
@@ -202,7 +199,7 @@ impl DnsResolutionTestSuite {
     fn test_httpdns_fallback_when_endpoint_down() -> TestCase {
         TestCase::new(
             "httpdns_fallback_when_endpoint_down",
-            "httpdns endpoint down falls back to system resolver and serves 200",
+            "httpdns endpoint down: the endpoint table falls back to the OS resolver and serves 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -216,6 +213,142 @@ impl DnsResolutionTestSuite {
                         }
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
+                })
+            },
+        )
+    }
+
+    /// controller mode: the Controller resolves and publishes in-memory
+    /// EndpointSlices; the Gateway serves through them.
+    fn test_controller_mode_publishes_endpoints() -> TestCase {
+        TestCase::new(
+            "controller_mode_publishes_endpoints",
+            "controller-mode ExternalName is served through Controller-published endpoints",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match Self::expect_ok(&ctx, "controller.dns.test").await {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Controller-published endpoints served (200)".to_string(),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Send one payload over a TCP connection to `addr` and require the echo.
+    async fn tcp_echo(addr: &str, payload: &[u8]) -> Result<(), String> {
+        let exchange = async {
+            let mut stream = TcpStream::connect(addr)
+                .await
+                .map_err(|e| format!("connect {addr} failed: {e}"))?;
+            stream
+                .write_all(payload)
+                .await
+                .map_err(|e| format!("write to {addr} failed: {e}"))?;
+            let mut echoed = vec![0u8; payload.len()];
+            stream
+                .read_exact(&mut echoed)
+                .await
+                .map_err(|e| format!("read from {addr} failed: {e}"))?;
+            if echoed == payload {
+                Ok(())
+            } else {
+                Err(format!("echo mismatch from {addr}"))
+            }
+        };
+        tokio::time::timeout(L4_IO_TIMEOUT, exchange)
+            .await
+            .map_err(|_| format!("TCP echo via {addr} timed out"))?
+    }
+
+    fn tcp_mode_case(
+        name: &'static str,
+        mode: &'static str,
+        addr: fn(&TestContext) -> Result<String, String>,
+    ) -> TestCase {
+        TestCase::new(
+            name,
+            "TCPRoute to an ExternalName Service echoes through the resolved backend",
+            move |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = match addr(&ctx) {
+                        Ok(addr) => addr,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    // Two connections: the second must not depend on state the
+                    // first connection created.
+                    for attempt in 0..2 {
+                        let payload = format!("dns-l4-{mode}-{attempt}");
+                        if let Err(e) = Self::tcp_echo(&addr, payload.as_bytes()).await {
+                            return TestResult::failed(start.elapsed(), format!("{mode} mode: {e}"));
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!("{mode}-mode ExternalName served TCP echo via {addr}"),
+                    )
+                })
+            },
+        )
+    }
+
+    fn test_tcp_gateway_mode_echo() -> TestCase {
+        Self::tcp_mode_case("tcp_gateway_mode_echo", "gateway", |ctx| Ok(ctx.tcp_addr()))
+    }
+
+    fn test_tcp_system_mode_echo() -> TestCase {
+        Self::tcp_mode_case("tcp_system_mode_echo", "system", |ctx| Ok(ctx.tcp_filtered_addr()))
+    }
+
+    fn test_tcp_controller_mode_echo() -> TestCase {
+        Self::tcp_mode_case("tcp_controller_mode_echo", "controller", |ctx| {
+            let port = crate::port_config::PortConfig::load()?
+                .get_ports(SUITE_PORT_KEY)?
+                .tcp_bare
+                .ok_or_else(|| format!("ports.json {SUITE_PORT_KEY}.tcp_bare is not set"))?;
+            Ok(format!("{}:{port}", ctx.target_host))
+        })
+    }
+
+    /// system mode over UDP: the first datagram of a session resolves through the
+    /// OS resolver within a short budget, so a lost first datagram is retried.
+    fn test_udp_system_mode_echo() -> TestCase {
+        TestCase::new(
+            "udp_system_mode_echo",
+            "UDPRoute to a system-mode ExternalName Service echoes through the resolved backend",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = ctx.udp_addr();
+                    let socket = match UdpSocket::bind("0.0.0.0:0").await {
+                        Ok(socket) => socket,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("bind failed: {e}")),
+                    };
+                    let payload = b"dns-l4-system-udp";
+                    let mut last_error = String::new();
+                    for _ in 0..3 {
+                        if let Err(e) = socket.send_to(payload, &addr).await {
+                            return TestResult::failed(start.elapsed(), format!("send to {addr} failed: {e}"));
+                        }
+                        let mut buffer = [0u8; 256];
+                        match tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buffer)).await {
+                            Ok(Ok((n, _))) if &buffer[..n] == payload => {
+                                return TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("system-mode ExternalName served UDP echo via {addr}"),
+                                );
+                            }
+                            Ok(Ok(_)) => last_error = "echo mismatch".to_string(),
+                            Ok(Err(e)) => last_error = format!("recv failed: {e}"),
+                            Err(_) => last_error = "timed out waiting for the echo".to_string(),
+                        }
+                    }
+                    TestResult::failed(start.elapsed(), format!("UDP via {addr}: {last_error}"))
                 })
             },
         )
@@ -241,10 +374,15 @@ impl TestSuite for DnsResolutionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            Self::test_per_request_resolves_and_serves(),
+            Self::test_system_mode_resolves_and_serves(),
             Self::test_httpdns_resolves_and_serves(),
-            Self::test_gateway_mode_caches_within_ttl(),
+            Self::test_gateway_mode_requests_do_not_resolve(),
             Self::test_httpdns_fallback_when_endpoint_down(),
+            Self::test_controller_mode_publishes_endpoints(),
+            Self::test_tcp_gateway_mode_echo(),
+            Self::test_tcp_system_mode_echo(),
+            Self::test_tcp_controller_mode_echo(),
+            Self::test_udp_system_mode_echo(),
         ]
     }
 }

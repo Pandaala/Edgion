@@ -28,6 +28,10 @@ pub(crate) const L4_BACKEND_REF_DENIED_STATUS: &str = "RefDenied";
 /// miss. Same sensitivity rule as `L4_BACKEND_REF_DENIED_STATUS`.
 pub(crate) const L4_BACKEND_REF_DENIED_LOG: &str = "backend ref denied";
 
+/// TLS `err_log` / TCP `deny_reason` literal when an `ExternalName` backend's
+/// DNS step failed (system-mode lookup error or invalid mode annotation).
+pub(crate) const L4_DNS_RESOLUTION_FAILED_LOG: &str = "dns resolution failed";
+
 /// TCP `status` / UDP failure-status / TLS `status` token when a selected
 /// L4 backendRef is not a valid standard Service reference. Fixed and non-identifying.
 pub(crate) const L4_BACKEND_UNSUPPORTED_KIND_STATUS: &str = "UnsupportedBackend";

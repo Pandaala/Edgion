@@ -207,7 +207,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 
 > Detail: `skills/02-features/05-annotations/00-annotations-overview.md`, `.../add-new-annotation.md`.
 
-- 🔴 **System/controller-written keys and test-only keys are never hand-authored** and never documented as operator-facing config — controller/gateway-written (`hostname-resolution`, `sync-version`, `dns-resolved-at`) and test/tooling-only (`metrics-test-key`, `skip-load-validation`, `force-sync`). *A manifest setting these is a review red flag.* → `00-annotations-overview.md`.
+- 🔴 **System/controller-written keys and test-only keys are never hand-authored** and never documented as operator-facing config — controller/gateway-written (`hostname-resolution`, `sync-version`) and test/tooling-only (`metrics-test-key`, `skip-load-validation`, `force-sync`). *A manifest setting these is a review red flag.* → `00-annotations-overview.md`.
 - 🔴 **Removed annotation keys are deleted completely — no legacy alias/forward-port alongside the replacement** (the annotation-specific instance of the no-compat rule, §Q). → `00-annotations-overview.md`.
 - 🟡 **Choosing the carrier (annotation vs `options` vs label) is a documented up-front decision** — record Carrier / scope / owner / parse-owner / value grammar / invalid-input behavior / hot-reload before coding, don't default to `metadata.annotations`. → `add-new-annotation.md`.
 - 🟢 **Annotation value-parsing strictness is calibrated per-key risk** — don't force one blanket boolean/enum parser across all keys (`enable-http2` is lenient; `cert-provider` requires exact case-sensitive `"EdgionTls"`). → `add-new-annotation.md`.

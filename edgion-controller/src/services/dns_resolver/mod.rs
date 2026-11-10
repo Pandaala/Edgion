@@ -1,12 +1,12 @@
-//! Control-plane DNS resolver service.
+//! Controller DNS resolver for `controller`-mode `ExternalName` Services.
 //!
-//! Background loop that resolves `mode=controller` ExternalName Services and
-//! publishes real EndpointSlices to the apiserver (K8s conf_center mode only).
-//! See [`service`] for the loop and [`slice_builder`] for the pure EndpointSlice
-//! construction + reconcile decision.
+//! [`service`] resolves the opted-in Services and publishes in-memory
+//! synthetic EndpointSlices ([`synthetic`]) through the EndpointSlice
+//! pipeline; [`targets`] is the Service-event-driven work set.
 
 pub mod service;
-pub mod slice_builder;
+pub(crate) mod synthetic;
 pub(crate) mod targets;
 
-pub use service::{start_dns_resolver_service, stop_dns_resolver_service};
+pub(crate) use service::{ensure_dns_resolver_running, DnsResolverTask};
+pub(crate) use synthetic::DnsSyntheticSlices;

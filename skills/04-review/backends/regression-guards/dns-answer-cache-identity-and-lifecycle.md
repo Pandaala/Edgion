@@ -1,6 +1,6 @@
 ---
 name: dns-answer-cache-identity-and-lifecycle
-description: Use when reviewing DNS answer caching for AI upstreams, ExternalName self-resolution or EgressResolver; covers the shared DnsAnswerCache key, TTL/stale/negative lifecycle, coalescing, bounds and consumer contracts.
+description: Use when reviewing DNS answer caching for AI upstreams, external jumps or EgressResolver; covers the shared DnsAnswerCache key, TTL/stale/negative lifecycle, coalescing, bounds and consumer contracts.
 status: fixed
 finding_id: common-02 (supersedes task-externalname-dns-cache-identity-and-lifecycle, origin D0001)
 closed: 2026-11-06
@@ -19,14 +19,16 @@ All DNS answer caching goes through one canonical mechanism,
 |---|---|---|
 | `egress_answer_cache()` (`edgion-common`) | `EgressResolver`s with operator-configured destinations (Gateway plugins, LinkSys, Wasm callouts with allowlisted origins, GeoIP, Controller OAuth2) | 4096 entries, 16 shards |
 | `request_egress_answer_cache()` (`edgion-gateway/src/plugins/http/common/outbound/egress.rs`) | `EgressResolver::new_request_influenced`: DSL `http.call` URLs and the redirects they follow | 1024 entries, 8 shards |
-| `upstream_dns_cache()` (`edgion-gateway/src/backends/discovery/dns_cache.rs`) | AI provider endpoints, cached ExternalName self-resolution, ExternalJump destinations of RegionRoute / DynamicExternalUpstream (`util::net::resolve_domain`) | `lru_cache` defaults with an 8-shard floor |
+| `upstream_dns_cache()` (`edgion-gateway/src/backends/discovery/dns_cache.rs`) | AI provider endpoints, ExternalJump destinations of RegionRoute / DynamicExternalUpstream (`util::net::resolve_domain`) | `lru_cache` defaults with an 8-shard floor |
 
 Callers must not add another DNS cache type; a new instance is justified only to isolate a
 consumer class. The instances are separate so names a request or upstream can choose cannot
 evict the answers of upstream or operator-configured egress consumers. Consumers built with a
 zero fallback TTL bypass caching entirely (the HTTPDNS bootstrap fetcher, OTLP transport).
-Deliberately uncached resolution: the Controller DNS resolver service (it publishes
-EndpointSlices; spec non-goal), ExternalName `per-request` mode, and the unguarded DSL client
+Deliberately uncached resolution: the Controller DNS resolver service and the Gateway DNS
+endpoint table (both resolve in the background and publish EndpointSlices; see
+[endpoint table lifecycle](dns-endpoint-table-lifecycle.md)), ExternalName `system` mode (OS
+resolver per attempt), and the unguarded DSL client
 (reqwest's default resolver, only when `httpBlockPrivateIps` is off). Every resolver answer is
 truncated to 256 addresses (`MAX_ANSWER_ADDRS`) before it reaches any consumer.
 
@@ -87,13 +89,13 @@ allocates nothing for the key. EGC ingest rejects unparsable `dnsResolver.server
   (1 s, doubling per consecutive failure up to 10 s); the failure count outlives the window so
   the back-off can grow.
 
-**Address selection**: cached answers keep their order for the TTL, so cached ExternalName
-lookups and ExternalJump (`rotate_addresses`; ExternalJump dials the first address passing the
+**Address selection**: cached answers keep their order for the TTL, so ExternalJump
+(`rotate_addresses`; ExternalJump dials the first address passing the
 SSRF checks, `first_safe_resolved_addr`) and AI attempts (`select_ai_addr`) start at the shared process-wide
 `next_address_rotation()` offset (`edgion-gateway/src/backends/mod.rs`); AI attempts also prefer
 addresses the request has not dialed, until the 8-slot `DialedAddrs` record overflows, after which
-rotation alone selects. `per-request` ExternalName lookups keep the resolver's
-order. Exact numeric bounds live in the `edgion-common/src/dns/cache.rs` module docs and the
+rotation alone selects. `system`-mode ExternalName lookups (uncached) also rotate the OS
+order from that offset. Exact numeric bounds live in the `edgion-common/src/dns/cache.rs` module docs and the
 operator page `docs/en/ops-guide/configuration/edgion-gateway-config.md`.
 
 **Consumer contract**: the cache stores raw answers. Every consumer applies its own egress or
@@ -131,11 +133,12 @@ Per-lookup hickory resolvers are built with their own response cache disabled.
 - A spawned leader with a watch-channel registry was rejected for the knowledge-page shape
   (mutex + re-check): no detached tasks, no drop-guard protocol, no admission budget.
 - New EGC knobs (`maxTtl`/`staleTtl`/`negativeTtl`) were rejected: they could not govern the egress
-  instance and no tuning need is reported. `cacheTtl` and `outbound_egress_dns_cache_ttl_ms` are
-  fallback TTLs.
+  instance and no tuning need is reported. EGC `fallbackRefreshSeconds` (formerly `cacheTtl`)
+  and `outbound_egress_dns_cache_ttl_ms` are fallback TTLs.
 - A predispatch connect failure still marks the whole AI backend tried; same-backend re-dial on
-  another address and ExternalName in-request address failover are not implemented (rotation
-  limits a dead address to its share of first attempts).
+  another address is not implemented (rotation limits a dead address to its share of first
+  attempts). ExternalName backends no longer use this cache: their addresses are ordinary
+  endpoints with LB, health check and outlier ejection (2026-11-10 DNS resolution redesign).
 - Accepted costs (second post-merge review, 2026-11-07): each entry stores its fingerprint twice
   (map key and LRU node; ~1-2.5 KB with HTTPDNS, capacity-bounded); queued cold waiters are
   released one by one by the FIFO flight mutex (visible only on a cold key at very high QPS);

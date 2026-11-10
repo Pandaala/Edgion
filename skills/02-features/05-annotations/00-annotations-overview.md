@@ -23,9 +23,9 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | `edgion.io/edgion-stream-plugins` | `name` | Same-namespace StreamPlugins binding; slash-containing values are rejected |
 | `edgion.io/edgion-plugins` | comma/space-separated refs | Ordered global HTTP plugins; bare names use the Gateway namespace |
 | `edgion.io/require-sni-host-match` | `"true"\|"false"` | Per-Gateway override of `spec.securityProtect.requireSniHostMatch` |
-| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | DNS backend family override; missing inherits, invalid fails closed; Service applies to both planes, Gateway to self-resolution/AI only |
-| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Data-plane DNS servers; mutually exclusive with `dns-resolver-ref` |
-| `edgion.io/dns-resolver-ref` | `namespace/name` | Data-plane httpdns LinkSys reference; mutually exclusive with `dns-resolver` |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | DNS family for AI endpoints / external jumps on this Gateway (not ExternalName); missing inherits, invalid fails closed |
+| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | DNS servers for AI endpoints / external jumps (not ExternalName); mutually exclusive with `dns-resolver-ref` |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | httpdns LinkSys for AI endpoints / external jumps (not ExternalName); mutually exclusive with `dns-resolver` |
 | `edgion.io/metrics-test-key` | `string` | Metrics label key for testing |
 | `edgion.io/metrics-test-type` | `string` | Metrics label value for testing |
 
@@ -108,10 +108,10 @@ layer has no plugin chain to attach a declaration to.
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
-| `edgion.io/dns-resolution-mode` | `controller\|gateway\|per-request` | ExternalName resolution authority/cache mode; default `controller` |
-| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | DNS backend family override; missing inherits, invalid fails closed; Service applies to both planes, Gateway to self-resolution/AI only |
-| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Service resolver override for both planes |
-| `edgion.io/dns-resolver-ref` | `namespace/name` | Service httpdns LinkSys override for both planes |
+| `edgion.io/dns-resolution-mode` | `gateway\|system\|controller` | ExternalName resolution mode; absent = EGC `dnsResolver.endpointTable` default (`gateway`/`system`); invalid fails closed |
+| `edgion.io/dns-lookup-family` | `ipv4Only` / `ipv6Only` / `all` | ExternalName family override (every mode); missing inherits, invalid fails closed |
+| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | ExternalName resolver for `gateway` / `controller` modes (`system` always uses the OS resolver) |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | ExternalName httpdns LinkSys for `gateway` / `controller` modes |
 
 Active health checks, outlier detection (passive ejection / circuit breaking), and
 the per-Service degrade-threshold override are **not** annotations — they are
@@ -178,7 +178,6 @@ The following annotations are managed automatically by the system; **do not set 
 | `edgion.io/leader-label-write-id` | Controller-written UUID on its Pod; forces a version change for conditional leader-label updates |
 | `edgion.io/hostname-resolution` | DNS resolution results injected by the Controller |
 | `edgion.io/sync-version` | Configuration sync version number |
-| `edgion.io/dns-resolved-at` | Controller-written freshness timestamp on synthetic EndpointSlices |
 | `edgion.io/controller-ca-source` | Internal `ConfigMap` source marker on Controller-resolved CA material; stripped from ordinary fetched Secrets |
 
 See the [references/](references/) directory for the detailed reference.

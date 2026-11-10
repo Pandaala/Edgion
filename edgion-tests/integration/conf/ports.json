@@ -301,7 +301,11 @@
       "http": 31339
     },
     "HTTPRoute/Backend/DnsResolution": {
-      "http": 31360
+      "http": 31360,
+      "tcp": 31362,
+      "tcp_filtered": 31363,
+      "tcp_bare": 31364,
+      "udp": 31365
     },
     "HTTPRoute/Backend/DnsResolutionFlap": {
       "http": 31361

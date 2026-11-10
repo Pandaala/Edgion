@@ -1,5 +1,6 @@
 mod coordinator;
 pub mod dns_cache;
+pub mod dns_table;
 pub mod endpoint_slice;
 pub mod services;
 
@@ -10,8 +11,7 @@ pub use coordinator::{
     ServiceSelectorGeneration, ServiceUnavailableReason,
 };
 pub(crate) use coordinator::{HealthPolicyIdentity, OutlierPolicyIdentity};
-pub use dns_cache::{
-    decide_external_name_path, upstream_dns_cache, DnsResolutionMode, ExternalNamePath, DEFAULT_DNS_CACHE_TTL,
-};
+pub use dns_cache::{upstream_dns_cache, DEFAULT_DNS_CACHE_TTL};
+pub use dns_table::{dns_endpoint_table, DnsEndpointTable, DnsEndpointTableStats, DnsRefreshPolicy};
 pub use endpoint_slice::{create_ep_slice_handler, get_roundrobin_store, EndpointSliceExt, EpSliceStore};
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};

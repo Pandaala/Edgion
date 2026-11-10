@@ -115,11 +115,11 @@ prepared handles, just as it does not limit Webhook. The connection-pool control
 above bound idle retention per prepared handle. No retry or active health-check
 worker is configured for HTTPDNS.
 
-The Controller background resolver also prepares clients before querying and
-reuses each Service's unchanged configuration across refresh ticks. Its raw
-Kubernetes LinkSys lookup does not contain Controller-resolved TLS Secret fields;
-custom CA or mTLS references requiring those fields continue to use the configured
-fallback on that path. Gateway consumes the resolved configuration from conf_sync.
+The Controller DNS resolver (for `controller`-mode ExternalName Services) also
+prepares clients before querying and reuses each Service's unchanged configuration
+across refresh ticks. It reads the processed LinkSys, which carries the
+Controller-resolved TLS Secret fields, so custom CA and mTLS references work there
+as on the Gateway, which consumes the resolved configuration from conf_sync.
 
 The policy checks both literal URL addresses and addresses resolved from service
 hostnames, including IPv4-mapped IPv6. Private IPv4 and IPv6 unique-local services

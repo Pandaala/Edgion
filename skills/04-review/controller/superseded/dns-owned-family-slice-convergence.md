@@ -1,10 +1,24 @@
 ---
 name: dns-owned-family-slice-convergence
-description: Complete DNS family answers, owned EndpointSlice reconciliation, policy narrowing and retry boundaries.
-knowledge_type: regression-guards
+description: Historical record only (superseded 2026-11-10 by the DNS resolution redesign). Covers how the Controller once reconciled apiserver-written DNS EndpointSlice families; do not apply it as a current gate.
+status: superseded
+knowledge_type: superseded
 ---
 
-# DNS-owned family slice convergence
+# DNS-owned family slice convergence — SUPERSEDED
+
+> **Inactive.** Superseded on 2026-11-10 by the DNS resolution redesign
+> (`tasks/todo/dns-resolution-redesign/`). The Controller no longer writes
+> EndpointSlices to the apiserver: there are no SSA patches, owner references,
+> obsolete-sibling DELETEs or orphan GC. `controller`-mode answers are in-memory
+> synthetic slices replaced per Service by `DnsSyntheticSlices::replace_service`,
+> which removes a vanished family in the same call. Successor rules:
+> [Controller DNS resolver work set and in-memory publication](../regression-guards/dns-resolver-cache-driven-work-set.md).
+> Residual valid constraints, still implemented: an invalid family annotation
+> withdraws the published endpoints without querying; narrowing the family never
+> keeps serving the forbidden family (the last good answer is republished filtered
+> at once); a same-policy transient failure keeps the last good addresses; Standard
+> DNS empty answers need SOA evidence (Common resolver behavior, unchanged).
 
 ## Trigger and correction
 

@@ -84,6 +84,11 @@ impl HandlerContext {
         &self.runtime
     }
 
+    /// The shared runtime handle, for work that must outlive this call.
+    pub fn runtime_arc(&self) -> &Arc<ControllerRuntime> {
+        &self.runtime
+    }
+
     /// Cross-resource requeue with cascade cycle detection.
     ///
     /// Checks the trigger chain for cycles before enqueueing. If the target

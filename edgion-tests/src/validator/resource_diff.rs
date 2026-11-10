@@ -163,6 +163,22 @@ struct Resource {
 struct Metadata {
     name: String,
     namespace: Option<String>,
+    #[serde(default)]
+    labels: Option<std::collections::BTreeMap<String, String>>,
+}
+
+impl Resource {
+    /// A Controller-published DNS EndpointSlice (`controller`-mode ExternalName):
+    /// built in Controller memory and relayed by conf_sync, so it is never in the
+    /// configuration source the Controller Admin API lists.
+    fn is_controller_dns_slice(&self) -> bool {
+        use edgion_resources::constants::labels::dns::{ENDPOINT_ORIGIN, ORIGIN_CONTROLLER};
+        self.metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(ENDPOINT_ORIGIN))
+            .is_some_and(|origin| origin == ORIGIN_CONTROLLER)
+    }
 }
 
 /// Secret reference (used for validation)
@@ -443,9 +459,19 @@ fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resourc
         .iter()
         .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
         .collect();
+    // Controller-published DNS slices are derived, never in the configuration
+    // source; skip them only when the Controller-side list lacks them, so a
+    // sourced slice that happens to carry the label is still compared.
     let gateway_ids: HashSet<ResourceId> = gateway
         .iter()
-        .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
+        .map(|r| {
+            (
+                r,
+                ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()),
+            )
+        })
+        .filter(|(r, id)| !(kind == "EndpointSlice" && r.is_controller_dns_slice() && !controller_ids.contains(id)))
+        .map(|(_, id)| id)
         .collect();
     let missing_in_gateway: Vec<String> = controller_ids.difference(&gateway_ids).map(|id| id.display()).collect();
     let extra_in_gateway: Vec<String> = gateway_ids.difference(&controller_ids).map(|id| id.display()).collect();
@@ -947,6 +973,29 @@ mod tests {
         let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
         assert_eq!(diff.missing_in_gateway, vec!["ns-ctrl/route"]);
         assert_eq!(diff.extra_in_gateway, vec!["ns-gw/route"]);
+    }
+
+    #[test]
+    fn controller_dns_slices_are_derived_not_extra() {
+        let derived: Resource = serde_json::from_value(serde_json::json!({"metadata": {
+            "name": "svc-edgion-ctl-dns", "namespace": "ns",
+            "labels": {"edgion.io/endpoint-origin": "controller-dns"}
+        }}))
+        .unwrap();
+        let sourced = res("svc-abc", Some("ns"));
+        let diff = compute_resource_diff("EndpointSlice", &[], &[derived, sourced]);
+        assert_eq!(diff.extra_in_gateway, vec!["ns/svc-abc"]);
+
+        // A sourced slice carrying the label is still compared, not hidden.
+        let labeled = || -> Resource {
+            serde_json::from_value(serde_json::json!({"metadata": {
+                "name": "operator", "namespace": "ns",
+                "labels": {"edgion.io/endpoint-origin": "controller-dns"}
+            }}))
+            .unwrap()
+        };
+        let diff = compute_resource_diff("EndpointSlice", &[labeled()], &[labeled()]);
+        assert!(diff.missing_in_gateway.is_empty() && diff.extra_in_gateway.is_empty());
     }
 
     #[test]

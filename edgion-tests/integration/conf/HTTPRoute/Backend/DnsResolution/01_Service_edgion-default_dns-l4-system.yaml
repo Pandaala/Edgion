@@ -1,0 +1,22 @@
+# L4 system mode: every TCP connection and every new UDP session resolves
+# externalName=localhost through the OS resolver (no endpoint table). Backends:
+# the local TCP echo server on 30010 and UDP echo server on 30011.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-l4-system
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: system
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - name: tcp
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+    - name: udp
+      port: 30011
+      targetPort: 30011
+      protocol: UDP

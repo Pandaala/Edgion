@@ -23,25 +23,28 @@ async fn woke(targets: &DnsResolverTargets) -> bool {
 async fn only_controller_mode_external_name_services_are_targets() {
     let targets = DnsResolverTargets::new();
     for (kind, mode) in [
-        ("ClusterIP", None),
+        ("ClusterIP", Some("controller")),
+        ("ExternalName", None),
         ("ExternalName", Some("gateway")),
+        ("ExternalName", Some("system")),
         ("ExternalName", Some("per-request")),
+        ("ExternalName", Some(" controller")),
+        ("ExternalName", Some("Controller")),
     ] {
         targets.sync_published(&service(kind, mode));
         assert!(targets.snapshot().is_empty(), "{kind} {mode:?}");
+        assert!(targets.is_empty());
     }
-    for mode in [None, Some("controller")] {
-        targets.sync_published(&service("ExternalName", mode));
-        let snapshot = targets.snapshot();
-        assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].0, "app/source");
-    }
+    targets.sync_published(&service("ExternalName", Some("controller")));
+    let snapshot = targets.snapshot();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].0, "app/source");
 }
 
 #[tokio::test]
 async fn content_changes_bump_revision_and_wake_identical_republish_does_not() {
     let targets = DnsResolverTargets::new();
-    let mut target = service("ExternalName", None);
+    let mut target = service("ExternalName", Some("controller"));
     targets.sync_published(&target);
     assert!(woke(&targets).await);
     let first = targets.snapshot()[0].1.revision;
@@ -71,7 +74,7 @@ async fn content_changes_bump_revision_and_wake_identical_republish_does_not() {
 #[tokio::test]
 async fn edits_off_target_unpublish_and_clear_release_the_entry() {
     let targets = DnsResolverTargets::new();
-    let target = service("ExternalName", None);
+    let target = service("ExternalName", Some("controller"));
 
     targets.sync_published(&target);
     let _ = woke(&targets).await;

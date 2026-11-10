@@ -122,7 +122,8 @@ Service (actual owner is the Grant source); `${secretRef:ns/name:key}` templates
 dedicated Service `gateway-service-ref` + UID; `EDGION_GATEWAY_SCOPE`/UID;
 ACME storage and generated EdgionTls outputs (write destinations, not lookups);
 generated credential Secrets; EndpointSlice `kubernetes.io/service-name`;
-DNS-generated EndpointSlices (Service-UID owned, forced SSA).
+DNS-generated EndpointSlices (in-memory synthetic slices, never written to the
+apiserver; see the Controller DNS resolver).
 
 Controller and Gateway keep **different** malformed EndpointSlice fallbacks
 (Controller ignores a missing label and defaults namespace to `default`;

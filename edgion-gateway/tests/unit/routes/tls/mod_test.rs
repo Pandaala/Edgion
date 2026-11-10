@@ -1,6 +1,20 @@
 //! Regression tests for TLS route plugin dispatch and shared route gates.
 
 use super::*;
+
+/// Synchronous attempt with a caller-supplied lookup (unit tests drive the
+/// selection / policy outcomes through it without DNS).
+fn resolve_tls_backend_attempt<'a, T, E>(
+    unit: &'a TlsRouteUnit,
+    ctx: &mut TlsContext,
+    gateway_key: Option<&str>,
+    resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
+) -> TlsBackendAttempt<'a, T> {
+    match select_tls_backend(unit, ctx) {
+        Some(selected) => resolve_selected_tls_backend(selected, ctx, gateway_key, resolve),
+        None => TlsBackendAttempt::Terminal,
+    }
+}
 use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
 use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
 use crate::plugins::stream::{StreamPluginRuntime, TlsRoutePlugin, TlsRoutePluginRuntime};

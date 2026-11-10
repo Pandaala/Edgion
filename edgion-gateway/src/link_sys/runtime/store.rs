@@ -910,10 +910,14 @@ fn webhook_secrets_ready(config: &edgion_resources::resources::link_sys::webhook
 
 fn dispatch_full_set(data: &LinkSysMap, forced: bool) {
     RUNTIMES.apply(data, &HashSet::new(), data, true, forced);
+    // HTTPDNS generations are prepared synchronously above; the DNS endpoint
+    // table re-keys targets whose resolver identity changed.
+    crate::backends::dns_endpoint_table().on_resolver_sources_changed();
 }
 
 fn dispatch_partial_update(changed: &LinkSysMap, remove: &HashSet<String>, snapshot: &LinkSysMap) {
     RUNTIMES.apply(changed, remove, snapshot, false, false);
+    crate::backends::dns_endpoint_table().on_resolver_sources_changed();
 }
 
 static GLOBAL_LINK_SYS_STORE: LazyLock<Arc<LinkSysStore>> = LazyLock::new(|| Arc::new(LinkSysStore::new()));

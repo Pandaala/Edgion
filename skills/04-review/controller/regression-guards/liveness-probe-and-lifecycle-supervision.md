@@ -22,9 +22,10 @@ recovery (`MAX_CONSECUTIVE_FAILURES`) now calls `shutdown_handle.shutdown()` bef
 returning — in both leader-only and all-serve flows — so the process actually exits and
 Kubernetes can restart/reschedule it. A `/health` deadman (`mark_lifecycle_terminated`,
 observed via an inner `JoinHandle` so a lifecycle panic is caught too) backstops any
-unforeseen terminal state. Each leader-job worker (ACME, conf_sync CA rotation, DNS
-resolver) is wrapped by `spawn_observed`, publishing generation-gated
-`edgion_controller_leader_job_alive{leader_job}`.
+unforeseen terminal state. Each leader-job worker (ACME, conf_sync CA rotation, credential
+manager) is wrapped by `spawn_observed`, publishing generation-gated
+`edgion_controller_leader_job_alive{leader_job}`. The DNS resolver stopped being a
+leader job on 2026-11-10; its runtime-owned task restarts itself after a panic.
 
 The later [source-snapshot correction](source-scoped-watch-snapshots.md) extends
 the resource epoch to required Namespace/resource tasks and workers, with
@@ -226,8 +227,8 @@ historical test results elsewhere on this page are not reruns.
 
 ARCH-094 corrects the CredentialManager callback to retain `SERVICE` across both
 captured-generation comparison and its conditional Gauge-0 publication. The
-private `confirm_dead_current` owner follows the existing observer contract and
-DNS resolver precedent. Stale or absent generations return false without metric
+private `confirm_dead_current` owner follows the existing observer contract (the
+former DNS resolver leader job was the precedent). Stale or absent generations return false without metric
 registration. A replacement cannot enter between a current-generation verdict
 and that zero write.
 
@@ -282,8 +283,8 @@ Re-open this decision only if:
 - `edgion-controller/src/services/supervision.rs`,
   `edgion-controller/src/conf_mgr/sync_runtime/metrics.rs` — `spawn_observed` and the
   `edgion_controller_leader_job_alive` gauge
-- `edgion-controller/src/services/{acme/service.rs, conf_sync_ca/rotation.rs,
-  dns_resolver/service.rs}` — per-service orderly-vs-unexpected-death classification
+- `edgion-controller/src/services/{acme/service.rs, conf_sync_ca/rotation.rs}` —
+  per-service orderly-vs-unexpected-death classification
 
 ## Resolution references
 

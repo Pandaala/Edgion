@@ -1,7 +1,7 @@
-# gateway mode: the gateway self-resolves via the effective resolver and caches
-# the result (5s TTL); it never consults a controller EndpointSlice. Resolves via
-# the httpdns endpoint so the test can count resolver hits and assert that a
-# second request within the TTL is served from cache (no re-resolve).
+# gateway mode: the Gateway endpoint table resolves in the background via the
+# effective resolver and publishes the address set as Gateway-local endpoints;
+# requests never resolve. Resolves via the httpdns endpoint so the test can count
+# resolver hits and assert that consecutive requests trigger no resolution.
 apiVersion: v1
 kind: Service
 metadata:

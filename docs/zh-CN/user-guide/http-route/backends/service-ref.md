@@ -39,9 +39,9 @@ Service 发生变更（例如端口重命名）时，所有引用该 Service 的
 - 未指定 `kind` 时，默认为 `Service`。
 - API 组必须省略或为空；字面值 `core` 和 `ServiceExternalName` 等伪类型不受支持。
 - HTTP/gRPC 根据实际 Service 的 `spec.type: ExternalName` 选择 DNS 行为，引用仍使用 `kind: Service`（或省略），且必须声明有效的 Service 端口。
-- `edgion.io/dns-resolution-mode` 选择控制面发布的就绪 EndpointSlice（默认，无就绪端点时回退 DNS）、Gateway 缓存 DNS 或每请求 DNS。解析器优先级为 Service、Gateway、EdgionGatewayConfig、系统。
+- `edgion.io/dns-resolution-mode` 决定主机名如何解析（见 [ExternalName 解析](#externalname-解析)）；未设置时使用 EdgionGatewayConfig `dnsResolver.endpointTable` 的全局默认值。
 - 一次连接尝试中的主机名、端口和协议来自同一 Service 版本；后续尝试重新读取当前版本。缺少 BackendTLSPolicy 时，即使端口为 443 也保持明文。
-- TCP/UDP/TLS 使用已发布的 EndpointSlice，不提供 Gateway 自解析 DNS。
+- 所有模式都支持 HTTP、gRPC、TCP、UDP 和 TLS 路由。
 
 ### namespace 字段
 
@@ -96,33 +96,62 @@ spec:
 - [后端主动健康检查](./health-check.md)
 - [熔断器](./circuit-breaker.md)
 
-## DNS 地址族
+## ExternalName 解析
 
-DNS 派生的后端地址默认使用 `ipv4Only`。`ipv6Only` 仅使用 IPv6，`all` 使用两种地址族。
-只接受这三个精确值；注解为空或非法时拒绝 DNS 请求，不会静默继承或扩大范围。
-`all` 不提供 Happy Eyeballs 或连接竞速；IPv6 需要实际可用的上游网络。
+| `edgion.io/dns-resolution-mode` | 行为 |
+|---|---|
+| `gateway`（默认） | Gateway 在后台解析主机名，把返回的每个地址都变成普通端点，负载均衡、健康检查、异常剔除和会话保持全部生效。请求不等待 DNS，仅在 Service 刚出现时最多等待 2 秒的首次解析。 |
+| `system` | Gateway 每个请求（或连接、UDP 会话）都调用操作系统解析器，轮转起始地址拨号一个地址，重试时优先选择尚未尝试过的地址。没有负载均衡池和健康状态。UDP 会经过一个短期共享缓存，监听循环最多等待 250 毫秒。 |
+| `controller` | Controller 按固定间隔解析并发布端点，Gateway 只使用这些端点。Kubernetes、文件系统和 etcd 部署都可用。端点只存在于 Controller 内存中，Controller 重启后要等首次解析完成才恢复。 |
 
-Controller 发布优先级为 ExternalName Service 的 `edgion.io/dns-lookup-family`
-注解、Controller 的 `dns_resolver.lookup_family`、默认 `ipv4Only`。
-Controller 进程配置变更需要重启。Gateway 自解析优先级为 Service 注解、Gateway
-同名注解、所选全局 `EdgionGatewayConfig.spec.dnsResolver.lookupFamily`、默认值。
-原生 AI 外部域名使用 Gateway、EGC、默认值；资源配置支持热更新。
-地址族继承与解析器选择独立，仅设置地址族不会替换 DNS 服务器或 HTTPDNS。
+未设置注解时由 `EdgionGatewayConfig.spec.dnsResolver.endpointTable` 决定：`true`（默认）
+为 `gateway`，`false` 为 `system`。未知取值会让该后端直接失败，而不是另选模式。各模式之间
+不会互相兜底。
 
-Controller EndpointSlice 由所有消费者共享，Gateway/EGC 默认值不会修改已发布端点，
-仅影响自解析及无可用端点时的 DNS 回退。需要两个平面一致时设置 Service 注解；该显式
-设置也会过滤尚未清理的 ExternalName 端点，包括 L4 消费者。普通 Service 端点、非 DNS
-后端 IP 字面量、监听地址、DNS 服务器地址及 HTTPDNS 自身解析不受此设置影响。
-TCP/UDP/TLS 仍需 Controller 发布的 EndpointSlice。
+`gateway` 模式按记录 TTL 刷新（默认 `ttl x 0.5`，限制在 5–300 秒，见
+[EdgionGatewayConfig DNS 设置](../../../ops-guide/configuration/edgion-gateway-config.md#后端-dns-端点表)）。
+解析结果不变时不做任何更新，健康检查和异常剔除状态得以保留。解析器出错时最多保留上次
+的地址 5 分钟；权威的空结果（域名已不存在）会立即撤下端点。`169.254.169.254` 这类链路本地
+地址永远不会被使用。Service 删除或修改后，其端点立即撤下。
+
+解析器优先级：Service 注解 `edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref`，然后
+是 EdgionGatewayConfig 默认值（`gateway` 模式）或 Controller 默认值（`controller` 模式），
+最后是操作系统解析器。`system` 模式始终使用操作系统解析器。Gateway 资源上的 DNS 注解
+不作用于 ExternalName Service。
 
 ```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+  annotations:
+    edgion.io/dns-resolution-mode: gateway   # 默认值，可省略
+spec:
+  type: ExternalName
+  externalName: api.payments.example.com
+  ports:
+    - port: 443
+```
+
+## DNS 地址族
+
+DNS 后端地址默认使用 `ipv4Only`；可选 `ipv6Only` 或 `all`，只接受这三个值。空值或未知值
+会让 DNS 分发失败，而不是继承或放宽策略。`all` 不启用 Happy Eyeballs 或连接竞速，IPv6
+需要可用的上游网络。
+
+ExternalName Service 的 `edgion.io/dns-lookup-family` 注解优先；否则 `gateway` 和 `system`
+模式使用 `EdgionGatewayConfig.spec.dnsResolver.lookupFamily`，`controller` 模式使用
+Controller 的 `dns_resolver.lookup_family`（Controller 启动时读取）；最终默认 `ipv4Only`。
+AI 外部主机名使用 Gateway 注解，然后是 EdgionGatewayConfig 默认值。解析器选择与地址族
+继承相互独立，只设置地址族不会替换已选的 DNS 服务器或 HTTPDNS。普通 Service 端点、非 DNS
+字面量后端、监听器、DNS 服务器传输和 HTTPDNS 引导连接不受此策略影响。
+
+```yaml
+# ExternalName Service metadata
 metadata:
   annotations:
     edgion.io/dns-lookup-family: ipv6Only
 ```
 
-Controller 成功获得完整且非空结果后更新所拥有的地址族切片，并删除已消失的另一族。
-同一策略下解析失败保留允许的旧地址；收窄策略时即使解析失败也撤下禁止的地址族。
 显式使用 Standard DNS 服务器时，空地址族需要携带 SOA 的 NOERROR 否定响应作为证据。
 无法确认的空响应和未完成的 CNAME 解析链会保守地按失败处理，避免误删该地址族的已有端点。
-Gateway DNS 缓存键包含地址族，热更新不会读取旧策略的缓存答案。

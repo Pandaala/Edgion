@@ -104,36 +104,22 @@ inet sockets; generic explicitly configured Unix upstreams retain their separate
 
 ## Native ExternalName attempts
 
-HTTP/gRPC use an ordinary permitted `Service` reference (omitted/empty group,
-omitted/exact Service kind, required declared port). The captured actual Service
-`spec.type: ExternalName` selects DNS behavior; pseudo backend kinds and literal
-`core` do not grant a native target. `CapturedServiceSelection` keeps the Service
-source Arc, checked section and membership-matched runtime snapshot from one
-joint discovery generation. Type, hostname, annotations, Service port, protocol
-and appProtocol therefore remain coherent through a DNS await. Each peer
-attempt reads the DNS resolution mode parsed at projection publication, including
-the canonical fallback for absent or unknown annotations. Mode-only changes
-rebuild the projection; retained captures keep their original mode. A later peer
-attempt recaptures geometry; request-captured EBTP/TLS policy, including absence,
-keeps its existing lifetime. Endpoint health/outlier atomics remain live.
+HTTP/gRPC use an ordinary permitted `Service` reference; the captured actual
+Service `spec.type: ExternalName` selects DNS behavior. `backends::native_service_path`
+reads the mode parsed at projection publication (`DnsResolutionMode` from
+`edgion-resources`, absent = EGC `endpointTable` default, invalid = fail closed):
+`gateway` and `controller` select ordinary EndpointSlice selection from the
+coordinator, whose partition rule feeds Gateway-local or Controller-published
+slices respectively; `system` resolves through the OS resolver per attempt. L4
+runs the same decision in `backends::prepare_l4_service` before its synchronous
+selection. Before capture, `dns_endpoint_table().wait_first_answer` bounds the
+wait for a pending target (one atomic load in the steady state). Full contract:
+[service backends](../../02-features/03-resources/16-service-backends.md#externalname-resolution-modes).
 
-Controller mode uses the captured section when it has ready slots. Health or
-outlier rejection does not turn readiness into DNS fallback. Without ready slots
-it bridges through cached DNS; Gateway mode always uses cached DNS and per-request
-mode resolves without that cache. Resolver precedence remains Service -> Gateway
--> EGC -> system through Common `ResolverSpec`, including prepared HTTPDNS. The
-cache key remains Service key + hostname + resolver fingerprint. Self-resolving
-DNS does not consume a sticky EndpointSlice target. Ordinary selection and sticky
-revalidation use the same captured section/runtime.
-
-An unavailable Service returns `BackendServiceNotFound` (500); a missing live
-section returns `BackendPortResolutionFailed` (503), and an absent/empty external
-hostname returns `BackendExternalNameNotFound` (503) without querying DNS. DNS
-results pass canonical address safety, including mapped IPv6, before the shared
-TLS peer builder. Without BackendTLSPolicy, even port 443 remains plaintext.
-TCP/UDP/TLS can consume controller-published slices but gain no asynchronous
-Gateway DNS fallback. Custom outbound reference modes and annotation reference
-authority are separate contracts.
+The endpoint table lives in `backends/discovery/dns_table/` (`policy.rs` refresh
+math, `state.rs` synchronous lifecycle core, `mod.rs` global table and worker).
+It is fed by the Service conf handler, the EGC snapshot publication and the
+LinkSys dispatch, and publishes through `ServiceDiscoveryCoordinator::replace_gateway_dns_slices`.
 
 ## Health-check system
 
@@ -515,21 +501,17 @@ edgion-gateway/src/backends/
 
 ### Cold DNS candidate publication
 
-The discovery projection derives its DNS candidate from the actual Service only
-when publishing a changed generation, after the unchanged-fingerprint fast path.
-CapturedServiceSelection borrows that candidate from the same projection as its
-hostname and section. GatewayInfo derives its candidate from the actual Gateway
-at listener publication; the global EGC DNS snapshot derives its candidate from
-the actual minimum-raw-key winning EGC. Request-side precedence borrows these
-three candidates without parsing annotations or cloning unselected layers. The
-selected inline server list still becomes an owned ResolverSpec, and an HTTPDNS
-reference still resolves the live typed provider; candidates do not freeze clients.
+GatewayInfo derives its DNS candidate from the actual Gateway at listener
+publication; the global EGC DNS snapshot derives its candidate from the actual
+minimum-raw-key winning EGC. AI endpoints and external jumps borrow these
+candidates without parsing annotations. `ExternalName` Services do not use the
+Gateway layer: the endpoint table derives each target from the Service and the
+EGC snapshot when Service, EGC or LinkSys events arrive, never per request.
 
 Invalid annotation references retain same-owner inline/next-layer fallback. EGC
 uses its strict typed explicit namespace/name object contract and cluster owner;
 an invalid configured reference yields System without trying its inline list or
-another EGC. Inline-only settings and TTL do not acquire object-reference authority
-requirements. Controller remains responsible for tenant ReferenceGrant stripping.
+another EGC. Controller remains responsible for tenant ReferenceGrant stripping.
 
 ### Policy precedence precision
 
@@ -545,37 +527,8 @@ in place. This is the ARCH-055 precision repair, not a new arbitration policy.
 
 ## DNS address families
 
-DNS-derived backend addresses default to `ipv4Only`. Set `ipv6Only` for IPv6 only
-or `all` for both families. These are the only accepted values; an empty or unknown
-annotation fails DNS dispatch rather than inheriting or widening the policy.
-`all` does not enable Happy Eyeballs or connection racing. IPv6 requires a working
-upstream IPv6 network.
-
-Controller publication uses the ExternalName Service annotation
-`edgion.io/dns-lookup-family`, then Controller `dns_resolver.lookup_family`, then
-`ipv4Only`. The Controller setting takes effect after restarting the Controller.
-Gateway self-resolution uses Service annotation, Gateway annotation, selected global
-`EdgionGatewayConfig.spec.dnsResolver.lookupFamily`, then `ipv4Only`, in that order.
-Native AI external hostnames use Gateway then EGC policy. Resource updates are live.
-Resolver selection and family inheritance are independent: setting only the family
-does not replace a chosen DNS server or HTTPDNS provider.
-
-Controller EndpointSlices are shared. Gateway/EGC defaults affect self-resolution
-and the empty-slice bridge, not already-published Controller endpoints. Set the
-Service annotation to pin both planes; its explicit family also gates stale
-ExternalName slice membership, including L4. Ordinary Service slices, literal
-non-DNS backends, listeners, DNS-server transport and HTTPDNS bootstrap are outside
-this policy. TCP/UDP/TLS still require published EndpointSlices.
-
-```yaml
-# ExternalName Service or Gateway metadata
-metadata:
-  annotations:
-    edgion.io/dns-lookup-family: ipv6Only
-```
-
-Successful complete nonempty Controller answers replace the owned family set,
-including deleting an obsolete IPv4/IPv6 sibling. Same-policy resolution errors
-retain allowed last-good addresses; narrowing the policy withdraws forbidden
-families even if the next query fails. Gateway address-cache keys include the
-family, so live policy changes cannot read the old policy's cached answer.
+See [DNS address families](../../02-features/03-resources/16-service-backends.md#dns-address-families).
+For `ExternalName` the family precedence is Service annotation -> EGC
+(`gateway`/`system`) or Controller config (`controller`) -> `ipv4Only`, and the
+family is part of the endpoint-table key. AI external hostnames and external
+jumps use Gateway annotation -> EGC.

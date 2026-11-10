@@ -5,6 +5,7 @@ use edgion_resources::constants::annotations::edgion::{
     DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF,
 };
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+use edgion_resources::resources::common::DnsResolutionMode;
 use k8s_openapi::api::core::v1::{Service, ServicePort};
 use k8s_openapi::api::discovery::v1::{EndpointPort, EndpointSlice};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -182,8 +183,8 @@ pub struct LegacyRawProjection {
 }
 
 pub struct AvailableServiceProjection {
-    pub(crate) dns_resolver_candidate: Option<edgion_common::dns::resolver_select::ResolverCandidate>,
-    pub(crate) dns_resolution_mode: super::DnsResolutionMode,
+    /// Parsed `edgion.io/dns-resolution-mode` annotation (absence inherits the EGC default).
+    pub(crate) dns_resolution_mode: Result<Option<DnsResolutionMode>, &'static str>,
     pub(crate) dns_lookup_family: Option<Result<DnsLookupFamily, &'static str>>,
     content_fingerprint: [u8; 32],
     pub membership_identity: u64,
@@ -908,13 +909,19 @@ impl ServiceDiscoveryCoordinator {
         });
     }
 
+    /// Replace every conf_sync EndpointSlice. Gateway-local DNS slices are a
+    /// separate partition: a relist can neither remove nor resurrect them.
     pub fn replace_endpoint_slices(&self, data: &HashMap<String, Arc<EndpointSlice>>) {
         self.transact(|state, affected| {
-            for old in state.endpoint_slices.values() {
-                affected.insert(endpoint_slice_service_key(&old.resource));
+            let mut next: HashMap<String, LiveSourceRecord<EndpointSlice>> = HashMap::with_capacity(data.len());
+            for (key, old) in &state.endpoint_slices {
+                if is_gateway_dns_key(key) {
+                    next.insert(key.clone(), old.clone());
+                } else {
+                    affected.insert(endpoint_slice_service_key(&old.resource));
+                }
             }
-            let mut next = HashMap::with_capacity(data.len());
-            for (key, slice) in data {
+            for (key, slice) in data.iter().filter(|(key, _)| !is_gateway_dns_key(key)) {
                 affected.insert(endpoint_slice_service_key(slice));
                 next.insert(
                     key.clone(),
@@ -925,12 +932,70 @@ impl ServiceDiscoveryCoordinator {
         });
     }
 
+    /// Replace the Gateway-local DNS slices of one Service; an empty list
+    /// withdraws them. Only the Gateway endpoint table calls this.
+    pub fn replace_gateway_dns_slices(&self, service_key: &str, slices: Vec<EndpointSlice>) {
+        self.replace_gateway_dns_slices_batch(vec![(service_key.to_string(), slices)]);
+    }
+
+    /// Apply several Services' Gateway-local DNS slice replacements, in order,
+    /// in one transaction. Identical replacements leave the generation as is.
+    pub fn replace_gateway_dns_slices_batch(&self, batch: Vec<(String, Vec<EndpointSlice>)>) {
+        if batch.is_empty() {
+            return;
+        }
+        self.transact(move |state, affected| {
+            for (service_key, slices) in batch {
+                let service_key = service_key.as_str();
+                let incoming: HashMap<String, EndpointSlice> = slices
+                    .into_iter()
+                    .filter(|slice| endpoint_slice_matches_service(slice, service_key))
+                    .map(|slice| (gateway_dns_slice_key(&slice), slice))
+                    .collect();
+                let before = state.endpoint_slices.len();
+                state.endpoint_slices.retain(|key, record| {
+                    !is_gateway_dns_key(key)
+                        || incoming.contains_key(key)
+                        || !endpoint_slice_matches_service(&record.resource, service_key)
+                });
+                let mut touched = state.endpoint_slices.len() != before;
+                for (key, slice) in incoming {
+                    let slice = Arc::new(slice);
+                    let record = stage_endpoint_slice_record(state.endpoint_slices.get(&key), slice);
+                    touched |= state
+                        .endpoint_slices
+                        .get(&key)
+                        .is_none_or(|old| old.semantic_digest != record.semantic_digest);
+                    state.endpoint_slices.insert(key, record);
+                }
+                if touched {
+                    affected.insert(service_key.to_string());
+                }
+            }
+        });
+    }
+
+    /// Service keys that currently hold Gateway-local DNS slices.
+    pub fn gateway_dns_service_keys(&self) -> BTreeSet<String> {
+        self.state
+            .lock()
+            .endpoint_slices
+            .iter()
+            .filter(|(key, _)| is_gateway_dns_key(key))
+            .map(|(_, record)| endpoint_slice_service_key(&record.resource))
+            .collect()
+    }
+
     pub fn update_endpoint_slices(
         &self,
         add: HashMap<String, Arc<EndpointSlice>>,
         update: HashMap<String, Arc<EndpointSlice>>,
         remove: HashSet<String>,
     ) {
+        let conf_sync_only = |key: &String| !is_gateway_dns_key(key);
+        let add: HashMap<_, _> = add.into_iter().filter(|(key, _)| conf_sync_only(key)).collect();
+        let update: HashMap<_, _> = update.into_iter().filter(|(key, _)| conf_sync_only(key)).collect();
+        let remove: HashSet<_> = remove.into_iter().filter(conf_sync_only).collect();
         self.transact(move |state, affected| {
             let mut fresh_keys: HashSet<String> = add.keys().cloned().collect();
             let mut incoming: BTreeMap<String, Arc<EndpointSlice>> = add.into_iter().collect();
@@ -1382,6 +1447,61 @@ fn endpoint_slice_matches_service(slice: &EndpointSlice, service_key: &str) -> b
     }
 }
 
+/// Key prefix of Gateway-local DNS slices in the shared slice map. Kubernetes
+/// names and namespaces cannot contain ':', so conf_sync keys never collide.
+const GATEWAY_DNS_KEY_PREFIX: &str = "gateway-dns:";
+
+fn is_gateway_dns_key(key: &str) -> bool {
+    key.starts_with(GATEWAY_DNS_KEY_PREFIX)
+}
+
+fn gateway_dns_slice_key(slice: &EndpointSlice) -> String {
+    format!(
+        "{GATEWAY_DNS_KEY_PREFIX}{}/{}",
+        slice.metadata.namespace.as_deref().unwrap_or_default(),
+        slice.metadata.name.as_deref().unwrap_or_default()
+    )
+}
+
+/// Which slice partition feeds a Service. An `ExternalName` Service in
+/// `controller` mode reads conf_sync slices only; any other `ExternalName`
+/// Service reads Gateway-local DNS slices only (none exist unless the endpoint
+/// table owns it); every other Service reads conf_sync slices only. No mode
+/// ever mixes the two partitions.
+fn admits_gateway_dns_slices(service: &Service) -> bool {
+    let is_external_name = service.spec.as_ref().and_then(|spec| spec.type_.as_deref()) == Some("ExternalName");
+    if !is_external_name {
+        return false;
+    }
+    let annotation = service
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
+        .map(String::as_str);
+    DnsResolutionMode::from_annotation(annotation) != Ok(Some(DnsResolutionMode::Controller))
+}
+
+/// The admitted slices of one Service, in key order. Shared by epoch preflight
+/// and projection so both always see the same membership.
+fn admitted_service_slices<'a>(
+    state: &'a CoordinatorState,
+    service_key: &str,
+    service: &Service,
+) -> Vec<(&'a str, &'a LiveSourceRecord<EndpointSlice>)> {
+    let local = admits_gateway_dns_slices(service);
+    let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
+        .endpoint_slices
+        .iter()
+        .filter(|(key, slice)| {
+            is_gateway_dns_key(key) == local && endpoint_slice_matches_service(&slice.resource, service_key)
+        })
+        .map(|(key, slice)| (key.as_str(), slice))
+        .collect();
+    slices.sort_by(|left, right| left.0.cmp(right.0));
+    slices
+}
+
 fn build_service_projection(
     service_key: &str,
     state: &CoordinatorState,
@@ -1405,13 +1525,7 @@ fn build_service_projection(
         ));
     }
 
-    let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
-        .endpoint_slices
-        .iter()
-        .filter(|(_, slice)| endpoint_slice_matches_service(&slice.resource, service_key))
-        .map(|(key, slice)| (key.as_str(), slice))
-        .collect();
-    slices.sort_by(|left, right| left.0.cmp(right.0));
+    let slices = admitted_service_slices(state, service_key, &service_record.resource);
     if slices.iter().any(|(_, slice)| slice.identity.is_none()) {
         return Some(ServicePublishedState::Unavailable(
             ServiceUnavailableReason::InvalidEpoch,
@@ -1455,16 +1569,13 @@ fn build_service_projection(
     }
     Some(ServicePublishedState::Available(Arc::new(AvailableServiceProjection {
         dns_lookup_family,
-        dns_resolution_mode: super::DnsResolutionMode::parse(
+        dns_resolution_mode: DnsResolutionMode::from_annotation(
             raw.service
                 .metadata
                 .annotations
                 .as_ref()
                 .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
                 .map(String::as_str),
-        ),
-        dns_resolver_candidate: edgion_common::dns::resolver_select::candidate_from_dns_owner(
-            edgion_resources::resources::refs::dns_fields::DnsResolverOwner::Service(&service_record.resource),
         ),
         content_fingerprint,
         membership_identity,
@@ -1496,13 +1607,7 @@ fn projection_epoch_requirement(
     if service.identity.is_none() {
         return 0;
     }
-    let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
-        .endpoint_slices
-        .iter()
-        .filter(|(_, slice)| endpoint_slice_matches_service(&slice.resource, service_key))
-        .map(|(key, slice)| (key.as_str(), slice))
-        .collect();
-    slices.sort_by(|left, right| left.0.cmp(right.0));
+    let slices = admitted_service_slices(state, service_key, &service.resource);
     if slices.iter().any(|(_, slice)| slice.identity.is_none()) {
         return 0;
     }

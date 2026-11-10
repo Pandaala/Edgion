@@ -8,9 +8,7 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{
-    select_service_endpoint, validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError, ServiceDegradePolicy,
-};
+use crate::backends::{validate_endpoint_backend_addr, L4BackendRejection, L4ResolveError};
 use crate::config::ResolvedGatewayConfig;
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::publication::global_publisher;
@@ -210,19 +208,18 @@ impl EdgionTcpProxy {
             ctx.status = TcpStatus::NoBackendSelected;
             return;
         };
+        let prep = crate::backends::prepare_l4_service(
+            selected,
+            Some(owner.gateway_key()),
+            gateway_config.allow_loopback_upstream,
+            crate::backends::L4Transport::Connection,
+        )
+        .await;
         let backend =
             match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
-                select_service_endpoint(
-                    target.key(),
-                    target.section().clone(),
-                    &None,
-                    ServiceDegradePolicy::Live,
-                    None,
-                    "",
-                    None,
-                )
+                prep.resolve(target)
             }) {
-                Ok((_, endpoint)) => endpoint.backend,
+                Ok((_, backend)) => backend,
                 Err(L4ResolveError::Rejected(L4BackendRejection::Denied)) => {
                     ctx.status = TcpStatus::RefDenied;
                     ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
@@ -235,6 +232,9 @@ impl EdgionTcpProxy {
                 }
                 Err(L4ResolveError::Unavailable(_)) => {
                     ctx.status = TcpStatus::NoBackendResolved;
+                    if prep.is_failed() {
+                        ctx.deny_reason = Some(crate::routes::common::L4_DNS_RESOLUTION_FAILED_LOG);
+                    }
                     return;
                 }
             };

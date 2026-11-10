@@ -38,6 +38,7 @@ use super::sync_runtime::resource_processor::{
 };
 use crate::services::credential_manager::memory::CredentialMemoryStore;
 use crate::services::dns_resolver::targets::DnsResolverTargets;
+use crate::services::dns_resolver::{DnsResolverTask, DnsSyntheticSlices};
 
 /// Aggregated runtime state for the Controller.
 ///
@@ -53,9 +54,14 @@ pub struct ControllerRuntime {
     pub(crate) ref_grant_store: ReferenceGrantStore,
     pub(crate) cross_ns_ref_mgr: CrossNamespaceRefManager,
     pub(crate) service_ref_mgr: ServiceRefManager,
-    /// Controller-mode ExternalName Services maintained by `ServiceHandler`;
-    /// the leader-only DNS resolver's work set.
+    /// `controller`-mode ExternalName Services maintained by `ServiceHandler`;
+    /// the DNS resolver's work set.
     pub(crate) dns_resolver_targets: DnsResolverTargets,
+    /// In-memory EndpointSlices published by the DNS resolver and read by the
+    /// EndpointSlice processor's synthetic-object hook.
+    pub(crate) dns_synthetic_slices: DnsSyntheticSlices,
+    /// The DNS resolver task of this runtime (started with the first target).
+    pub(crate) dns_resolver_task: DnsResolverTask,
     /// Tracks HTTPRoutes and EdgionBackendTrafficPolicies that reference each
     /// EdgionBackend. Source keys use `PolicyTargetKey::to_string()` so backend
     /// targets cannot collide with same-named core Services.
@@ -129,6 +135,8 @@ impl ControllerRuntime {
             cross_ns_ref_mgr: new_cross_ns_ref_manager(),
             service_ref_mgr: new_service_ref_manager(),
             dns_resolver_targets: DnsResolverTargets::new(),
+            dns_synthetic_slices: DnsSyntheticSlices::new(),
+            dns_resolver_task: DnsResolverTask::new(),
             backend_ref_mgr: BidirectionalRefManager::with_component("backend_ref_mgr"),
             secret_ref_manager: new_secret_ref_manager(),
             frontend_ca_ref_manager: BidirectionalRefManager::with_component("frontend_ca_ref_manager"),
@@ -225,8 +233,10 @@ impl ControllerRuntime {
         self.service_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared ServiceRefManager");
 
+        self.dns_resolver_task.stop();
         self.dns_resolver_targets.clear();
-        tracing::info!(component = "controller_runtime", "Cleared DnsResolverTargets");
+        self.dns_synthetic_slices.clear();
+        tracing::info!(component = "controller_runtime", "Cleared DNS resolver state");
 
         self.backend_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared BackendRefManager");

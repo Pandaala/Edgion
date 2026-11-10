@@ -89,16 +89,46 @@ pub(super) enum TlsBackendAttempt<'a, T> {
     Terminal,
 }
 
-pub(super) fn resolve_tls_backend_attempt<'a, T, E>(
+/// One attempt for a Service backend, including the async per-connection DNS
+/// step (`gateway`-mode first answer, `system`-mode OS lookup).
+pub(super) async fn resolve_tls_service_attempt<'a>(
     unit: &'a TlsRouteUnit,
+    ctx: &mut TlsContext,
+    gateway_key: Option<&str>,
+    allow_loopback: bool,
+) -> TlsBackendAttempt<'a, Arc<crate::lb::LbBackend>> {
+    let Some(selected) = select_tls_backend(unit, ctx) else {
+        return TlsBackendAttempt::Terminal;
+    };
+    let prep = crate::backends::prepare_l4_service(
+        selected,
+        gateway_key,
+        allow_loopback,
+        crate::backends::L4Transport::Connection,
+    )
+    .await;
+    if prep.is_failed() {
+        // A DNS failure is not retried with the same lookup: end the connection.
+        ctx.err_log = Some(crate::routes::common::L4_DNS_RESOLUTION_FAILED_LOG.to_owned());
+        return TlsBackendAttempt::Terminal;
+    }
+    resolve_selected_tls_backend(selected, ctx, gateway_key, |target| prep.resolve(target))
+}
+
+fn select_tls_backend<'a>(unit: &'a TlsRouteUnit, ctx: &mut TlsContext) -> Option<SelectedL4Backend<'a>> {
+    let selected = unit.select_backend().ok();
+    if selected.is_none() {
+        ctx.err_log = Some("no backend".to_string());
+    }
+    selected
+}
+
+fn resolve_selected_tls_backend<'a, T, E>(
+    selected: SelectedL4Backend<'a>,
     ctx: &mut TlsContext,
     gateway_key: Option<&str>,
     resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
 ) -> TlsBackendAttempt<'a, T> {
-    let Ok(selected) = unit.select_backend() else {
-        ctx.err_log = Some("no backend".to_string());
-        return TlsBackendAttempt::Terminal;
-    };
     match crate::backends::policy::resolve_l4_policy_backend(selected, gateway_key, |target| {
         resolve(target).map_err(|_| target)
     }) {

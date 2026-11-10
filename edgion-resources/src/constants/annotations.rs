@@ -144,36 +144,35 @@ pub mod edgion {
     /// list (bare names use the Gateway's namespace).
     pub const EDGION_PLUGINS: &str = "edgion.io/edgion-plugins";
 
-    /// Per-Service DNS resolution mode for a `ServiceExternalName` backend.
-    /// Value: `controller` (default) | `gateway` | `per-request`.
-    /// - `controller`: use the controller-resolved EndpointSlice when it has a
-    ///   ready backend, else the gateway bridges via self-resolution + cache.
-    /// - `gateway`: the gateway resolves via the effective resolver + 5s cache
-    ///   (authoritative; never consults a slice).
-    /// - `per-request`: the gateway resolves on every request, no cache.
+    /// Per-Service DNS resolution mode for an `ExternalName` Service backend.
+    /// Value: `gateway` | `system` | `controller` (see `DnsResolutionMode`).
+    /// - `gateway`: the Gateway resolves in the background and publishes the
+    ///   full address set as a Gateway-local EndpointSlice.
+    /// - `system`: the Gateway asks the OS resolver per request / connection.
+    /// - `controller`: the Controller resolves and publishes the endpoints; the
+    ///   Gateway reads only those (no fallback to Gateway resolution).
     ///
-    /// Set on a Service. Invalid values fall back to `controller`.
+    /// Set on a Service. Absent: the EGC `dnsResolver.endpointTable` default
+    /// (`gateway` when true, `system` when false). Invalid values fail closed.
     pub const DNS_RESOLUTION_MODE: &str = "edgion.io/dns-resolution-mode";
 
-    /// Backend DNS family override on Service or Gateway: ipv4Only, ipv6Only, or all.
-    /// Absence inherits; invalid values fail DNS dispatch closed.
+    /// Backend DNS family override: ipv4Only, ipv6Only, or all. On a Service it
+    /// applies to that `ExternalName` backend; on a Gateway it applies only to
+    /// AI endpoints and external jumps (an `ExternalName` inherits Service ->
+    /// EGC -> ipv4Only). Absence inherits; invalid values fail DNS dispatch closed.
     pub const DNS_LOOKUP_FAMILY: &str = "edgion.io/dns-lookup-family";
 
     /// Inline standard-DNS resolver override. Value: a comma/space-separated
-    /// server list (`ip[:port]`). Set on a Service (spans both planes) or a
-    /// Gateway (data-plane only). Mutually exclusive with `DNS_RESOLVER_REF`.
+    /// server list (`ip[:port]`). On a Service it selects the resolver of a
+    /// `gateway`- or `controller`-mode `ExternalName` (`system` mode always uses
+    /// the OS resolver); on a Gateway it applies only to AI endpoints and
+    /// external jumps. Mutually exclusive with `DNS_RESOLVER_REF`.
     pub const DNS_RESOLVER: &str = "edgion.io/dns-resolver";
 
     /// httpdns LinkSys resolver override. Value: `namespace/name` (explicit
-    /// namespace required; bare names are rejected). Set on a Service (spans both
-    /// planes) or a Gateway (data-plane only). Mutually exclusive with
-    /// `DNS_RESOLVER`.
+    /// namespace required; bare names are rejected). Same scope as
+    /// `DNS_RESOLVER`. Mutually exclusive with `DNS_RESOLVER`.
     pub const DNS_RESOLVER_REF: &str = "edgion.io/dns-resolver-ref";
-
-    /// Controller-written freshness stamp on a synthetic EndpointSlice produced by
-    /// the control-plane DNS resolver loop. Value: an RFC3339 timestamp of the
-    /// last resolution that changed the endpoint set. NOT operator-set.
-    pub const DNS_RESOLVED_AT: &str = "edgion.io/dns-resolved-at";
 
     /// Parse the `edgion.io/edgion-plugins` (or stream) annotation value into an ordered,
     /// de-duplicated list of "namespace/name" store keys. Bare names (no `/`) are expanded

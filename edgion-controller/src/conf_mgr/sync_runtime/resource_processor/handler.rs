@@ -50,6 +50,17 @@ where
         true
     }
 
+    /// An in-process object for `key` when the real source (Kubernetes watch,
+    /// file system or etcd) has none. It is processed exactly like a sourced
+    /// object; producers enqueue its key through `on_event_key`. A sourced
+    /// object with the same key always wins.
+    ///
+    /// Default: none. The EndpointSlice handler serves the Controller DNS
+    /// resolver's synthetic slices.
+    fn synthetic_object(&self, _key: &str, _runtime: &crate::conf_mgr::ControllerRuntime) -> Option<K> {
+        None
+    }
+
     /// Whether a processed resource may be published to the data plane.
     /// Returning false retains status persistence but withdraws any cached object
     /// through the normal cleanup hooks, without calling on_change/after_publish.

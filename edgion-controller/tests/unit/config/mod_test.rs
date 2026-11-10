@@ -25,9 +25,8 @@ fn validation_preserves_reference_grant_configuration() {
 }
 
 #[test]
-fn dns_resolver_defaults_enabled_15s() {
+fn dns_resolver_defaults_15s() {
     let cfg = DnsResolverConfig::default();
-    assert!(cfg.enabled, "control-plane resolution defaults to on");
     assert_eq!(cfg.refresh_interval, "15s");
     assert!(cfg.link_sys_ref.is_none());
     assert!(cfg.servers.is_empty());
@@ -35,9 +34,8 @@ fn dns_resolver_defaults_enabled_15s() {
 
 #[test]
 fn dns_resolver_parses_from_yaml() {
-    let yaml = "enabled: false\nrefresh_interval: 30s\nservers:\n  - 1.1.1.1\n  - 8.8.8.8:5353\n";
+    let yaml = "refresh_interval: 30s\nservers:\n  - 1.1.1.1\n  - 8.8.8.8:5353\n";
     let cfg: DnsResolverConfig = yaml_serde::from_str(yaml).unwrap();
-    assert!(!cfg.enabled);
     assert_eq!(cfg.refresh_interval, "30s");
     assert_eq!(cfg.servers, vec!["1.1.1.1".to_string(), "8.8.8.8:5353".to_string()]);
 }
@@ -46,7 +44,6 @@ fn dns_resolver_parses_from_yaml() {
 fn dns_resolver_omitted_fields_take_defaults() {
     // `#[serde(default)]` on the struct → an empty map yields the full default.
     let cfg: DnsResolverConfig = yaml_serde::from_str("{}").unwrap();
-    assert!(cfg.enabled);
     assert_eq!(cfg.refresh_interval, "15s");
 }
 

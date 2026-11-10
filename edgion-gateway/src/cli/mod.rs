@@ -216,6 +216,9 @@ impl EdgionGatewayCli {
             cleaner.stop().await;
         });
 
+        // DNS endpoint table worker for gateway-mode ExternalName Services.
+        tokio::spawn(crate::backends::dns_endpoint_table().run(shutdown_rx.clone()));
+
         // Initialize health check stores and manager (tasks start on resource updates).
         let _ = crate::backends::health::check::get_hc_config_store();
         let _ = crate::backends::health::check::get_health_check_manager();

@@ -55,6 +55,10 @@ pub struct ControllerStoreStats {
     /// Egress DNS answer cache. `in_flight` must return to zero once requests
     /// settle; `entries` is capacity-bounded and exempt from residue.
     pub dns_answer_cache: DnsAnswerCacheStats,
+    /// `controller`-mode ExternalName targets; zero once no Service opts in.
+    pub dns_resolver_targets: usize,
+    /// In-memory synthetic EndpointSlices; zero once every target is withdrawn.
+    pub dns_synthetic_slices: usize,
 }
 
 #[derive(Serialize)]
@@ -103,6 +107,8 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         event_store: EventStoreStats { next_resource_version },
         watch_objects: WatchObjectsStats { count: watch_count },
         dns_answer_cache: egress_answer_cache().stats(),
+        dns_resolver_targets: runtime.dns_resolver_targets.len(),
+        dns_synthetic_slices: runtime.dns_synthetic_slices.len(),
     }))
 }
 

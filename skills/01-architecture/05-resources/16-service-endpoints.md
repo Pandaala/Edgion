@@ -36,8 +36,11 @@ Native HTTP/gRPC selects ExternalName behavior from the actual Service type, usi
 that same generation for its hostname, annotations, checked Service port, protocol
 and appProtocol across DNS resolution. The reference remains standard `Service`;
 pseudo kinds are unsupported. Subsequent attempts recapture geometry while
-request-captured policy and live health retain their existing boundaries. L4
-uses published slices and has no Gateway self-resolving DNS branch.
+request-captured policy and live health retain their existing boundaries. An
+`ExternalName` Service in `gateway` mode is fed by Gateway-local slices from the
+DNS endpoint table, in `controller` mode by Controller-published slices; L4 uses
+the same sources plus the per-connection `system` mode. See
+[ExternalName resolution modes](../../02-features/03-resources/16-service-backends.md#externalname-resolution-modes).
 
 ## EndpointSlice
 
@@ -70,22 +73,17 @@ namespace uses default for permission, while dependency owners keep raw metadata
 The explicit namespace/name string grammar trims each half and rejects missing
 or additional slashes without imposing a new DNS-label restriction. Valid denied
 references retain cross-namespace recovery edges; invalid identities create none.
-The independent raw Kubernetes Service DNS loop checks the same current Grant
-permission before LinkSys GET. Denial drops only the tenant reference candidate:
+The Controller DNS resolver checks the same current Grant permission before using
+a Service's LinkSys reference. Denial drops only the tenant reference candidate:
 inline servers and administrative defaults retain their existing precedence.
 
-A successful content fingerprint includes the effective family, canonical addresses
-and projected ports. Skip requires the complete expected current-UID family set,
-with no obsolete owned sibling. The Controller patches desired slices first and
-then deletes obsolete proven-owned siblings; any failure keeps convergence pending.
-Policy narrowing withdraws forbidden families before DNS, so a timeout cannot
-preserve now-forbidden last-good output. The Service's explicit family also gates
-canonical Gateway ExternalName membership, including L4; ordinary Services are
-unchanged. Gateway/EGC family defaults do not filter shared Controller publications.
-
-Deletion proves generated name/namespace, managed-by and synthetic labels, Service
-label, and a v1/Service owner name with nonempty UID. A previous incarnation's owner
-UID is allowed for obsolete siblings. The observed slice UID/resourceVersion are
-delete preconditions; 404 completes absence, conflicts remain retryable. Foreign or
-unproven slices are preserved and prevent claiming convergence. See the
-[family convergence guard](../../04-review/controller/regression-guards/dns-owned-family-slice-convergence.md).
+Only Services annotated `edgion.io/dns-resolution-mode: controller` are resolved.
+Answers become in-memory synthetic EndpointSlices (`edgion.io/endpoint-origin:
+controller-dns`, one per family, named `<service>-edgion-ctl-dns[-ipv6]`) held in
+`ControllerRuntime::dns_synthetic_slices`. The resolver enqueues changed keys into
+the EndpointSlice processor, whose `synthetic_object` hook supplies them when the
+real source has no object for the key; they then publish through conf_sync like
+any watched slice. No apiserver write, owner reference or garbage collection is
+involved, and an operator `label_selector` cannot filter them out. An unchanged
+answer enqueues nothing; a removed or switched Service withdraws its slices on the
+next pass, and `ControllerRuntime::reset` aborts the resolver and clears them.

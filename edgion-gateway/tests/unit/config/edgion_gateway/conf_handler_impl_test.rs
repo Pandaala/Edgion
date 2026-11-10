@@ -711,14 +711,16 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
         lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: Some(vec!["192.0.2.2:53".to_string()]),
-        cache_ttl: "20s".to_string(),
+        fallback_refresh_seconds: Some(20),
+        ..Default::default()
     });
     let mut key_a = make_config("metadata-second");
     key_a.spec.dns_resolver = Some(DnsResolverConfig {
         lookup_family: DnsLookupFamily::Ipv4Only,
         link_sys_ref: None,
         servers: Some(vec!["192.0.2.1:53".to_string()]),
-        cache_ttl: "10s".to_string(),
+        fallback_refresh_seconds: Some(10),
+        ..Default::default()
     });
     handler.full_set(&HashMap::from([
         ("b".to_string(), Arc::new(key_b)),
@@ -762,43 +764,18 @@ fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
         "a loaded Arc must pin its TTL generation"
     );
 
-    let mut invalid_system = make_config("metadata-first");
-    invalid_system.spec.dns_resolver = Some(DnsResolverConfig {
-        lookup_family: DnsLookupFamily::Ipv4Only,
-        link_sys_ref: None,
-        servers: None,
-        cache_ttl: "invalid".to_string(),
-    });
+    let mut default_system = make_config("metadata-first");
+    default_system.spec.dns_resolver = Some(DnsResolverConfig::default());
     handler.partial_update(
         HashMap::new(),
-        HashMap::from([("b".to_string(), Arc::new(invalid_system))]),
+        HashMap::from([("b".to_string(), Arc::new(default_system))]),
         HashSet::new(),
     );
-    let invalid = get_egc_dns_resolver_default().expect("configured system resolver remains represented");
-    assert_eq!(invalid.candidate(), None);
+    let system = get_egc_dns_resolver_default().expect("configured system resolver remains represented");
+    assert_eq!(system.candidate(), None);
     assert_eq!(
-        invalid.cache_policy().fallback_ttl(),
+        system.cache_policy().fallback_ttl(),
         crate::backends::DEFAULT_DNS_CACHE_TTL
-    );
-
-    let mut zero_ttl = make_config("metadata-first");
-    zero_ttl.spec.dns_resolver = Some(DnsResolverConfig {
-        lookup_family: DnsLookupFamily::Ipv4Only,
-        link_sys_ref: None,
-        servers: Some(vec!["192.0.2.3:53".to_string()]),
-        cache_ttl: "0s".to_string(),
-    });
-    handler.partial_update(
-        HashMap::new(),
-        HashMap::from([("b".to_string(), Arc::new(zero_ttl))]),
-        HashSet::new(),
-    );
-    assert_eq!(
-        get_egc_dns_resolver_default()
-            .expect("zero TTL is a valid configured generation")
-            .cache_policy()
-            .fallback_ttl(),
-        Duration::ZERO
     );
 
     handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["b".to_string()]));
@@ -1530,7 +1507,7 @@ fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
         "target-name",
     ] {
         let mut first = make_config("z-metadata");
-        first.spec.dns_resolver=Some(serde_json::from_value(serde_json::json!({"linkSysRef":{"namespace":"dns","name":"resolver"},"servers":["192.0.2.1"],"cacheTtl":"17s"})).unwrap());
+        first.spec.dns_resolver=Some(serde_json::from_value(serde_json::json!({"linkSysRef":{"namespace":"dns","name":"resolver"},"servers":["192.0.2.1"],"fallbackRefreshSeconds":17})).unwrap());
         match case {
             "owner-namespace" => first.metadata.namespace = Some("app".into()),
             "owner-empty-namespace" => first.metadata.namespace = Some("".into()),
@@ -1559,8 +1536,9 @@ fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
             }
         }
         let mut other = make_config("a-metadata");
-        other.spec.dns_resolver =
-            Some(serde_json::from_value(serde_json::json!({"servers":["192.0.2.2"],"cacheTtl":"30s"})).unwrap());
+        other.spec.dns_resolver = Some(
+            serde_json::from_value(serde_json::json!({"servers":["192.0.2.2"],"fallbackRefreshSeconds":30})).unwrap(),
+        );
         let snapshot = EdgionGatewayConfigSnapshot::new(HashMap::from([
             ("a".into(), Arc::new(first.clone())),
             ("b".into(), Arc::new(other)),

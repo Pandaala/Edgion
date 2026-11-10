@@ -155,7 +155,7 @@ wiring directly; do not close a new finding using the historical process-lifetim
 
 **Original issue**: The Service/ServiceEndpointSlice match arms of `try_get_peer` had ~25 lines of duplicated upstream-fill + peer-build logic.
 
-**Historical fix**: extracted `build_peer_from_lb_selection` to share upstream metadata and peer construction. The native pseudo-mode arms have since been removed. Current HTTP/gRPC dispatch derives actual Service type from `CapturedServiceSelection`, with one shared section selector for ordinary/controller-resolved Services and the canonical DNS peer stage for self-resolved ExternalName. The historical duplicate-arm count does not establish current ownership, hot-path cost or correctness; inspect the actual captured source and both peer stages.
+**Historical fix**: extracted `build_peer_from_lb_selection` to share upstream metadata and peer construction. The native pseudo-mode arms have since been removed. Current HTTP/gRPC dispatch derives actual Service type from `CapturedServiceSelection`, with one shared section selector for ordinary Services and `gateway`/`controller`-mode ExternalName, and the `system`-mode DNS peer stage for per-request ExternalName resolution. The historical duplicate-arm count does not establish current ownership, hot-path cost or correctness; inspect the actual captured source and both peer stages.
 
 ---
 

@@ -407,8 +407,8 @@ pub struct GatewayConfig {
     /// Fallback freshness in milliseconds of `EgressResolver` answers in the shared
     /// egress DNS answer cache when the resolver reports no record TTL (`0`
     /// disables caching). Deliberately distinct from
-    /// `EdgionGatewayConfig.dnsResolver.cacheTtl`, which governs the upstream cache
-    /// (AI endpoints and ExternalName self-resolution). Default 5s, matching
+    /// `EdgionGatewayConfig.dnsResolver.fallbackRefreshSeconds`, which governs the
+    /// upstream cache (AI endpoints and external jumps). Default 5s, matching
     /// `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
     /// Set in the gateway config file, or via `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`.
     #[arg(skip)]

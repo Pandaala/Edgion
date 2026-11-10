@@ -18,9 +18,9 @@ pub use degrade_threshold::{
     resolve_degrade_threshold,
 };
 pub use discovery::{
-    create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_service_store,
-    get_roundrobin_store, get_service_discovery_coordinator, upstream_dns_cache, DnsResolutionMode, EndpointSliceExt,
-    EpSliceStore, ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
+    create_ep_slice_handler, create_service_handler, dns_endpoint_table, get_global_service_store,
+    get_roundrobin_store, get_service_discovery_coordinator, upstream_dns_cache, DnsEndpointTableStats,
+    DnsRefreshPolicy, EndpointSliceExt, EpSliceStore, ServiceStore, DEFAULT_DNS_CACHE_TTL,
 };
 pub use outlier_detection::{get_outlier_detection_store, FailureClass, OutlierCompletionToken};
 
@@ -44,12 +44,13 @@ use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
-use edgion_common::dns::resolver_select::{resolve_effective_spec, LinkSysKey, ResolverCandidate};
+use edgion_common::dns::resolver_select::{resolve_effective_spec, LinkSysKey};
 use edgion_common::dns::{
-    resolve_answer, DnsAnswer, DnsAnswerCache, DnsCachePolicy, DnsError, DnsLookupFamily, DnsQueryPolicy, ResolverSpec,
+    resolve_answer, DnsAnswer, DnsCachePolicy, DnsError, DnsLookupFamily, DnsQueryPolicy, ResolverSpec,
 };
 #[cfg(test)]
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
+use edgion_resources::resources::common::DnsResolutionMode;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
@@ -61,11 +62,11 @@ use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::future::Future;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
+use discovery::{AvailableServiceProjection, ServiceRuntimeSnapshot};
 use selector::{extract_hash_key, CapturedServiceSelection, ResolvedServiceEndpoint};
 
 #[derive(Debug)]
@@ -178,13 +179,17 @@ where
     if input.backend_tls_policy.is_invalid() {
         return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
     }
+    // A gateway-mode ExternalName target may still await its first answer
+    // (Service just appeared or the Gateway just started). Bounded; one atomic
+    // load in the steady state.
+    dns_endpoint_table().wait_first_answer(input.service.key()).await;
     let captured = capture(input.service)?;
     if ctx.response_cache.is_some() {
         crate::response_cache::record_discovery(ctx, captured.response_cache_stamp(input.service));
     }
     let degrade_policy = captured_degrade_policy(ctx.backend_context.as_ref());
     match native_service_path(&captured)? {
-        ExternalNamePath::EndpointSlice => {
+        ExternalNameSource::Endpoints => {
             let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
             let endpoint = take_sp_target_or_select(ctx, &captured, |ctx| {
                 // Borrow request inputs after sticky target consumption releases its mutable borrow.
@@ -206,35 +211,14 @@ where
                 gateway_key_ref,
             )
         }
-        ExternalNamePath::SelfResolve { cache } => {
-            // This attempt owns one Service geometry and one resolver candidate/TTL
-            // generation through the await. A later attempt recaptures both.
-            let egc_default = crate::config::get_egc_dns_resolver_default();
-            let cache_policy = egc_default
-                .as_ref()
-                .map(|resolved| resolved.cache_policy())
-                .unwrap_or(DnsCachePolicy::new(DEFAULT_DNS_CACHE_TTL));
-            let spec = compute_external_name_resolver(
-                captured.dns_resolver_candidate(),
-                ctx,
-                egc_default.as_ref().and_then(|resolved| resolved.candidate()),
-            );
-            let family = compute_lookup_family(
-                captured.dns_lookup_family(),
-                ctx,
-                egc_default.as_ref().map(|resolved| resolved.lookup_family()),
-            )
-            .map_err(|_| EdgionErrorCode::BackendDnsResolutionFailed)?;
-            let dns = ExternalNameResolution {
-                spec: &spec,
-                family,
-                cache,
-                policy: cache_policy,
-                dns_cache: upstream_dns_cache(),
-            };
-            // Self-resolution has no EndpointSlice affinity contract: a sticky
-            // target cannot replace the captured hostname's admitted DNS result.
-            build_external_name_peer_with_resolver(ctx, &input, &captured, gateway_key_ref, dns, resolve_answer).await
+        ExternalNameSource::System => {
+            // This attempt owns one Service geometry through the await; a later
+            // attempt recaptures it. Self-resolution has no EndpointSlice
+            // affinity contract, so a sticky target is never consumed here.
+            let egc_family = crate::config::get_egc_dns_resolver_default().map(|resolved| resolved.lookup_family());
+            let family = external_name_family(captured.dns_lookup_family(), egc_family)
+                .map_err(|_| EdgionErrorCode::BackendDnsResolutionFailed)?;
+            build_system_external_name_peer(ctx, &input, &captured, gateway_key_ref, family, resolve_answer).await
         }
     }
 }
@@ -249,35 +233,91 @@ fn external_name(captured: &CapturedServiceSelection) -> Result<&str, EdgionErro
         .ok_or(EdgionErrorCode::BackendExternalNameNotFound)
 }
 
-fn native_service_path(captured: &CapturedServiceSelection) -> Result<ExternalNamePath, EdgionErrorCode> {
+/// Where an attempt for a captured Service gets its endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExternalNameSource {
+    /// Ordinary EndpointSlice selection. For an `ExternalName` Service the
+    /// coordinator feeds it from the Gateway endpoint table (`gateway` mode) or
+    /// from Controller-published slices (`controller` mode), never both.
+    Endpoints,
+    /// OS resolver on every attempt (`system` mode).
+    System,
+}
+
+/// Pure mode decision: the Service annotation, else the EGC global default.
+/// An invalid annotation fails closed. There is no cross-source fallback.
+pub(crate) fn external_name_source(
+    annotation: Result<Option<DnsResolutionMode>, &'static str>,
+    endpoint_table: bool,
+) -> Result<ExternalNameSource, EdgionErrorCode> {
+    let mode = annotation
+        .map_err(|_| EdgionErrorCode::BackendDnsResolutionFailed)?
+        .unwrap_or(DnsResolutionMode::global_default(endpoint_table));
+    Ok(match mode {
+        DnsResolutionMode::System => ExternalNameSource::System,
+        DnsResolutionMode::Gateway | DnsResolutionMode::Controller => ExternalNameSource::Endpoints,
+    })
+}
+
+fn native_service_path(captured: &CapturedServiceSelection) -> Result<ExternalNameSource, EdgionErrorCode> {
     if captured.source().spec.as_ref().and_then(|spec| spec.type_.as_deref()) != Some("ExternalName") {
-        return Ok(ExternalNamePath::EndpointSlice);
+        return Ok(ExternalNameSource::Endpoints);
     }
     external_name(captured)?;
     if matches!(captured.dns_lookup_family(), Some(Err(_))) {
         return Err(EdgionErrorCode::BackendDnsResolutionFailed);
     }
-    let mode = captured.dns_resolution_mode();
-    Ok(decide_external_name_path(
-        mode,
-        mode == DnsResolutionMode::Controller && !captured.section().ready_slots.is_empty(),
-    ))
+    let endpoint_table =
+        crate::config::get_egc_dns_resolver_default().is_none_or(|resolved| resolved.refresh_policy().endpoint_table);
+    external_name_source(captured.dns_resolution_mode(), endpoint_table)
 }
 
-struct ExternalNameResolution<'a> {
-    spec: &'a ResolverSpec,
-    family: DnsLookupFamily,
-    dns_cache: &'a DnsAnswerCache,
-    cache: bool,
-    policy: DnsCachePolicy,
+/// `ExternalName` family precedence: Service annotation, then the EGC
+/// default, then `ipv4Only`. Shared with the Gateway endpoint table; there is
+/// no Gateway-resource layer for `ExternalName`.
+pub(crate) fn external_name_family(
+    service: Option<Result<DnsLookupFamily, &'static str>>,
+    egc: Option<DnsLookupFamily>,
+) -> Result<DnsLookupFamily, DnsError> {
+    service
+        .transpose()
+        .map(|family| family.or(egc).unwrap_or_default())
+        .map_err(|error| DnsError::Parse(error.into()))
 }
 
-async fn build_external_name_peer_with_resolver<'a, R, Fut>(
+/// Addresses dialed by this request's earlier attempts (the current attempt's
+/// placeholder has none yet).
+fn previously_dialed_ips(ctx: &EdgionHttpContext) -> Vec<std::net::IpAddr> {
+    ctx.backend_context
+        .as_ref()
+        .map(|context| {
+            context
+                .upstreams
+                .iter()
+                .filter_map(|upstream| upstream.ip.as_deref()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Stable-partition `ips` so addresses not yet dialed come first; when every
+/// address was dialed the order is unchanged.
+fn prefer_undialed(ips: &mut [std::net::IpAddr], dialed: &[std::net::IpAddr]) {
+    if !dialed.is_empty() {
+        ips.sort_by_key(|ip| dialed.contains(&ip.to_canonical()) || dialed.contains(ip));
+    }
+}
+
+/// `system` mode always asks the OS resolver, whatever resolver the Service or
+/// EGC names for the endpoint table.
+static SYSTEM_RESOLVER: ResolverSpec = ResolverSpec::System;
+
+async fn build_system_external_name_peer<'a, R, Fut>(
     ctx: &mut EdgionHttpContext,
     input: &ServicePeerInput<'_>,
     captured: &'a CapturedServiceSelection,
     gateway_key: Option<&str>,
-    dns: ExternalNameResolution<'a>,
+    family: DnsLookupFamily,
     resolver: R,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode>
 where
@@ -287,29 +327,21 @@ where
     let hostname = external_name(captured)?;
     let port = captured.section().identity.number.get();
     let backend_app_protocol = captured.section().prepared_app_protocol;
-    let mut ips = resolve_external_ips_with(
-        hostname,
-        dns.spec,
-        dns.cache,
-        &dns.policy,
-        dns.dns_cache,
-        dns.family,
-        resolver,
-    )
-    .await
-    .map_err(|error| {
-        if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.port = Some(port);
-            upstream.err.push(format!("dns resolution failed: {error}").into());
-        }
-        EdgionErrorCode::BackendDnsResolutionFailed
-    })?;
-    // Cached answers keep their order for the record TTL; rotate the start so
-    // traffic spreads over every address and one dead address cannot capture
-    // every request. A per-request lookup keeps the resolver's own order.
-    if dns.cache {
-        rotate_addresses(&mut ips, next_address_rotation());
-    }
+    // IP literals short-circuit inside the resolver, under the family policy.
+    let mut ips = resolver(&SYSTEM_RESOLVER, hostname, DnsQueryPolicy::Family(family))
+        .await
+        .map(|answer| answer.addrs)
+        .map_err(|error| {
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.port = Some(port);
+                upstream.err.push(format!("dns resolution failed: {error}").into());
+            }
+            EdgionErrorCode::BackendDnsResolutionFailed
+        })?;
+    // Keep the OS order but rotate the start, so traffic spreads over every
+    // address; a retry prefers an address no earlier attempt dialed.
+    rotate_addresses(&mut ips, next_address_rotation());
+    prefer_undialed(&mut ips, &previously_dialed_ips(ctx));
     let addr = match first_safe_inet_addr(&ips, port, ctx.allow_loopback_upstream) {
         Ok(addr) => addr,
         Err(status) => {
@@ -328,41 +360,192 @@ where
     Ok(peer)
 }
 
-/// Compute the effective [`ResolverSpec`] for an `ExternalName` self-resolution,
-/// applying the data-plane precedence Service annotation → Gateway annotation →
-/// EGC default → system. httpdns refs are resolved against the gateway's LinkSys
-/// store; a dangling ref fails safe to the system resolver.
-///
-/// `egc_candidate` is the precomputed EGC data-plane default, read once by the
-/// caller so this stays free of the store access and config parsing.
-fn compute_external_name_resolver(
-    service_layer: Option<&ResolverCandidate>,
-    ctx: &EdgionHttpContext,
-    egc_candidate: Option<&ResolverCandidate>,
-) -> ResolverSpec {
-    compute_external_name_resolver_with(service_layer, ctx, egc_candidate, httpdns_config_for_ref)
+/// Outcome of the async L4 step that runs before synchronous endpoint selection.
+pub(crate) enum L4ServicePrep {
+    /// Select from the discovery projection, reusing the one the step loaded.
+    Select(Option<(Arc<AvailableServiceProjection>, Arc<ServiceRuntimeSnapshot>)>),
+    /// `system` mode: dial this freshly resolved address (no pooled endpoint)
+    /// of `hostname`.
+    Direct {
+        backend: Arc<crate::lb::LbBackend>,
+        hostname: Box<str>,
+    },
+    /// `system`-mode resolution failed, or the mode annotation is invalid.
+    Failed,
 }
 
-fn compute_external_name_resolver_with<F>(
-    service_layer: Option<&ResolverCandidate>,
-    ctx: &EdgionHttpContext,
-    egc_candidate: Option<&ResolverCandidate>,
-    lookup: F,
-) -> ResolverSpec
-where
-    F: Fn(&LinkSysKey) -> Option<Arc<edgion_common::dns::PreparedHttpDns>>,
-{
-    let gateway_layer = ctx
-        .gateway_info
-        .as_deref()
-        .and_then(|info| info.dns_resolver_candidate.as_ref());
-    let egc_layer = egc_candidate;
+/// How an L4 listener consumes a Service: per connection (TCP, TLS) or per
+/// new datagram session (UDP), whose receive loop must not wait on DNS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum L4Transport {
+    Connection,
+    Datagram,
+}
 
-    resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], lookup)
+/// Longest a UDP datagram waits for a `system`-mode lookup; the lookup keeps
+/// running in the background and fills the shared answer cache.
+const DATAGRAM_DNS_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl L4ServicePrep {
+    /// The hostname a per-connection (`system`-mode) address was resolved from.
+    pub(crate) fn direct_hostname(&self) -> Option<&str> {
+        match self {
+            Self::Direct { hostname, .. } => Some(hostname),
+            _ => None,
+        }
+    }
+
+    /// True when the DNS step itself failed (as opposed to empty endpoints).
+    pub(crate) fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed)
+    }
+
+    /// The backend for this connection: the resolved one, or ordinary L4
+    /// selection (no LB policy, live degrade) for `target`.
+    pub(crate) fn resolve(&self, target: &CompiledServiceTarget) -> Result<Arc<crate::lb::LbBackend>, EdgionErrorCode> {
+        match self {
+            Self::Select(Some((available, active))) => {
+                selector::select_l4_endpoint_from(Arc::clone(available), Arc::clone(active), target.section())
+                    .map(|endpoint| endpoint.backend)
+            }
+            Self::Select(None) => select_service_endpoint(
+                target.key(),
+                target.section().clone(),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .map(|endpoint| endpoint.backend),
+            Self::Direct { backend, .. } => Ok(Arc::clone(backend)),
+            Self::Failed => Err(EdgionErrorCode::BackendDnsResolutionFailed),
+        }
+    }
+}
+
+/// The hostname of an `ExternalName` projection whose effective mode is
+/// `system` (annotation, else the EGC `endpointTable` default).
+pub(crate) fn system_mode_hostname(available: &AvailableServiceProjection) -> Option<&str> {
+    let spec = available.raw.service.spec.as_ref()?;
+    if spec.type_.as_deref() != Some("ExternalName") {
+        return None;
+    }
+    let endpoint_table =
+        crate::config::get_egc_dns_resolver_default().is_none_or(|resolved| resolved.refresh_policy().endpoint_table);
+    match external_name_source(available.dns_resolution_mode, endpoint_table) {
+        Ok(ExternalNameSource::System) => spec.external_name.as_deref().filter(|name| !name.is_empty()),
+        _ => None,
+    }
+}
+
+/// Async per-connection (or per-new-UDP-session) step for TCP / TLS / UDP
+/// Service backends.
+///
+/// Ordinary Services cost one projection load, reused for selection. A
+/// `gateway`-mode `ExternalName` target that is still pending may be waited on
+/// (bounded; never on the UDP datagram path). A `system`-mode one is resolved
+/// through the OS resolver. Either DNS step runs only after the admission gate
+/// the synchronous selection applies, so a refused backend never waits or
+/// triggers DNS.
+pub(crate) async fn prepare_l4_service(
+    selected: SelectedL4Backend<'_>,
+    gateway_key: Option<&str>,
+    allow_loopback: bool,
+    transport: L4Transport,
+) -> L4ServicePrep {
+    let Ok(target) = selected.service() else {
+        return L4ServicePrep::Select(None);
+    };
+    let table = dns_endpoint_table();
+    if transport == L4Transport::Connection && table.is_pending(target.key()) {
+        if !policy::service_ancestor_admitted(target, gateway_key) {
+            return L4ServicePrep::Select(None);
+        }
+        table.wait_first_answer(target.key()).await;
+    }
+    let Some((available, active)) = selector::load_active_projection(target.key()) else {
+        return L4ServicePrep::Select(None);
+    };
+    if available
+        .raw
+        .service
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.type_.as_deref())
+        == Some("ExternalName")
+        && available.dns_resolution_mode.is_err()
+    {
+        return L4ServicePrep::Failed;
+    }
+    let Some(hostname) = system_mode_hostname(&available).map(Box::<str>::from) else {
+        return L4ServicePrep::Select(Some((available, active)));
+    };
+    if !policy::service_ancestor_admitted(target, gateway_key) {
+        // The terminal gate refuses this backend; no DNS work for it.
+        return L4ServicePrep::Select(Some((available, active)));
+    }
+    let egc = crate::config::get_egc_dns_resolver_default();
+    let Ok(family) = external_name_family(
+        available.dns_lookup_family,
+        egc.as_ref().map(|resolved| resolved.lookup_family()),
+    ) else {
+        return L4ServicePrep::Failed;
+    };
+    let Ok(section) = available.resolve_section(target.section()) else {
+        // Selection reports the port failure.
+        return L4ServicePrep::Select(Some((available, active)));
+    };
+    let port = section.identity.number.get();
+    let query = DnsQueryPolicy::Family(family);
+    let ips = match transport {
+        L4Transport::Connection => match resolve_answer(&SYSTEM_RESOLVER, &hostname, query).await {
+            Ok(answer) => answer.addrs,
+            Err(_) => return L4ServicePrep::Failed,
+        },
+        L4Transport::Datagram => {
+            // Hostname-keyed and single-flight: a flood of new (spoofable)
+            // sources cannot multiply queries, and the receive loop waits at
+            // most the budget while the lookup completes in the background.
+            let cache_policy = egc
+                .as_ref()
+                .map(|resolved| resolved.cache_policy())
+                .unwrap_or(DnsCachePolicy::new(DEFAULT_DNS_CACHE_TTL));
+            let name = hostname.clone();
+            let lookup = tokio::spawn(async move {
+                upstream_dns_cache()
+                    .lookup(&SYSTEM_RESOLVER, &name, query, &cache_policy)
+                    .await
+            });
+            match tokio::time::timeout(DATAGRAM_DNS_BUDGET, lookup).await {
+                Ok(Ok(Ok(addrs))) => addrs,
+                _ => return L4ServicePrep::Failed,
+            }
+        }
+    };
+    let mut ips = ips;
+    rotate_addresses(&mut ips, next_address_rotation());
+    // An unsafe-only answer still yields an address so the caller's own
+    // address-safety check rejects it with its usual status.
+    let addr = match first_safe_inet_addr(&ips, port, allow_loopback) {
+        Ok(addr) => addr,
+        Err(_) => match ips.first() {
+            Some(ip) => SocketAddr::Inet(std::net::SocketAddr::new(*ip, port)),
+            None => return L4ServicePrep::Failed,
+        },
+    };
+    L4ServicePrep::Direct {
+        backend: Arc::new(crate::lb::LbBackend::new(pingora_load_balancing::Backend {
+            addr,
+            weight: 1,
+            ext: Default::default(),
+        })),
+        hostname,
+    }
 }
 
 /// Process-wide rotation for spreading attempts over resolved addresses. Shared
-/// by AI endpoints and `ExternalName` self-resolution.
+/// by AI endpoints, external jumps and `system`-mode `ExternalName` resolution.
 static ADDRESS_ROTATION: AtomicUsize = AtomicUsize::new(0);
 
 /// Next rotation offset for one upstream attempt.
@@ -421,42 +604,6 @@ fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<Arc<edgion_common::dns::Pr
     crate::link_sys::runtime::store::get_httpdns_client(&store_key)
 }
 
-/// Resolve an `ExternalName` to IPs through `spec`, through the shared
-/// upstream answer cache when `cache` is set (`per-request` mode resolves every
-/// time).
-///
-/// An IP-literal `external_name` short-circuits the resolver (and the cache):
-/// there is nothing to resolve, and running a name resolver on a literal would
-/// be both wrong and wasteful.
-async fn resolve_external_ips_with<'a, R, Fut>(
-    external_name: &'a str,
-    spec: &'a ResolverSpec,
-    cache: bool,
-    policy: &DnsCachePolicy,
-    dns_cache: &DnsAnswerCache,
-    family: DnsLookupFamily,
-    resolver: R,
-) -> Result<Vec<IpAddr>, DnsError>
-where
-    R: FnOnce(&'a ResolverSpec, &'a str, DnsQueryPolicy) -> Fut,
-    Fut: Future<Output = Result<DnsAnswer, DnsError>>,
-{
-    if let Ok(ip) = external_name.parse::<IpAddr>() {
-        return if family.allows(ip) {
-            Ok(vec![ip.to_canonical()])
-        } else {
-            Err(DnsError::NoAddresses)
-        };
-    }
-    let query = DnsQueryPolicy::Family(family);
-    if !cache {
-        return resolver(spec, external_name, query).await.map(|answer| answer.addrs);
-    }
-    dns_cache
-        .lookup_with(spec, external_name, query, policy, resolver)
-        .await
-}
-
 /// Session-persistence-aware selection within one captured Service section.
 ///
 /// If session-persistence `target_addr` is set (the request carried a sticky-session token resolved
@@ -505,7 +652,8 @@ where
     select_fn(ctx)
 }
 
-/// Shared logic for ordinary and controller-resolved ExternalName Services.
+/// Shared logic for ordinary Services and `gateway`/`controller`-mode
+/// ExternalName Services (both select from published endpoints).
 ///
 /// Takes the already-selected `ResolvedServiceEndpoint`, validates the proven
 /// serving address, writes upstream metadata, and constructs the peer.

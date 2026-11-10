@@ -30,7 +30,7 @@ purely on the `severity` label, so re-grading a rule re-routes it automatically.
 | alert | signal | `for:` |
 |-------|--------|--------|
 | EdgionConfigSyncFrozen | Gateway config-sync link down, serving stale config | 10m |
-| EdgionLeaderJobDead | a leader-only job (acme / conf_sync_rotation / credential_manager / dns_resolver) died on the leader | 2m |
+| EdgionLeaderJobDead | a leader-only job (acme / conf_sync_rotation / credential_manager) died on the leader | 2m |
 | EdgionCertExpiryCritical | in-service conf_sync cert expires in < 7 days (the PAGE band) | 1h |
 | EdgionCertRotationFailed | `system_error_state{reason=~"cert_rotation_failed\|cert_identity_sync_failed"}` — rotation pipeline failing | 5m |
 

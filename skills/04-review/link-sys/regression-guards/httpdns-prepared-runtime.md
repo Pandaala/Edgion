@@ -98,9 +98,9 @@ redirects, endpoint classification, 256-IP parsing, and a 64 KiB hard response
 ceiling remain. maxResponseBytes may only tighten the response bound. Connection
 settings are validated at schema admission and actual runtime preparation.
 
-Controller's raw Kubernetes LinkSys read still lacks resolved TLS Secret fields;
-custom CA/mTLS configurations requiring them retain the existing fallback
-limitation. This correction does not add Controller Secret acquisition, change
+The Controller DNS resolver reads the processed LinkSys cache, which carries the
+Controller-resolved TLS Secret fields, so custom CA/mTLS HTTPDNS works there too
+(corrected 2026-11-10; the earlier raw Kubernetes read was removed by ctrl-svc-05). This correction does not add Controller Secret acquisition, change
 Gateway API routing contracts, or forcibly revoke already borrowed handles.
 Idle-pool limits bound retained idle connections, not concurrent active queries.
 

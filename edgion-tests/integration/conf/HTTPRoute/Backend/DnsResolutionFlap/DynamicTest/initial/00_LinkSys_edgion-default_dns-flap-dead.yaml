@@ -1,5 +1,5 @@
 # Down httpdns resolver (nothing listens on 127.0.0.1:65531) with NO fallback:
-# per-request resolution fails outright, so the backend returns 5xx. This is the
+# resolution fails outright (no endpoints are published), so the backend returns 5xx. This is the
 # scenario's initial (failing) state.
 apiVersion: edgion.io/v1
 kind: LinkSys

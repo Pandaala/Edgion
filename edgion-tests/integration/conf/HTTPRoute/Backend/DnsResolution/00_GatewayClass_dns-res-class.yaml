@@ -7,7 +7,7 @@ metadata:
   name: dns-res-class
 spec:
   controllerName: edgion.io/gateway-controller
-  description: "DnsResolution suite gateway (loopback self-resolve enabled)"
+  description: "DnsResolution suite gateway (loopback upstreams enabled)"
   parametersRef:
     group: edgion.io
     kind: EdgionGatewayConfig

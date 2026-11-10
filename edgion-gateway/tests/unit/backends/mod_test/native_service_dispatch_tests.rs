@@ -46,49 +46,35 @@ fn dns_family_precedence_is_independent_and_invalid_overrides_fail_closed() {
     );
 }
 
-#[tokio::test]
-async fn family_switch_cannot_hit_previous_family_cache_and_literals_obey_policy() {
-    let cache = DnsAnswerCache::new(8, 1);
-    let queries = Cell::new(0);
-    let spec = ResolverSpec::System;
-    for family in [
-        DnsLookupFamily::Ipv4Only,
-        DnsLookupFamily::Ipv6Only,
-        DnsLookupFamily::Ipv4Only,
-    ] {
-        let ips = resolve_external_ips_with(
-            "backend.test",
-            &spec,
-            true,
-            &DnsCachePolicy::new(Duration::from_secs(60)),
-            &cache,
-            family,
-            vec_resolver(|_, _, policy| {
-                queries.set(queries.get() + 1);
-                assert_eq!(policy, DnsQueryPolicy::Family(family));
-                std::future::ready(Ok(
-                    policy.select(vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()])
-                ))
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(ips.len(), 1);
-        assert!(family.allows(ips[0]));
-    }
-    assert_eq!(queries.get(), 2);
-    assert!(resolve_external_ips_with(
-        "2001:db8::1",
-        &spec,
-        true,
-        &DnsCachePolicy::new(Duration::from_secs(60)),
-        &cache,
-        DnsLookupFamily::Ipv4Only,
-        vec_resolver(|_, _, _| std::future::ready(Ok(Vec::new()))),
-    )
-    .await
-    .is_err());
+#[test]
+fn external_name_family_precedence_has_no_gateway_layer() {
+    assert_eq!(external_name_family(None, None).unwrap(), DnsLookupFamily::Ipv4Only);
+    assert_eq!(
+        external_name_family(None, Some(DnsLookupFamily::All)).unwrap(),
+        DnsLookupFamily::All
+    );
+    assert_eq!(
+        external_name_family(Some(Ok(DnsLookupFamily::Ipv6Only)), Some(DnsLookupFamily::All)).unwrap(),
+        DnsLookupFamily::Ipv6Only
+    );
+    assert!(external_name_family(Some(Err("invalid DNS family")), Some(DnsLookupFamily::All)).is_err());
 }
+
+#[test]
+fn external_name_source_follows_annotation_then_global_switch() {
+    use edgion_resources::resources::common::DnsResolutionMode as Mode;
+    for (annotation, endpoint_table, expected) in [
+        (Ok(None), true, Ok(ExternalNameSource::Endpoints)),
+        (Ok(None), false, Ok(ExternalNameSource::System)),
+        (Ok(Some(Mode::Gateway)), false, Ok(ExternalNameSource::Endpoints)),
+        (Ok(Some(Mode::Controller)), false, Ok(ExternalNameSource::Endpoints)),
+        (Ok(Some(Mode::System)), true, Ok(ExternalNameSource::System)),
+        (Err("bad"), true, Err(EdgionErrorCode::BackendDnsResolutionFailed)),
+    ] {
+        assert_eq!(external_name_source(annotation, endpoint_table), expected);
+    }
+}
+
 use crate::backends::discovery::ServiceDiscoveryCoordinator;
 use crate::routes::grpc::{GrpcBackendHandle, GrpcRouteRuleUnit, SelectedGrpcBackend};
 use crate::routes::http::match_unit::HttpRouteRuleUnit;
@@ -98,7 +84,7 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
+use std::net::IpAddr;
 use tokio::io::AsyncWriteExt;
 
 /// Boxed answer future returned by [`vec_resolver`].
@@ -208,7 +194,7 @@ async fn actual_http_and_grpc_default_owner_reach_standard_external_name_peer() 
     for kind in [None, Some("ClusterIP"), Some("ExternalName")] {
         publish(
             &coordinator,
-            service(kind, Some("192.0.2.44"), Some("gateway"), 443),
+            service(kind, Some("192.0.2.44"), Some("system"), 443),
             Some(true),
         );
         for grpc in [false, true] {
@@ -355,20 +341,15 @@ async fn missing_service_section_and_hostname_have_fixed_failures_without_resolu
     for (source, expected) in [
         (None, EdgionErrorCode::BackendServiceNotFound),
         (
-            Some(service(
-                Some("ExternalName"),
-                Some("unused.test"),
-                Some("per-request"),
-                81,
-            )),
+            Some(service(Some("ExternalName"), Some("unused.test"), Some("system"), 81)),
             EdgionErrorCode::BackendPortResolutionFailed,
         ),
         (
-            Some(service(Some("ExternalName"), None, Some("per-request"), 80)),
+            Some(service(Some("ExternalName"), None, Some("system"), 80)),
             EdgionErrorCode::BackendExternalNameNotFound,
         ),
         (
-            Some(service(Some("ExternalName"), Some(""), Some("per-request"), 80)),
+            Some(service(Some("ExternalName"), Some(""), Some("system"), 80)),
             EdgionErrorCode::BackendExternalNameNotFound,
         ),
     ] {
@@ -388,56 +369,59 @@ async fn missing_service_section_and_hostname_have_fixed_failures_without_resolu
 }
 
 #[tokio::test]
-async fn controller_readiness_does_not_bypass_runtime_health_and_other_modes_ignore_slices() {
+async fn modes_never_fall_back_and_controller_readiness_keeps_runtime_health() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     let selected = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    // `controller` reads conf_sync slices only; `system` resolves per attempt;
+    // `gateway` (the default) reads Gateway-local slices only, which this
+    // private coordinator does not have, and never falls back to DNS.
     for (mode, ready, expected) in [
-        (None, true, ExternalNamePath::EndpointSlice),
-        (Some("controller"), false, ExternalNamePath::SelfResolve { cache: true }),
-        (Some("gateway"), true, ExternalNamePath::SelfResolve { cache: true }),
-        (
-            Some("per-request"),
-            true,
-            ExternalNamePath::SelfResolve { cache: false },
-        ),
+        (Some("controller"), true, Ok("192.0.2.8:8080")),
+        (Some("controller"), false, Err(())),
+        (Some("system"), true, Ok("192.0.2.40:80")),
+        (None, true, Err(())),
+        (Some("gateway"), true, Err(())),
     ] {
         publish(
             &coordinator,
             service(Some("ExternalName"), Some("192.0.2.40"), mode, 80),
             Some(ready),
         );
-        let captured = capture(&coordinator, &selected);
-        assert_eq!(native_service_path(&captured).unwrap(), expected);
         let mut ctx = context("default/backend");
         let choice = SelectedLogicalBackend::Service(selected.clone());
         let peer = try_get_peer_with_capture(&mut ctx, &session().await, false, Some(&choice), |target| {
             CapturedServiceSelection::capture(&coordinator, target)
         })
-        .await
-        .unwrap();
-        let expected_address = if expected == ExternalNamePath::EndpointSlice {
-            "192.0.2.8:8080"
-        } else {
-            "192.0.2.40:80"
-        };
-        assert_eq!(peer._address.as_inet().unwrap().to_string(), expected_address);
-        if ready {
-            let generation = coordinator.load_generation();
-            let active = generation
-                .available("default/backend")
-                .unwrap()
-                .runtime_cell
-                .active
-                .load_full();
-            for state in active.entries.values() {
-                state.set_health_eligible(false);
-            }
-            assert_eq!(native_service_path(&captured).unwrap(), expected);
-            assert!(captured
-                .select(&None, ServiceDegradePolicy::CapturedOverride(Some(0)), None, "", None)
-                .is_err());
+        .await;
+        match expected {
+            Ok(address) => assert_eq!(
+                peer.unwrap()._address.as_inet().unwrap().to_string(),
+                address,
+                "{mode:?}"
+            ),
+            Err(()) => assert!(peer.is_err(), "{mode:?} must not fall back"),
         }
     }
+    publish(
+        &coordinator,
+        service(Some("ExternalName"), Some("192.0.2.40"), Some("controller"), 80),
+        Some(true),
+    );
+    let captured = capture(&coordinator, &selected);
+    let generation = coordinator.load_generation();
+    let active = generation
+        .available("default/backend")
+        .unwrap()
+        .runtime_cell
+        .active
+        .load_full();
+    for state in active.entries.values() {
+        state.set_health_eligible(false);
+    }
+    assert_eq!(native_service_path(&captured).unwrap(), ExternalNameSource::Endpoints);
+    assert!(captured
+        .select(&None, ServiceDegradePolicy::CapturedOverride(Some(0)), None, "", None)
+        .is_err());
 }
 
 #[test]
@@ -445,15 +429,16 @@ fn dns_mode_only_updates_preserve_captured_paths() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     let selected = selected(None, 80, BackendTlsPolicyLookup::Absent);
     let mut retained = Vec::new();
+    let failed = Err(EdgionErrorCode::BackendDnsResolutionFailed);
     for (mode, expected) in [
-        (None, ExternalNamePath::EndpointSlice),
-        (Some("gateway"), ExternalNamePath::SelfResolve { cache: true }),
-        (Some("per-request"), ExternalNamePath::SelfResolve { cache: false }),
-        (Some(" \tgateway \t"), ExternalNamePath::SelfResolve { cache: true }),
-        (Some("controller"), ExternalNamePath::EndpointSlice),
-        (Some("invalid"), ExternalNamePath::EndpointSlice),
-        (Some("per-request"), ExternalNamePath::SelfResolve { cache: false }),
-        (None, ExternalNamePath::EndpointSlice),
+        (None, Ok(ExternalNameSource::Endpoints)),
+        (Some("gateway"), Ok(ExternalNameSource::Endpoints)),
+        (Some("system"), Ok(ExternalNameSource::System)),
+        (Some(" \tgateway \t"), failed),
+        (Some("controller"), Ok(ExternalNameSource::Endpoints)),
+        (Some("invalid"), failed),
+        (Some("per-request"), failed),
+        (None, Ok(ExternalNameSource::Endpoints)),
     ] {
         publish(
             &coordinator,
@@ -461,10 +446,10 @@ fn dns_mode_only_updates_preserve_captured_paths() {
             Some(true),
         );
         let current = capture(&coordinator, &selected);
-        assert_eq!(native_service_path(&current).unwrap(), expected, "{mode:?}");
+        assert_eq!(native_service_path(&current), expected, "{mode:?}");
         retained.push((current, expected));
         for (previous, original_path) in &retained {
-            assert_eq!(native_service_path(previous).unwrap(), *original_path);
+            assert_eq!(native_service_path(previous), *original_path);
         }
     }
 }
@@ -472,61 +457,36 @@ fn dns_mode_only_updates_preserve_captured_paths() {
 #[tokio::test]
 async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_capture_recovers() {
     let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut old = (*service(Some("ExternalName"), Some("old.example.test"), Some("per-request"), 80)).clone();
+    let mut old = (*service(Some("ExternalName"), Some("old.example.test"), Some("system"), 80)).clone();
     old.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = Some("kubernetes.io/h2c".into());
-    old.metadata
-        .annotations
-        .as_mut()
-        .unwrap()
-        .insert(edgion_annotations::DNS_RESOLVER.into(), "192.0.2.53".into());
     publish(&coordinator, Arc::new(old), None);
     let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
     let captured = capture(&coordinator, &chosen);
-    let spec = compute_external_name_resolver_with(
-        captured.dns_resolver_candidate(),
-        &context("default/backend"),
-        None,
-        |_| None,
-    );
-    let cache = DnsAnswerCache::new(8, 1);
     let mut ctx = context("default/backend");
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-    let dns = ExternalNameResolution {
-        family: DnsLookupFamily::All,
-        spec: &spec,
-        dns_cache: &cache,
-        cache: true,
-        policy: DnsCachePolicy::new(Duration::from_secs(30)),
-    };
     let peer_input = input(&chosen);
-    let spec_ref = &spec;
-    let attempt = build_external_name_peer_with_resolver(
+    let attempt = build_system_external_name_peer(
         &mut ctx,
         &peer_input,
         &captured,
         None,
-        dns,
+        DnsLookupFamily::All,
         vec_resolver(|seen_spec, hostname, _policy| async move {
-            assert!(std::ptr::eq(seen_spec, spec_ref));
-            assert!(matches!(seen_spec,ResolverSpec::StandardDns(servers) if servers.servers()==["192.0.2.53"]));
+            assert!(
+                matches!(seen_spec, ResolverSpec::System),
+                "system mode always asks the OS"
+            );
             assert_eq!(hostname, "old.example.test");
             entered_tx.send(()).unwrap();
             release_rx.await.unwrap();
-            assert!(matches!(seen_spec,ResolverSpec::StandardDns(servers) if servers.servers()==["192.0.2.53"]));
             assert_eq!(hostname, "old.example.test");
             Ok(vec!["192.0.2.10".parse().unwrap()])
         }),
     );
     let update = async {
         entered_rx.await.unwrap();
-        let mut changed = (*service(Some("ExternalName"), Some("new.example.test"), Some("gateway"), 81)).clone();
-        changed
-            .metadata
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(edgion_annotations::DNS_RESOLVER.into(), "192.0.2.54".into());
+        let mut changed = (*service(Some("ExternalName"), Some("new.example.test"), Some("system"), 81)).clone();
         changed.metadata.uid = Some("source-b".into());
         changed.metadata.resource_version = Some("2".into());
         changed.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].protocol = Some("UDP".into());
@@ -548,130 +508,14 @@ async fn actual_dns_stage_keeps_old_service_geometry_across_await_and_next_captu
     let new = capture(&coordinator, &current);
     assert_eq!(external_name(&new).unwrap(), "new.example.test");
     assert_eq!(new.source().metadata.uid.as_deref(), Some("source-b"));
-    let current_spec =
-        compute_external_name_resolver_with(new.dns_resolver_candidate(), &context("default/backend"), None, |_| {
-            None
-        });
-    assert_ne!(current_spec.fingerprint(), spec.fingerprint());
     assert_eq!(new.section().identity.protocol.as_ref(), "UDP");
-    assert_eq!(
-        native_service_path(&new).unwrap(),
-        ExternalNamePath::SelfResolve { cache: true }
-    );
-    assert_eq!(
-        cache.stats().entries,
-        1,
-        "only the captured hostname/resolver answer was cached"
-    );
-    // The single entry is keyed by the captured hostname, resolver and family.
-    let cached = cache
-        .lookup_with(
-            &spec,
-            "old.example.test",
-            DnsQueryPolicy::Family(DnsLookupFamily::All),
-            &DnsCachePolicy::new(Duration::from_secs(30)),
-            |_, _, _| std::future::ready(Err(DnsError::Io("the captured identity must be a cache hit".into()))),
-        )
-        .await
-        .expect("the captured hostname/resolver/family entry is a cache hit");
-    assert_eq!(cached, vec!["192.0.2.10".parse::<IpAddr>().unwrap()]);
+    assert_eq!(native_service_path(&new).unwrap(), ExternalNameSource::System);
     coordinator.replace_services(&HashMap::new());
     assert!(matches!(
         CapturedServiceSelection::capture(&coordinator, current.logical().service_target().unwrap()),
         Err(EdgionErrorCode::BackendServiceNotFound)
     ));
     assert_eq!(external_name(&captured).unwrap(), "old.example.test");
-}
-
-#[tokio::test]
-async fn actual_dns_cache_query_boundary_preserves_identity_modes_ttl_and_negative_entries() {
-    let cache = DnsAnswerCache::new(16, 2);
-    let spec = ResolverSpec::System;
-    let queries = Cell::new(0);
-    for (name, cached, ttl, expected) in [
-        ("a.test", true, 30, 1),
-        ("a.test", true, 30, 1),
-        ("b.test", true, 30, 2),
-        ("a.test", false, 30, 3),
-        ("a.test", false, 30, 4),
-        ("zero.test", true, 0, 5),
-        ("zero.test", true, 0, 6),
-    ] {
-        let answer = resolve_external_ips_with(
-            name,
-            &spec,
-            cached,
-            &DnsCachePolicy::new(Duration::from_secs(ttl)),
-            &cache,
-            DnsLookupFamily::All,
-            vec_resolver(|_, seen, _policy| {
-                assert_eq!(seen, name);
-                queries.set(queries.get() + 1);
-                std::future::ready(Ok(vec!["192.0.2.4".parse().unwrap()]))
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(answer.len(), 1);
-        assert_eq!(queries.get(), expected);
-    }
-    for literal in ["192.0.2.7", "2001:db8::7"] {
-        assert_eq!(
-            resolve_external_ips_with(
-                literal,
-                &spec,
-                true,
-                &DnsCachePolicy::new(Duration::from_secs(30)),
-                &cache,
-                DnsLookupFamily::All,
-                vec_resolver(|_, _, _policy| {
-                    queries.set(queries.get() + 1);
-                    std::future::ready(Err(DnsError::NoAddresses))
-                }),
-            )
-            .await
-            .unwrap(),
-            vec![literal.parse::<IpAddr>().unwrap()]
-        );
-    }
-    assert_eq!(queries.get(), 6, "IP literals cannot query DNS");
-    for _ in 0..2 {
-        assert!(resolve_external_ips_with(
-            "failed.test",
-            &spec,
-            true,
-            &DnsCachePolicy::new(Duration::from_secs(30)),
-            &cache,
-            DnsLookupFamily::All,
-            vec_resolver(|_, _, _policy| {
-                queries.set(queries.get() + 1);
-                std::future::ready(Err(DnsError::NoAddresses))
-            }),
-        )
-        .await
-        .is_err());
-    }
-    assert_eq!(
-        queries.get(),
-        7,
-        "the first failure is cached as a short negative entry"
-    );
-    let other = ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec!["192.0.2.53".into()]));
-    resolve_external_ips_with(
-        "a.test",
-        &other,
-        true,
-        &DnsCachePolicy::new(Duration::from_secs(30)),
-        &cache,
-        DnsLookupFamily::All,
-        vec_resolver(|_, _, _policy| {
-            queries.set(queries.get() + 1);
-            std::future::ready(Ok(vec!["192.0.2.99".parse().unwrap()]))
-        }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(queries.get(), 8);
 }
 
 #[tokio::test]
@@ -682,7 +526,7 @@ async fn sticky_validation_uses_captured_section_and_self_dns_ignores_stale_targ
     let old = capture(&coordinator, &chosen);
     publish(
         &coordinator,
-        service(Some("ExternalName"), Some("192.0.2.90"), Some("gateway"), 80),
+        service(Some("ExternalName"), Some("192.0.2.90"), Some("system"), 80),
         None,
     );
     let mut ctx = context("default/backend");
@@ -834,7 +678,7 @@ fn ordinary_capture_and_selection_add_no_hot_allocations() {
     let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
         for _ in 0..16 {
             let captured = CapturedServiceSelection::capture(&coordinator, target).unwrap();
-            assert_eq!(native_service_path(&captured).unwrap(), ExternalNamePath::EndpointSlice);
+            assert_eq!(native_service_path(&captured).unwrap(), ExternalNameSource::Endpoints);
             std::hint::black_box(
                 captured
                     .select(&None, ServiceDegradePolicy::Live, None, "", None)
@@ -846,119 +690,27 @@ fn ordinary_capture_and_selection_add_no_hot_allocations() {
     assert_eq!(stats.requested_bytes, 0);
 }
 
-#[test]
-fn resolver_precedence_uses_captured_service_then_gateway_then_egc_and_system() {
-    let mut ctx = context("default/backend");
-    ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
-        None,
-        "gateway".into(),
-        None,
-        None,
-        None,
-        None,
-        Vec::new(),
-        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
-            vec!["192.0.2.2".into()],
-        ))),
-        None,
-    )));
-    let egc = ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(vec!["192.0.2.3".into()]));
-    let annotations = BTreeMap::from([(edgion_annotations::DNS_RESOLVER.to_owned(), "192.0.2.1".to_owned())]);
-    let lookups = Cell::new(0);
-    let absent = |_: &LinkSysKey| {
-        lookups.set(lookups.get() + 1);
-        None
-    };
-    let expected = |ip: &str| {
-        ResolverSpec::StandardDns(edgion_common::dns::StandardDnsServers::new(vec![ip.to_owned()]))
-            .fingerprint()
-            .into_owned()
-    };
-    assert_eq!(
-        compute_external_name_resolver_with(dns_candidate(&annotations).as_ref(), &ctx, Some(&egc), absent)
-            .fingerprint(),
-        expected("192.0.2.1")
-    );
-    assert_eq!(
-        compute_external_name_resolver_with(None, &ctx, Some(&egc), absent).fingerprint(),
-        expected("192.0.2.2")
-    );
-    ctx.gateway_info = None;
-    assert_eq!(
-        compute_external_name_resolver_with(None, &ctx, Some(&egc), absent).fingerprint(),
-        expected("192.0.2.3")
-    );
-    assert!(matches!(
-        compute_external_name_resolver_with(None, &ctx, None, absent),
-        ResolverSpec::System
-    ));
-    assert_eq!(lookups.get(), 0);
-    let dangling = BTreeMap::from([(
-        edgion_annotations::DNS_RESOLVER_REF.to_owned(),
-        "dns/missing".to_owned(),
-    )]);
-    let spec = compute_external_name_resolver_with(dns_candidate(&dangling).as_ref(), &ctx, Some(&egc), |key| {
-        assert_eq!(key.namespace, "dns");
-        assert_eq!(key.name, "missing");
-        lookups.set(lookups.get() + 1);
-        None
-    });
-    assert!(matches!(spec, ResolverSpec::System));
-    assert_eq!(lookups.get(), 1);
-}
-
 #[tokio::test]
-async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_queries() {
-    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
-    let config=serde_json::from_value(json!({"urlTemplate":"http://unused.invalid/d?host={domain}","response":{"kind":"json","ipPath":"ips"},"fallback":{"type":"none"},"connection":{"timeoutMs":0}})).unwrap();
-    let mut owner = edgion_resources::LinkSys::new(
-        "resolver",
-        LinkSysSpec {
-            config: SystemConfig::HttpDns(config),
-            current_status: None,
-            unknown_fields: vec![],
-        },
-    );
-    owner.metadata.namespace = Some("dns".into());
-    let prepared = edgion_common::dns::HttpDnsCandidate::from_link_sys(Arc::new(owner))
-        .unwrap()
-        .prepare();
-    assert!(!prepared.is_ready());
-    let annotations = BTreeMap::from([(
-        edgion_annotations::DNS_RESOLVER_REF.to_owned(),
-        "dns/resolver".to_owned(),
-    )]);
-    let mut ctx = context("default/backend");
-    let spec = compute_external_name_resolver_with(dns_candidate(&annotations).as_ref(), &ctx, None, |key| {
-        assert_eq!(key.name, "resolver");
-        Some(Arc::clone(&prepared))
-    });
-    assert!(matches!(&spec,ResolverSpec::HttpDns(value) if Arc::ptr_eq(value,&prepared)));
+async fn system_resolution_failure_and_missing_hostname_have_fixed_failures() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
-    let cache = DnsAnswerCache::new(4, 1);
+    let mut ctx = context("default/backend");
     publish(
         &coordinator,
-        service(Some("ExternalName"), Some("unused.invalid"), Some("per-request"), 80),
+        service(Some("ExternalName"), Some("unused.invalid"), Some("system"), 80),
         None,
     );
     let captured = capture(&coordinator, &chosen);
     let calls = Cell::new(0);
-    let result = build_external_name_peer_with_resolver(
+    let result = build_system_external_name_peer(
         &mut ctx,
         &input(&chosen),
         &captured,
         None,
-        ExternalNameResolution {
-            family: DnsLookupFamily::All,
-            spec: &spec,
-            dns_cache: &cache,
-            cache: false,
-            policy: DnsCachePolicy::new(Duration::ZERO),
-        },
-        vec_resolver(|spec, name, policy| {
+        DnsLookupFamily::All,
+        vec_resolver(|_, _, _policy| {
             calls.set(calls.get() + 1);
-            edgion_common::dns::resolve(spec, name, policy)
+            std::future::ready(Err(DnsError::Io("refused".into())))
         }),
     )
     .await;
@@ -967,22 +719,16 @@ async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_quer
     for hostname in [None, Some("")] {
         publish(
             &coordinator,
-            service(Some("ExternalName"), hostname, Some("gateway"), 80),
+            service(Some("ExternalName"), hostname, Some("system"), 80),
             None,
         );
         let captured = capture(&coordinator, &chosen);
-        let result = build_external_name_peer_with_resolver(
+        let result = build_system_external_name_peer(
             &mut ctx,
             &input(&chosen),
             &captured,
             None,
-            ExternalNameResolution {
-                family: DnsLookupFamily::All,
-                spec: &spec,
-                dns_cache: &cache,
-                cache: true,
-                policy: DnsCachePolicy::new(Duration::ZERO),
-            },
+            DnsLookupFamily::All,
             vec_resolver(|_, _, _policy| {
                 calls.set(calls.get() + 1);
                 std::future::ready(Err(DnsError::NoAddresses))
@@ -997,7 +743,7 @@ async fn prepared_httpdns_failure_and_missing_hostname_do_not_issue_network_quer
 #[tokio::test]
 async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_absence() {
     let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut source = (*service(Some("ExternalName"), Some("answers.test"), Some("per-request"), 443)).clone();
+    let mut source = (*service(Some("ExternalName"), Some("answers.test"), Some("system"), 443)).clone();
     source.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = Some("kubernetes.io/h2c".into());
     publish(&coordinator, Arc::new(source), None);
     let policy=Arc::new(serde_json::from_value::<edgion_resources::BackendTLSPolicy>(json!({
@@ -1008,8 +754,6 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
     let chosen = selected(None, 443, tls);
     let absent = selected(None, 443, BackendTlsPolicyLookup::Absent);
     let captured = capture(&coordinator, &chosen);
-    let cache = DnsAnswerCache::new(4, 1);
-    let spec = ResolverSpec::System;
     let mut ctx = context("default/backend");
     for (ips, expected) in [
         (
@@ -1023,18 +767,12 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
         (vec!["::ffff:169.254.169.254", "192.0.2.45"], None),
     ] {
         let calls = Cell::new(0);
-        let result = build_external_name_peer_with_resolver(
+        let result = build_system_external_name_peer(
             &mut ctx,
             &input(&chosen),
             &captured,
             None,
-            ExternalNameResolution {
-                family: DnsLookupFamily::All,
-                spec: &spec,
-                dns_cache: &cache,
-                cache: false,
-                policy: DnsCachePolicy::new(Duration::ZERO),
-            },
+            DnsLookupFamily::All,
             vec_resolver(|_, _, _policy| {
                 calls.set(calls.get() + 1);
                 std::future::ready(Ok(ips.iter().map(|ip| ip.parse().unwrap()).collect()))
@@ -1051,18 +789,12 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
             assert_eq!(peer._address.as_inet().unwrap().to_string(), "192.0.2.45:443");
         }
     }
-    let peer = build_external_name_peer_with_resolver(
+    let peer = build_system_external_name_peer(
         &mut ctx,
         &input(&absent),
         &captured,
         None,
-        ExternalNameResolution {
-            family: DnsLookupFamily::All,
-            spec: &spec,
-            dns_cache: &cache,
-            cache: false,
-            policy: DnsCachePolicy::new(Duration::ZERO),
-        },
+        DnsLookupFamily::All,
         vec_resolver(|_, _, _policy| std::future::ready(Ok(vec!["192.0.2.46".parse().unwrap()]))),
     )
     .await
@@ -1100,125 +832,6 @@ fn mismatched_runtime_membership_fails_capture_and_next_attempt_recovers() {
     ));
     available.runtime_cell.active.store(old);
     assert_eq!(external_name(&capture(&coordinator, &chosen)).unwrap(), "192.0.2.10");
-}
-
-fn dns_candidate(annotations: &BTreeMap<String, String>) -> Option<ResolverCandidate> {
-    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
-    source.metadata.annotations = Some(annotations.clone());
-    edgion_common::dns::resolver_select::candidate_from_dns_owner(
-        edgion_resources::resources::refs::dns_fields::DnsResolverOwner::Service(&source),
-    )
-}
-
-#[test]
-fn cold_captured_reference_selection_does_not_parse_or_clone_unselected_layers() {
-    let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
-    source
-        .metadata
-        .annotations
-        .as_mut()
-        .unwrap()
-        .insert(edgion_annotations::DNS_RESOLVER_REF.into(), " dns / resolver ".into());
-    publish(&coordinator, Arc::new(source), None);
-    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
-    let captured = capture(&coordinator, &chosen);
-    let mut ctx = context("default/backend");
-    ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
-        None,
-        "gateway".into(),
-        None,
-        None,
-        None,
-        None,
-        Vec::new(),
-        Some(ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(
-            vec!["192.0.2.2".into()],
-        ))),
-        None,
-    )));
-    let egc = ResolverCandidate::Servers(edgion_common::dns::StandardDnsServers::new(vec!["192.0.2.3".into()]));
-    let iterations = Cell::new(0usize);
-    let lookup = |_: &LinkSysKey| {
-        iterations.set(iterations.get() + 1);
-        None
-    };
-    assert!(matches!(
-        compute_external_name_resolver_with(captured.dns_resolver_candidate(), &ctx, Some(&egc), lookup),
-        ResolverSpec::System
-    ));
-    iterations.set(0);
-    let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
-        for _ in 0..32 {
-            std::hint::black_box(compute_external_name_resolver_with(
-                captured.dns_resolver_candidate(),
-                &ctx,
-                Some(&egc),
-                lookup,
-            ));
-        }
-    });
-    assert_eq!(iterations.get(), 32);
-    assert_eq!(stats.calls, 0);
-    assert_eq!(stats.requested_bytes, 0);
-}
-
-#[tokio::test]
-async fn cold_service_candidate_observes_live_httpdns_replacement_and_removal() {
-    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
-    let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
-    let store = crate::link_sys::runtime::store::get_global_link_sys_store();
-    let key = "r6b-dns/resolver".to_owned();
-    let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut source = (*service(Some("ExternalName"), Some("example.test"), Some("per-request"), 80)).clone();
-    source
-        .metadata
-        .annotations
-        .as_mut()
-        .unwrap()
-        .insert(edgion_annotations::DNS_RESOLVER_REF.into(), key.clone());
-    publish(&coordinator, Arc::new(source), None);
-    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
-    let captured = capture(&coordinator, &chosen);
-    let ctx = context("default/backend");
-    store.update(HashMap::new(), &std::collections::HashSet::from([key.clone()]));
-    assert!(matches!(
-        compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None),
-        ResolverSpec::System
-    ));
-    let mut previous = None;
-    for timeout in [100, 0, 100] {
-        let config=serde_json::from_value(json!({"urlTemplate":"http://unused.invalid/d?host={domain}","response":{"kind":"json","ipPath":"ips"},"fallback":{"type":"none"},"connection":{"timeoutMs":timeout}})).unwrap();
-        let mut owner = edgion_resources::LinkSys::new(
-            "resolver",
-            LinkSysSpec {
-                config: SystemConfig::HttpDns(config),
-                current_status: None,
-                unknown_fields: vec![],
-            },
-        );
-        owner.metadata.namespace = Some("r6b-dns".into());
-        store.update(HashMap::from([(key.clone(), owner)]), &std::collections::HashSet::new());
-        let ResolverSpec::HttpDns(prepared) =
-            compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None)
-        else {
-            panic!("live provider")
-        };
-        assert_eq!(prepared.is_ready(), timeout != 0);
-        if let Some(old) = previous {
-            assert!(!Arc::ptr_eq(&old, &prepared));
-        }
-        previous = Some(prepared);
-    }
-    store.update(HashMap::new(), &std::collections::HashSet::from([key]));
-    assert!(matches!(
-        compute_external_name_resolver(captured.dns_resolver_candidate(), &ctx, None),
-        ResolverSpec::System
-    ));
-    assert!(
-        previous.unwrap().is_ready(),
-        "already borrowed generation completes normally"
-    );
 }
 
 #[tokio::test]
@@ -1270,55 +883,36 @@ async fn ordinary_selection_borrows_request_inputs_after_sticky_check() {
 }
 
 #[tokio::test]
-async fn cached_external_name_lookups_rotate_and_per_request_lookups_keep_resolver_order() {
+async fn system_lookups_rotate_over_the_answer() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     publish(
         &coordinator,
-        service(Some("ExternalName"), Some("spread.test"), Some("gateway"), 80),
+        service(Some("ExternalName"), Some("spread.test"), Some("system"), 80),
         None,
     );
     let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
     let captured = capture(&coordinator, &chosen);
-    let spec = ResolverSpec::System;
     let answers = ["192.0.2.61", "192.0.2.62", "192.0.2.63"];
-    for cached in [true, false] {
-        let cache = DnsAnswerCache::new(4, 1);
-        let mut first_addresses = std::collections::BTreeSet::new();
-        for _ in 0..12 {
-            let mut ctx = context("default/backend");
-            let peer = build_external_name_peer_with_resolver(
-                &mut ctx,
-                &input(&chosen),
-                &captured,
-                None,
-                ExternalNameResolution {
-                    family: DnsLookupFamily::All,
-                    spec: &spec,
-                    dns_cache: &cache,
-                    cache: cached,
-                    policy: DnsCachePolicy::new(Duration::from_secs(5)),
-                },
-                vec_resolver(|_, _, _policy| {
-                    std::future::ready(Ok(answers.iter().map(|ip| ip.parse().unwrap()).collect()))
-                }),
-            )
-            .await
-            .unwrap();
-            first_addresses.insert(peer._address.as_inet().unwrap().ip().to_string());
-        }
-        if cached {
-            // The process-wide rotation advances on every cached lookup, so the
-            // dialed address spreads over the answer (other tests may advance
-            // it concurrently, which only adds spread).
-            assert!(first_addresses.len() > 1, "cached lookups rotate: {first_addresses:?}");
-        } else {
-            assert_eq!(
-                first_addresses.into_iter().collect::<Vec<_>>(),
-                vec!["192.0.2.61".to_string()],
-                "per-request lookups keep the resolver's order"
-            );
-        }
+    let mut first_addresses = std::collections::BTreeSet::new();
+    for _ in 0..12 {
+        let mut ctx = context("default/backend");
+        let peer = build_system_external_name_peer(
+            &mut ctx,
+            &input(&chosen),
+            &captured,
+            None,
+            DnsLookupFamily::All,
+            vec_resolver(|_, _, _policy| {
+                std::future::ready(Ok(answers.iter().map(|ip| ip.parse().unwrap()).collect()))
+            }),
+        )
+        .await
+        .unwrap();
+        first_addresses.insert(peer._address.as_inet().unwrap().ip().to_string());
     }
+    // The process-wide rotation advances on every attempt (other tests may
+    // advance it concurrently, which only adds spread).
+    assert!(first_addresses.len() > 1, "system lookups rotate: {first_addresses:?}");
 }
 
 #[test]
@@ -1331,4 +925,20 @@ fn address_rotation_spreads_the_first_address_and_tolerates_empty_sets() {
     assert!(empty.is_empty());
     let first = next_address_rotation();
     assert_ne!(next_address_rotation(), first, "each attempt advances the rotation");
+}
+
+#[test]
+fn system_retries_prefer_addresses_no_attempt_dialed() {
+    let ip = |value: &str| value.parse::<IpAddr>().unwrap();
+    let mut ips = vec![ip("192.0.2.1"), ip("192.0.2.2"), ip("192.0.2.3")];
+    prefer_undialed(&mut ips, &[ip("192.0.2.1")]);
+    assert_eq!(ips, vec![ip("192.0.2.2"), ip("192.0.2.3"), ip("192.0.2.1")]);
+    let mut all = vec![ip("192.0.2.1"), ip("192.0.2.2")];
+    prefer_undialed(&mut all, &[ip("192.0.2.2"), ip("192.0.2.1")]);
+    assert_eq!(all, vec![ip("192.0.2.1"), ip("192.0.2.2")], "all dialed: order kept");
+
+    let mut ctx = context("default/backend");
+    ctx.get_current_upstream_mut().unwrap().ip = Some("192.0.2.1".into());
+    ctx.push_upstream(None, None);
+    assert_eq!(previously_dialed_ips(&ctx), vec![ip("192.0.2.1")]);
 }

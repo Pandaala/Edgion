@@ -86,7 +86,7 @@ conf_center:
 | gRPC availability | After the Leader is ready | After any replica is ready |
 | `set_config_sync_server(Some)` | Leader + CachesReady | CachesReady (any replica) |
 | Status writeback to K8s | Leader (`leader_handle` guard) | Leader (`leader_handle` guard) |
-| Leader-only services (ACME, conf-sync CA rotation, DNS resolver, status reconciliation) | Leader (implicit; main flow starts only on leader) | Leader (explicit `start_leader_services()`) |
+| Leader-only services (ACME, conf-sync CA rotation, status reconciliation) | Leader (implicit; main flow starts only on leader) | Leader (explicit `start_leader_services()`) |
 | Federation client (`center.enabled`) | Leader | Leader — a follower keeps serving reads but does **not** federate |
 | Leadership-loss handling | Exit `run_main_flow`, clear everything, return to `wait_until_leader` | Only `stop_leader_services()`; keep serving gRPC |
 | Gateway connection target | `edgion-controller-leader` Service | `edgion-controller` (all-pods) Service |
@@ -160,15 +160,18 @@ start_leader_services():
 ├── start_acme_service(client)
 ├── start_conf_sync_rotation(client)
 ├── start_credential_manager_service(client, runtime, leader)
-├── start_dns_resolver_service(client)
 └── runtime.processor_registry.requeue_all()    // full-status reconciliation
 
 stop_leader_services():
 ├── stop_acme_service()
 ├── stop_conf_sync_rotation()
-├── stop_credential_manager_service()
-└── stop_dns_resolver_service()
+└── stop_credential_manager_service()
 ```
+
+The Controller DNS resolver is not a leader job: it publishes in-memory slices,
+so it runs in every process that runs the resource pipeline (all-serve followers
+included), started with the first `controller`-mode Service and stopped by
+`ControllerRuntime::reset`.
 
 ## Leader-Switchover Reconciliation (requeue_all)
 

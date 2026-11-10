@@ -191,6 +191,7 @@ fn test_pinned_endpoint() -> PinnedServiceEndpoint {
     PinnedServiceEndpoint {
         service_key: TEST_SERVICE_KEY.into(),
         section: ServiceSectionKey::Number(std::num::NonZeroU16::new(TEST_SERVICE_PORT).unwrap()),
+        per_session_hostname: None,
     }
 }
 
@@ -918,4 +919,45 @@ async fn endpoint_removal_candidate_does_not_retire_replacement_generation() {
         &replacement
     ));
     assert!(!replacement.lifecycle.lock().retired);
+}
+
+#[test]
+fn per_session_resolved_address_retires_when_the_system_mode_target_changes() {
+    use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
+    fn external(hostname: &str, mode: &str, port: u16) -> Arc<k8s_openapi::api::core::v1::Service> {
+        let mut service = (*test_service(&[port])).clone();
+        let spec = service.spec.as_mut().unwrap();
+        spec.type_ = Some("ExternalName".to_owned());
+        spec.external_name = Some(hostname.to_owned());
+        service.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            DNS_RESOLUTION_MODE.to_owned(),
+            mode.to_owned(),
+        )]));
+        Arc::new(service)
+    }
+    fn generation(
+        service: Arc<k8s_openapi::api::core::v1::Service>,
+    ) -> Arc<crate::backends::discovery::ServiceSelectorGeneration> {
+        let coordinator = crate::backends::discovery::ServiceDiscoveryCoordinator::new();
+        coordinator.replace_services(&HashMap::from([(TEST_SERVICE_KEY.to_owned(), service)]));
+        coordinator.load_generation()
+    }
+    let mut pinned = test_pinned_endpoint();
+    pinned.per_session_hostname = Some("udp.example.com".into());
+    let upstream: SocketAddr = "192.0.2.10:8080".parse().unwrap();
+
+    let same = generation(external("udp.example.com", "system", TEST_SERVICE_PORT));
+    assert!(
+        !pinned_endpoint_removed(&same, &pinned, upstream),
+        "no published slot is required for a per-session address"
+    );
+    for changed in [
+        external("other.example.com", "system", TEST_SERVICE_PORT),
+        external("udp.example.com", "gateway", TEST_SERVICE_PORT),
+        external("udp.example.com", "system", 9090),
+        test_service(&[TEST_SERVICE_PORT]),
+    ] {
+        assert!(pinned_endpoint_removed(&generation(changed), &pinned, upstream));
+    }
+    assert!(pinned_endpoint_removed(&test_generation(None, None), &pinned, upstream));
 }

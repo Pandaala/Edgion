@@ -6,6 +6,7 @@ fn external_name_family_publication_retires_disallowed_slots_and_preserves_clust
     let mut source = (*service(Some("service"), IntOrString::Int(8080))).clone();
     source.spec.as_mut().unwrap().type_ = Some("ExternalName".into());
     source.spec.as_mut().unwrap().external_name = Some("backend.test".into());
+    let controller_mode = (DNS_RESOLUTION_MODE.to_string(), "controller".to_string());
     let v4 = slice("v4", Some("v4"), true);
     let mut v6 = (*slice("v6", Some("v6"), true)).clone();
     v6.address_type = "IPv6".into();
@@ -22,8 +23,11 @@ fn external_name_family_publication_retires_disallowed_slots_and_preserves_clust
         (Some(""), 0),
         (Some("typo"), 0),
     ] {
-        source.metadata.annotations =
-            annotation.map(|value| BTreeMap::from([(DNS_LOOKUP_FAMILY.into(), value.into())]));
+        let mut annotations = BTreeMap::from([controller_mode.clone()]);
+        if let Some(value) = annotation {
+            annotations.insert(DNS_LOOKUP_FAMILY.into(), value.into());
+        }
+        source.metadata.annotations = Some(annotations);
         coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(source.clone()))]));
         let generation = coordinator.load_generation();
         let published = generation.available("default/backend").unwrap();
@@ -764,6 +768,7 @@ fn external_name_port_edit_requires_repaired_slice_name_and_protocol() {
     for field in ["name", "protocol"] {
         let coordinator = ServiceDiscoveryCoordinator::new();
         let mut source = (*service(Some("service-uid"), IntOrString::Int(8080))).clone();
+        source.metadata.annotations = Some(BTreeMap::from([(DNS_RESOLUTION_MODE.into(), "controller".into())]));
         let spec = source.spec.as_mut().unwrap();
         spec.type_ = Some("ExternalName".into());
         spec.external_name = Some("backend.example.com".into());
@@ -1695,71 +1700,140 @@ fn outlier_policy_clear_waits_for_inflight_completion_then_resets_eligibility() 
     assert!(!store.has_runtime_identity(&identity));
 }
 
+fn external_name_service(mode: Option<&str>) -> Arc<Service> {
+    let mut source = (*service(Some("uid-a"), IntOrString::Int(8080))).clone();
+    source.spec.as_mut().unwrap().type_ = Some("ExternalName".into());
+    source.spec.as_mut().unwrap().external_name = Some("backend.test".into());
+    source.metadata.annotations = mode.map(|mode| BTreeMap::from([(DNS_RESOLUTION_MODE.into(), mode.into())]));
+    Arc::new(source)
+}
+
+fn gateway_dns_slices(addresses: &[&str]) -> Vec<EndpointSlice> {
+    let ports = external_name_service(None)
+        .spec
+        .as_ref()
+        .unwrap()
+        .ports
+        .clone()
+        .unwrap();
+    let addresses: Vec<std::net::IpAddr> = addresses.iter().map(|addr| addr.parse().unwrap()).collect();
+    edgion_common::dns::endpoint_slices::build_dns_endpoint_slices(
+        "default",
+        "backend",
+        &ports,
+        &addresses,
+        edgion_common::dns::endpoint_slices::DnsSliceOrigin::Gateway,
+    )
+}
+
+fn published_addresses(coordinator: &ServiceDiscoveryCoordinator) -> Vec<String> {
+    let generation = coordinator.load_generation();
+    let Some(published) = generation.available("default/backend") else {
+        return Vec::new();
+    };
+    let Ok(section) = published.resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap())) else {
+        return Vec::new();
+    };
+    let mut addresses: Vec<String> = section
+        .all_slots
+        .iter()
+        .map(|slot| slot.backend.addr.as_inet().unwrap().ip().to_string())
+        .collect();
+    addresses.sort();
+    addresses
+}
+
 #[test]
-fn dns_candidate_is_cold_and_published_with_its_actual_service_generation() {
-    use edgion_common::dns::resolver_select::{LinkSysKey, ResolverCandidate};
+fn gateway_dns_slices_feed_only_non_controller_external_names() {
     let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut source = (*service(Some("uid-a"), IntOrString::Int(80))).clone();
-    source.metadata.annotations = Some(BTreeMap::from([(DNS_RESOLVER_REF.into(), " dns / first ".into())]));
-    let source = Arc::new(source);
-    coordinator.replace_services(&HashMap::from([("default/backend".into(), source.clone())]));
-    let old = coordinator
-        .load_generation()
-        .available("default/backend")
-        .unwrap()
-        .clone();
+    let mut conf_sync = (*owned_slice("conf-sync", "conf-sync", "backend", "10.9.9.9")).clone();
+    conf_sync.ports = Some(slice_ports(&[("http", 80)]));
+    coordinator.replace_endpoint_slices(&HashMap::from([("default/conf-sync".into(), Arc::new(conf_sync))]));
+    coordinator.replace_gateway_dns_slices("default/backend", gateway_dns_slices(&["10.0.0.1", "10.0.0.2"]));
+
+    for (mode, expected) in [
+        (None, vec!["10.0.0.1", "10.0.0.2"]),
+        (Some("gateway"), vec!["10.0.0.1", "10.0.0.2"]),
+        (Some("controller"), vec!["10.9.9.9"]),
+        (Some("typo"), vec!["10.0.0.1", "10.0.0.2"]),
+    ] {
+        coordinator.replace_services(&HashMap::from([(
+            "default/backend".into(),
+            external_name_service(mode),
+        )]));
+        assert_eq!(published_addresses(&coordinator), expected, "{mode:?}");
+    }
+
+    let cluster_ip = (*service(Some("uid-a"), IntOrString::Int(80))).clone();
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(cluster_ip))]));
     assert_eq!(
-        old.dns_resolver_candidate,
-        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
-            namespace: "dns".into(),
-            name: "first".into()
-        }))
+        published_addresses(&coordinator),
+        vec!["10.9.9.9"],
+        "ordinary Services never read Gateway-local slices"
     );
-    coordinator.replace_services(&HashMap::from([("default/backend".into(), source.clone())]));
-    assert!(Arc::ptr_eq(
-        &old,
-        coordinator.load_generation().available("default/backend").unwrap()
-    ));
-    let mut updated = (*source).clone();
-    updated
-        .metadata
-        .annotations
-        .as_mut()
-        .unwrap()
-        .insert(DNS_RESOLVER_REF.into(), "dns/second".into());
-    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(updated.clone()))]));
-    let new = coordinator
-        .load_generation()
-        .available("default/backend")
-        .unwrap()
-        .clone();
-    assert!(!Arc::ptr_eq(&old, &new));
+}
+
+#[test]
+fn conf_sync_relist_and_updates_cannot_touch_gateway_dns_slices() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".into(),
+        external_name_service(None),
+    )]));
+    coordinator.replace_gateway_dns_slices("default/backend", gateway_dns_slices(&["10.0.0.1"]));
+    coordinator.replace_endpoint_slices(&HashMap::new());
+    assert_eq!(published_addresses(&coordinator), vec!["10.0.0.1"]);
+
+    let forged_key = "gateway-dns:default/backend-edgion-gw-dns".to_string();
+    coordinator.update_endpoint_slices(HashMap::new(), HashMap::new(), HashSet::from([forged_key.clone()]));
+    coordinator.replace_endpoint_slices(&HashMap::from([(
+        forged_key,
+        owned_slice("forged", "forged", "backend", "10.6.6.6"),
+    )]));
+    assert_eq!(published_addresses(&coordinator), vec!["10.0.0.1"]);
     assert_eq!(
-        new.dns_resolver_candidate,
-        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
-            namespace: "dns".into(),
-            name: "second".into()
-        }))
+        coordinator.gateway_dns_service_keys(),
+        BTreeSet::from(["default/backend".to_string()])
     );
-    assert_eq!(
-        old.dns_resolver_candidate,
-        Some(ResolverCandidate::HttpDnsRef(LinkSysKey {
-            namespace: "dns".into(),
-            name: "first".into()
-        }))
-    );
-    coordinator.replace_services(&HashMap::new());
-    assert!(coordinator.load_generation().available("default/backend").is_none());
-    updated.metadata.uid = Some("uid-b".into());
-    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(updated))]));
-    assert_eq!(
-        coordinator
-            .load_generation()
-            .available("default/backend")
-            .unwrap()
-            .dns_resolver_candidate,
-        new.dns_resolver_candidate
-    );
+}
+
+#[test]
+fn identical_gateway_dns_republish_keeps_the_generation() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".into(),
+        external_name_service(None),
+    )]));
+    coordinator.replace_gateway_dns_slices("default/backend", gateway_dns_slices(&["10.0.0.1"]));
+    let before = coordinator.load_generation();
+    coordinator.replace_gateway_dns_slices("default/backend", gateway_dns_slices(&["10.0.0.1"]));
+    assert!(Arc::ptr_eq(&before, &coordinator.load_generation()));
+
+    coordinator.replace_gateway_dns_slices("default/backend", gateway_dns_slices(&["10.0.0.1", "10.0.0.3"]));
+    assert_eq!(published_addresses(&coordinator), vec!["10.0.0.1", "10.0.0.3"]);
+
+    coordinator.replace_gateway_dns_slices("default/backend", Vec::new());
+    assert!(published_addresses(&coordinator).is_empty());
+    assert!(coordinator.gateway_dns_service_keys().is_empty());
+}
+
+#[test]
+fn dns_resolution_mode_is_published_with_the_service_generation() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    for (mode, expected) in [
+        (None, Ok(None)),
+        (Some("system"), Ok(Some(DnsResolutionMode::System))),
+        (Some("controller"), Ok(Some(DnsResolutionMode::Controller))),
+        (Some("per-request"), Err(())),
+    ] {
+        coordinator.replace_services(&HashMap::from([(
+            "default/backend".into(),
+            external_name_service(mode),
+        )]));
+        let generation = coordinator.load_generation();
+        let published = generation.available("default/backend").unwrap();
+        assert_eq!(published.dns_resolution_mode.map_err(|_| ()), expected, "{mode:?}");
+    }
 }
 
 #[test]

@@ -43,9 +43,9 @@ pub fn get_no_sync_kinds() -> Vec<String> {
         })
 }
 
-/// Get the control-plane DNS resolver configuration (background loop).
-/// Returns the default (enabled, 15s, no default resolver) when config is
-/// uninitialized.
+/// Get the Controller DNS resolver configuration, used only for Services
+/// annotated `edgion.io/dns-resolution-mode: controller`. Returns the default
+/// (15s, no default resolver) when config is uninitialized.
 pub fn dns_resolver_config() -> DnsResolverConfig {
     CONTROLLER_CONFIG
         .get()
@@ -190,9 +190,8 @@ pub struct EdgionControllerConfig {
 pub struct DnsResolverConfig {
     /// Backend address family; loaded at process startup.
     pub lookup_family: DnsLookupFamily,
-    /// Control-plane resolution on/off.
-    pub enabled: bool,
-    /// Background refresh interval (duration string, e.g. "15s").
+    /// Fixed refresh interval for `controller`-mode Services (duration string,
+    /// e.g. "15s"). Record TTLs are not honored.
     pub refresh_interval: String,
     /// Default resolver: httpdns LinkSys reference `"namespace/name"`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,7 +205,6 @@ impl Default for DnsResolverConfig {
     fn default() -> Self {
         Self {
             lookup_family: DnsLookupFamily::default(),
-            enabled: true,
             refresh_interval: "15s".to_string(),
             link_sys_ref: None,
             servers: Vec::new(),

@@ -35,6 +35,66 @@ publish a fresh membership. Health probes and passive-outlier attempt results ar
 when both that membership and the captured policy generation are still current.
 
 
+## ExternalName resolution modes
+
+An `ExternalName` Service is resolved in one of three modes, selected by the
+Service annotation `edgion.io/dns-resolution-mode`, else by the global
+`EdgionGatewayConfig.spec.dnsResolver.endpointTable` switch (`true`, the default,
+selects `gateway`; `false` selects `system`). `controller` is only selected per
+Service. An unknown annotation value fails closed (`BackendDnsResolutionFailed`).
+No mode falls back to another.
+
+| Mode | Who resolves | Endpoints | Protocols |
+|---|---|---|---|
+| `gateway` (default) | Gateway endpoint table, in the background | Gateway-local synthetic EndpointSlices: ordinary LB, health check, outlier ejection, sticky sessions | HTTP, gRPC, TCP, UDP, TLS |
+| `system` | OS resolver on every request attempt / connection / UDP session | One address per attempt: OS order, rotated start; no pool, no health state | HTTP, gRPC, TCP, UDP, TLS |
+| `controller` | Controller, fixed `dns_resolver.refresh_interval` | Controller-published in-memory EndpointSlices relayed by conf_sync | HTTP, gRPC, TCP, UDP, TLS |
+
+**Gateway endpoint table** (`edgion-gateway/src/backends/discovery/dns_table/`).
+One entry per distinct hostname + resolver identity + address family; Services
+sharing a target share one query. Entries are created and released only by
+Service / EGC / LinkSys events, never by requests, and an entry is deleted with
+its last referring Service. A Service relist is a mark-and-sweep, and a periodic
+pass withdraws any Gateway-local slice the table does not own. `maxEntries`
+(default 4096) bounds the table; new targets beyond it fail closed and live ones
+are never evicted. Answers are normalized (IPv4-mapped folded, link-local
+dropped, deduplicated, IPv4 then IPv6 ascending); an unchanged answer touches
+nothing, so health and outlier state survive refreshes. Refresh is
+`clamp(ttl * ttlFactor, minRefreshSeconds, maxRefreshSeconds)` (TTL capped at the
+RFC 2181 maximum first), `fallbackRefreshSeconds` without a TTL, or a fixed
+`refreshIntervalSeconds` (exempt from the bounds, 2 s floor), each jittered ±10 %
+and re-clamped. A transient failure keeps the last good set up to
+`maxStaleSeconds`; an authoritative empty answer withdraws at once. All
+publications of one table mutation reach the coordinator in one transaction.
+HTTP attempts and TCP/TLS connections wait at most 2 s for a pending target's
+first answer (lock-free pending map; admission is checked before an L4 wait),
+then select from whatever exists (none: 503); the UDP datagram path never waits. Resolver precedence is Service annotation -> EGC default ->
+OS resolver; family precedence is Service annotation -> EGC -> `ipv4Only`. The
+Gateway resource annotations do not apply to `ExternalName`. Admin view:
+`GET /api/v1/dns/endpoint-table`; counts also appear in `store-stats`.
+
+**Coordinator partition.** Gateway-local slices live under their own key prefix:
+a conf_sync relist can neither remove nor resurrect them. An `ExternalName`
+Service in `controller` mode reads conf_sync slices only; any other
+`ExternalName` Service reads Gateway-local slices only; every other Service reads
+conf_sync slices only.
+
+**Controller mode** (`edgion-controller/src/services/dns_resolver/`). Only
+explicitly annotated Services are resolved, through Service annotation ->
+Controller `dns_resolver` default -> OS resolver. Answers become in-memory
+synthetic EndpointSlices that enter the EndpointSlice processor through
+`ProcessorHandler::synthetic_object` (a sourced object with the same key wins)
+and reach Gateways over conf_sync. Nothing is written to the apiserver, so it
+works in Kubernetes, file-system and etcd modes, in every process that runs the
+resource pipeline. The task belongs to `ControllerRuntime`: started with the
+first target (restarted after a panic), aborted and cleared by `reset()`; an
+epoch fences writes of an aborting task. Its first pass waits until every
+processor is registered and ready, so httpdns LinkSys and ReferenceGrant state
+are known. A hostname or resolver change never inherits the old answer;
+transient failures keep the last good answer for at most 300 s (the OS resolver
+reports NXDOMAIN as transient). Endpoints exist only in Controller memory: after a
+Controller restart or leadership change they return with the first answer.
+
 ## Native ExternalName attempts
 
 HTTP/gRPC use an ordinary permitted `Service` reference (omitted/empty group,
@@ -43,27 +103,29 @@ omitted/exact Service kind, required declared port). The captured actual Service
 `core` do not grant a native target. `CapturedServiceSelection` keeps the Service
 source Arc, checked section and membership-matched runtime snapshot from one
 joint discovery generation. Type, hostname, annotations, Service port, protocol
-and appProtocol therefore remain coherent through a DNS await. A later peer
-attempt recaptures geometry; request-captured EBTP/TLS policy, including absence,
-keeps its existing lifetime. Endpoint health/outlier atomics remain live.
+and appProtocol therefore remain coherent through a `system`-mode DNS await. A
+later peer attempt recaptures geometry; request-captured EBTP/TLS policy,
+including absence, keeps its existing lifetime. Endpoint health/outlier atomics
+remain live.
 
-Controller mode uses the captured section when it has ready slots. Health or
-outlier rejection does not turn readiness into DNS fallback. Without ready slots
-it bridges through cached DNS; Gateway mode always uses cached DNS and per-request
-mode resolves without that cache. Resolver precedence remains Service -> Gateway
--> EGC -> system through Common `ResolverSpec`, including prepared HTTPDNS. The
-cache key remains Service key + hostname + resolver fingerprint. Self-resolving
-DNS does not consume a sticky EndpointSlice target. Ordinary selection and sticky
-revalidation use the same captured section/runtime.
+`gateway` and `controller` modes use ordinary section selection (ready slots,
+health, outlier, LB policy, sticky revalidation). `system` mode does not consume
+a sticky EndpointSlice target; a retry prefers an address no earlier attempt
+dialed. L4 runs the same decision in `backends::prepare_l4_service` (one
+projection load, reused for selection). On TCP/TLS a `system`-mode lookup is
+uncached; a DNS failure ends a TLS connection instead of retrying. On UDP the
+receive loop must not block, so `system` mode resolves through the shared
+upstream answer cache (hostname-keyed, single-flight) waiting at most 250 ms; a
+session retires when its Service stops being a `system`-mode ExternalName of the
+same hostname, its port disappears, or it idles out.
 
 An unavailable Service returns `BackendServiceNotFound` (500); a missing live
 section returns `BackendPortResolutionFailed` (503), and an absent/empty external
 hostname returns `BackendExternalNameNotFound` (503) without querying DNS. DNS
 results pass canonical address safety, including mapped IPv6, before the shared
 TLS peer builder. Without BackendTLSPolicy, even port 443 remains plaintext.
-TCP/UDP/TLS can consume controller-published slices but gain no asynchronous
-Gateway DNS fallback. Custom outbound reference modes and annotation reference
-authority are separate contracts.
+Custom outbound reference modes and annotation reference authority are separate
+contracts.
 
 ## Health Checks, Circuit Breaking, and Load Balancing
 
@@ -85,31 +147,25 @@ annotation fails DNS dispatch rather than inheriting or widening the policy.
 `all` does not enable Happy Eyeballs or connection racing. IPv6 requires a working
 upstream IPv6 network.
 
-Controller publication uses the ExternalName Service annotation
-`edgion.io/dns-lookup-family`, then Controller `dns_resolver.lookup_family`, then
-`ipv4Only`. The Controller setting takes effect after restarting the Controller.
-Gateway self-resolution uses Service annotation, Gateway annotation, selected global
-`EdgionGatewayConfig.spec.dnsResolver.lookupFamily`, then `ipv4Only`, in that order.
-Native AI external hostnames use Gateway then EGC policy. Resource updates are live.
-Resolver selection and family inheritance are independent: setting only the family
-does not replace a chosen DNS server or HTTPDNS provider.
-
-Controller EndpointSlices are shared. Gateway/EGC defaults affect self-resolution
-and the empty-slice bridge, not already-published Controller endpoints. Set the
-Service annotation to pin both planes; its explicit family also gates stale
-ExternalName slice membership, including L4. Ordinary Service slices, literal
-non-DNS backends, listeners, DNS-server transport and HTTPDNS bootstrap are outside
-this policy. TCP/UDP/TLS still require published EndpointSlices.
+`controller` mode uses the Service annotation `edgion.io/dns-lookup-family`, then
+Controller `dns_resolver.lookup_family` (read at Controller startup), then
+`ipv4Only`. `gateway` and `system` modes use the Service annotation, then
+`EdgionGatewayConfig.spec.dnsResolver.lookupFamily`, then `ipv4Only`; the family is
+part of the endpoint-table key, so a policy change re-keys the target. AI
+external hostnames and external jumps use Gateway annotation then EGC policy.
+Resolver selection and family inheritance are independent: setting only the
+family does not replace a chosen DNS server or HTTPDNS provider.
 
 ```yaml
-# ExternalName Service or Gateway metadata
+# ExternalName Service metadata
 metadata:
   annotations:
     edgion.io/dns-lookup-family: ipv6Only
 ```
 
-Successful complete nonempty Controller answers replace the owned family set,
-including deleting an obsolete IPv4/IPv6 sibling. Same-policy resolution errors
-retain allowed last-good addresses; narrowing the policy withdraws forbidden
-families even if the next query fails. Gateway address-cache keys include the
-family, so live policy changes cannot read the old policy's cached answer.
+In `controller` mode a family change republishes the last good answer filtered
+by the new policy at once, then re-resolves. In `gateway` mode it re-keys the
+target: the old slices are withdrawn and the new target's first answer publishes.
+Ordinary Service slices, literal non-DNS
+backends, listeners, DNS-server transport and HTTPDNS bootstrap are outside this
+policy.

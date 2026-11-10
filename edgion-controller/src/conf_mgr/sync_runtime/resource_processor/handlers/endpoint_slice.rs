@@ -3,7 +3,8 @@
 //! Handles EndpointSlice resources. When an EndpointSlice changes, requeues
 //! all registered `service_ref_mgr` dependents (Routes, BackendTLSPolicy) that
 //! track the parent Service, and relays the updated EndpointSlice to the gateway
-//! via conf_sync so the gateway can resolve endpoints itself.
+//! via conf_sync so the gateway can resolve endpoints itself. Synthetic slices of
+//! `controller`-mode ExternalName Services enter through `synthetic_object`.
 
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
@@ -63,6 +64,10 @@ impl Default for EndpointSliceHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EndpointSlice> for EndpointSliceHandler {
+    fn synthetic_object(&self, key: &str, runtime: &crate::conf_mgr::ControllerRuntime) -> Option<EndpointSlice> {
+        runtime.dns_synthetic_slices.get(key)
+    }
+
     async fn parse(&self, eps: EndpointSlice, _ctx: &HandlerContext) -> ProcessResult<EndpointSlice> {
         ProcessResult::Continue(eps)
     }

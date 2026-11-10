@@ -19,10 +19,11 @@ impl ConfHandler<Service> for ServiceHandler {
         tracing::info!(component = "service_store", cnt = data.len(), "full set");
 
         // Per-service policy config is owned by EdgionBackendTrafficPolicy;
-        // membership and runtime cells are owned by the coordinator. Cached DNS
-        // answers carry no Service identity (hostname, resolver and family
-        // describe the answer), so a removed Service leaves nothing to reclaim.
+        // membership and runtime cells are owned by the coordinator. The DNS
+        // endpoint table follows the same Services (mark-and-sweep on relist),
+        // so a removed Service never leaves an entry or a local slice behind.
         self.coordinator.replace_services(data);
+        crate::backends::dns_endpoint_table().on_services_full(data);
     }
 
     fn partial_update(
@@ -38,6 +39,7 @@ impl ConfHandler<Service> for ServiceHandler {
             rm = remove.len(),
             "partial update"
         );
+        crate::backends::dns_endpoint_table().on_services_partial(&add, &update, &remove);
         self.coordinator.update_services(add, update, remove);
     }
 }

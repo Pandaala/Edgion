@@ -4,7 +4,7 @@
 // Service's `edgion.io/dns-resolver-ref` annotation at runtime and asserts the
 // gateway picks up the change without a restart:
 //   - failing: resolver-ref → a DOWN httpdns LinkSys with `fallback: none`, so
-//     per-request resolution fails and the backend returns 5xx.
+//     the endpoint table publishes no endpoints and the backend returns 5xx.
 //   - working: resolver-ref → a live httpdns LinkSys returning the backend Pod IP, so the
 //     backend resolves and serves 200.
 //
@@ -145,9 +145,17 @@ impl TestSuite for DnsFlapBoundedTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let result = async {
+                        // The endpoint table resolves in the background and retries a
+                        // failing target with back-off; wait for a real lookup through
+                        // the capped client, then the request must still fail.
                         let before = live_resolver_hits(&ctx).await?;
+                        let deadline = Instant::now() + Duration::from_secs(15);
+                        let mut after = before;
+                        while after <= before && Instant::now() < deadline {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            after = live_resolver_hits(&ctx).await?;
+                        }
                         let status = flap_status(&ctx).await?;
-                        let after = live_resolver_hits(&ctx).await?;
                         if status < 500 || after <= before {
                             return Err(format!(
                                 "expected a capped response failure after a real lookup; status={status}, hits={before}->{after}"
@@ -167,20 +175,19 @@ impl TestSuite for DnsFlapBoundedTestSuite {
 }
 
 impl DnsFlapWorkingTestSuite {
-    /// After the resolver-ref flips to the live httpdns LinkSys, a request must
-    /// route through that endpoint and reach the backend. The scenario owns a
-    /// dedicated GatewayClass/EGC, so shared-suite policy cannot mask failures.
+    /// After the resolver-ref flips to the live httpdns LinkSys, requests reach
+    /// the backend through endpoints resolved by that endpoint. The preceding
+    /// failing phase proves a 200 cannot come from the old resolver; requests
+    /// themselves never query DNS (the table resolves in the background). The
+    /// scenario owns a dedicated GatewayClass/EGC, so shared-suite policy cannot
+    /// mask failures.
     fn test_resolver_switched_live() -> TestCase {
         TestCase::new(
             "resolver_switched_live",
-            "after hot-reloading resolver-ref, requests route through the live httpdns endpoint",
+            "after hot-reloading resolver-ref, requests reach endpoints resolved by the live httpdns endpoint",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let before = match live_resolver_hits(&ctx).await {
-                        Ok(n) => n,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
                     match flap_status(&ctx).await {
                         Ok(200) => {}
                         Ok(status) => {
@@ -188,20 +195,15 @@ impl DnsFlapWorkingTestSuite {
                         }
                         Err(error) => return TestResult::failed(start.elapsed(), error),
                     }
-                    let after = match live_resolver_hits(&ctx).await {
-                        Ok(n) => n,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
-                    };
-                    if after > before {
-                        TestResult::passed_with_message(
+                    match live_resolver_hits(&ctx).await {
+                        Ok(hits) if hits > 0 => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("resolver-ref hot-reload routed to the live httpdns endpoint (hits {before} -> {after})"),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("live httpdns endpoint not hit after hot-reload (hits stayed at {before})"),
-                        )
+                            format!("resolver-ref hot-reload resolved through the live httpdns endpoint (hits {hits})"),
+                        ),
+                        Ok(_) => {
+                            TestResult::failed(start.elapsed(), "200 without any live httpdns resolution".to_string())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
             },
@@ -243,7 +245,7 @@ impl TestSuite for DnsFlapFamilyTestSuite {
         let ipv6 = self.0;
         vec![TestCase::new(
             "family_and_cache",
-            "the selected family reaches its actual listener and reuses its DNS cache",
+            "the selected family reaches its actual listener and requests trigger no DNS query",
             move |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -276,7 +278,7 @@ impl TestSuite for DnsFlapFamilyTestSuite {
                         request().await?;
                         let after = live_resolver_hits(&ctx).await?;
                         if after != hits {
-                            return Err(format!("second request missed DNS cache: {hits} -> {after}"));
+                            return Err(format!("a request triggered a DNS query: {hits} -> {after}"));
                         }
                         Ok::<(), String>(())
                     }

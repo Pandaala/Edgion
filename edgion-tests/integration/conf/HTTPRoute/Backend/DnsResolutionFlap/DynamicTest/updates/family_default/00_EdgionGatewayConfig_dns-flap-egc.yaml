@@ -4,6 +4,6 @@ metadata:
   name: dns-flap-egc
 spec:
   dnsResolver:
-    cacheTtl: 5m
+    fallbackRefreshSeconds: 300
   securityProtect:
     allowLoopbackUpstream: true

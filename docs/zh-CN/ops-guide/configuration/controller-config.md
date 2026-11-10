@@ -564,14 +564,23 @@ gateway:
 - [工作目录行为](../../dev-guide/work-directory.md)
 - [联邦 RBAC](../federation-rbac.md)
 
-## ExternalName DNS 地址族默认值
+## ExternalName DNS 解析（`controller` 模式）
 
 ```yaml
 dns_resolver:
+  refresh_interval: 15s          # 固定间隔，不使用记录 TTL
   lookup_family: ipv4Only
+  # servers: ["192.0.2.53"]      # 默认解析器；或者：
+  # link_sys_ref: dns/corporate-httpdns
 ```
 
-可选值为 `ipv4Only`（默认）、`ipv6Only`、`all`。该进程配置控制 Controller 发布的
-ExternalName EndpointSlice，修改后需要重启。Service 的 `edgion.io/dns-lookup-family`
-注解可热更新覆盖；Gateway/EGC 默认值不改变 Controller 发布策略。收窄策略时，即使
-DNS 解析失败也会撤下禁止的地址族。`all` 不启用连接竞速，IPv6 需要可用的上游网络。
+这些设置只作用于带 `edgion.io/dns-resolution-mode: controller` 注解的 ExternalName Service，
+其他 ExternalName Service 由 Gateway 解析；没有开关项。Controller 每隔 `refresh_interval`
+解析一次，把地址作为内存中的 EndpointSlice 经配置同步下发给 Gateway，不写入 Kubernetes
+API，因此文件系统和 etcd 配置中心同样可用。结果不变时不发布任何更新；解析失败保留上次的
+地址，权威空结果会撤下地址。
+
+`lookup_family` 可选 `ipv4Only`（默认）、`ipv6Only`、`all`，修改后需要重启 Controller。
+Service 的 `edgion.io/dns-lookup-family` 注解可热更新覆盖；收窄地址族时会立即用过滤后的
+上次结果重新发布。Gateway/EGC 默认值不改变 Controller 发布。见
+[ExternalName 解析](../../user-guide/http-route/backends/service-ref.md#externalname-解析)。

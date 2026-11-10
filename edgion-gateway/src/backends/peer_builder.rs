@@ -247,8 +247,8 @@ pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: 
 /// Pick the first resolved IP that passes [`validate_backend_addr`] (SSRF), as a
 /// `SocketAddr::Inet` bound to `port`.
 ///
-/// Self-resolution (an `ExternalName` DNS/httpdns lookup) can return several
-/// addresses; routing to any that fails the SSRF gate is forbidden, so this
+/// A per-request lookup (`system`-mode `ExternalName`, L4 `system` mode) can
+/// return several addresses; routing to any that fails the SSRF gate is forbidden, so this
 /// skips the unsafe ones and returns the first safe address. If none are safe,
 /// it returns the rejection status of the last candidate (a stable
 /// loopback/link-local status) so the caller can record it; an empty input

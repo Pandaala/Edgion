@@ -92,8 +92,12 @@ fn response_serializes_with_expected_keys() {
         },
         watch_objects: WatchObjectsStats { count: 19 },
         dns_answer_cache: edgion_common::dns::DnsAnswerCacheStats::default(),
+        dns_resolver_targets: 0,
+        dns_synthetic_slices: 0,
     };
     let v = serde_json::to_value(&resp).unwrap();
+    assert_eq!(v["dns_resolver_targets"], 0);
+    assert_eq!(v["dns_synthetic_slices"], 0);
     // Residue detection exempts `entries` and requires `in_flight` to reach zero.
     assert_eq!(v["dns_answer_cache"]["entries"], 0);
     assert_eq!(v["dns_answer_cache"]["in_flight"], 0);

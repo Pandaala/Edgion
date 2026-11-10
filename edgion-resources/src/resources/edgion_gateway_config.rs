@@ -106,10 +106,12 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbound_tls: Option<crate::resources::common::OutboundTlsConfig>,
 
-    /// Data-plane default DNS resolver for `ServiceExternalName` backends.
-    /// Overridden per-Gateway (annotation) and per-Service (annotation); this is
-    /// the gateway-wide fallback below those. Control-plane resolution does NOT
-    /// use this (it uses Service annotation → Controller YAML default).
+    /// Data-plane DNS defaults: the `ExternalName` endpoint table (global mode
+    /// switch, refresh policy, bounds) and the default resolver. For
+    /// `ExternalName` Services the resolver precedence is Service annotation ->
+    /// this default -> OS resolver; AI endpoints and external jumps also honor a
+    /// Gateway annotation layer. Controller-mode resolution does NOT use this (it
+    /// uses Service annotation -> Controller YAML default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns_resolver: Option<DnsResolverConfig>,
 }
@@ -147,12 +149,183 @@ pub struct DnsResolverConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub servers: Option<Vec<String>>,
 
-    /// Freshness of data-plane DNS answers whose resolver reports no record TTL
-    /// (GEP-2257 duration, default "5s", capped at 300 s; "0s" disables caching). Reported record
-    /// TTLs are honored within the shared answer cache's 5-300 s bounds.
-    #[serde(default = "default_dns_cache_ttl")]
-    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-    pub cache_ttl: String,
+    /// Global default for `ExternalName` Services without an
+    /// `edgion.io/dns-resolution-mode` annotation: `true` (default) resolves
+    /// through the Gateway-local endpoint table (`gateway` mode); `false`
+    /// resolves through the OS resolver per request / connection (`system` mode).
+    #[serde(default = "default_true")]
+    pub endpoint_table: bool,
+
+    /// Endpoint-table refresh interval as a fraction of the reported record
+    /// TTL, in [0.01, 1]. Non-finite values are rejected at parse time.
+    #[serde(default = "default_dns_ttl_factor", deserialize_with = "deserialize_finite_f64")]
+    #[schemars(range(min = 0.01, max = 1.0))]
+    pub ttl_factor: f64,
+
+    /// Lower bound of the computed refresh interval (integer seconds; RFC 2181
+    /// TTL parity). Default 5, at least 2.
+    #[serde(default = "default_dns_min_refresh_seconds")]
+    #[schemars(range(min = 2, max = 2147483647))]
+    pub min_refresh_seconds: u32,
+
+    /// Upper bound of the computed refresh interval (integer seconds). Default
+    /// 300, at most 2147483647 (the largest DNS TTL, RFC 2181 section 8).
+    #[serde(default = "default_dns_max_refresh_seconds")]
+    #[schemars(range(min = 2, max = 2147483647))]
+    pub max_refresh_seconds: u32,
+
+    /// Refresh interval when the resolver reports no record TTL (System
+    /// resolver, TTL-less HTTPDNS); must lie within [min, max] when set. Unset:
+    /// 5 clamped into [min, max]. Also the fallback answer freshness of the
+    /// request-driven cache used by AI endpoints and external jumps (that cache
+    /// caps it at 300 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 2, max = 2147483647))]
+    pub fallback_refresh_seconds: Option<u32>,
+
+    /// Fixed refresh interval; when set, record TTLs are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 2, max = 2147483647))]
+    pub refresh_interval_seconds: Option<u32>,
+
+    /// How long the last good address set is kept while the resolver keeps
+    /// failing transiently. An authoritative empty answer withdraws at once.
+    #[serde(default = "default_dns_max_stale_seconds")]
+    #[schemars(range(max = 2147483647))]
+    pub max_stale_seconds: u32,
+
+    /// Most distinct hostname/resolver/family targets in the endpoint table.
+    /// New targets beyond it are rejected (fail closed); live ones are never evicted.
+    #[serde(default = "default_dns_max_entries")]
+    #[schemars(range(min = 1, max = 65536))]
+    pub max_entries: u32,
+}
+
+impl Default for DnsResolverConfig {
+    fn default() -> Self {
+        Self {
+            lookup_family: DnsLookupFamily::default(),
+            link_sys_ref: None,
+            servers: None,
+            endpoint_table: true,
+            ttl_factor: default_dns_ttl_factor(),
+            min_refresh_seconds: default_dns_min_refresh_seconds(),
+            max_refresh_seconds: default_dns_max_refresh_seconds(),
+            fallback_refresh_seconds: None,
+            refresh_interval_seconds: None,
+            max_stale_seconds: default_dns_max_stale_seconds(),
+            max_entries: default_dns_max_entries(),
+        }
+    }
+}
+
+/// Smallest accepted refresh interval for every DNS refresh setting.
+pub const DNS_MIN_REFRESH_FLOOR_SECONDS: u32 = 2;
+/// Largest DNS TTL (RFC 2181 section 8: 32-bit value with the top bit clear).
+pub const DNS_MAX_TTL_SECONDS: u32 = 2_147_483_647;
+/// Largest accepted `maxEntries`.
+pub const DNS_MAX_ENTRIES_LIMIT: u32 = 65_536;
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_dns_ttl_factor() -> f64 {
+    0.5
+}
+
+fn default_dns_min_refresh_seconds() -> u32 {
+    5
+}
+
+fn default_dns_max_refresh_seconds() -> u32 {
+    300
+}
+
+/// Default `fallbackRefreshSeconds` before clamping into [min, max].
+pub const DNS_DEFAULT_FALLBACK_REFRESH_SECONDS: u32 = 5;
+/// Smallest accepted `ttlFactor`.
+pub const DNS_MIN_TTL_FACTOR: f64 = 0.01;
+
+fn deserialize_finite_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <f64 as serde::Deserialize>::deserialize(deserializer)?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom("ttlFactor must be a finite number"))
+    }
+}
+
+fn default_dns_max_stale_seconds() -> u32 {
+    300
+}
+
+fn default_dns_max_entries() -> u32 {
+    4096
+}
+
+impl DnsResolverConfig {
+    /// Cross-field refresh validation (empty = OK). Individual ranges are also
+    /// declared in the schema; they are re-checked here for non-CRD sources.
+    pub fn refresh_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let floor = DNS_MIN_REFRESH_FLOOR_SECONDS;
+        let max_ttl = DNS_MAX_TTL_SECONDS;
+        if !(self.ttl_factor.is_finite() && (DNS_MIN_TTL_FACTOR..=1.0).contains(&self.ttl_factor)) {
+            errors.push(format!(
+                "dnsResolver.ttlFactor must be in [{DNS_MIN_TTL_FACTOR}, 1], got {}",
+                self.ttl_factor
+            ));
+        }
+        if !(floor..=max_ttl).contains(&self.min_refresh_seconds) {
+            errors.push(format!(
+                "dnsResolver.minRefreshSeconds must be between {floor} and {max_ttl}, got {}",
+                self.min_refresh_seconds
+            ));
+        }
+        if !(floor..=max_ttl).contains(&self.max_refresh_seconds) {
+            errors.push(format!(
+                "dnsResolver.maxRefreshSeconds must be between {floor} and {max_ttl}, got {}",
+                self.max_refresh_seconds
+            ));
+        }
+        if self.min_refresh_seconds > self.max_refresh_seconds {
+            errors.push(format!(
+                "dnsResolver.minRefreshSeconds ({}) must not exceed maxRefreshSeconds ({})",
+                self.min_refresh_seconds, self.max_refresh_seconds
+            ));
+        }
+        if let Some(fallback) = self.fallback_refresh_seconds {
+            if !(self.min_refresh_seconds..=self.max_refresh_seconds).contains(&fallback) {
+                errors.push(format!(
+                    "dnsResolver.fallbackRefreshSeconds must be between minRefreshSeconds and maxRefreshSeconds, got {fallback}"
+                ));
+            }
+        }
+        if let Some(interval) = self.refresh_interval_seconds {
+            if !(floor..=max_ttl).contains(&interval) {
+                errors.push(format!(
+                    "dnsResolver.refreshIntervalSeconds must be between {floor} and {max_ttl}, got {interval}"
+                ));
+            }
+        }
+        if self.max_stale_seconds > max_ttl {
+            errors.push(format!(
+                "dnsResolver.maxStaleSeconds must be at most {max_ttl}, got {}",
+                self.max_stale_seconds
+            ));
+        }
+        if !(1..=DNS_MAX_ENTRIES_LIMIT).contains(&self.max_entries) {
+            errors.push(format!(
+                "dnsResolver.maxEntries must be between 1 and {DNS_MAX_ENTRIES_LIMIT}, got {}",
+                self.max_entries
+            ));
+        }
+        errors
+    }
 }
 
 /// Gateway-owned headers sent to upstream requests.
@@ -203,10 +376,6 @@ impl ForwardedHeadersConfig {
     pub fn validate(&self) -> Result<(), String> {
         crate::gwapi_types::validate_remote_ip_header_name(&self.remote_ip_header)
     }
-}
-
-fn default_dns_cache_ttl() -> String {
-    "5s".to_string()
 }
 
 // ============================================
@@ -942,6 +1111,7 @@ impl EdgionGatewayConfigSpec {
                     ));
                 }
             }
+            errors.extend(dr.refresh_errors());
         }
         errors
     }

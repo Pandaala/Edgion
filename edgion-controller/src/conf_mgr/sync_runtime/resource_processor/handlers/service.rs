@@ -112,6 +112,7 @@ impl ProcessorHandler<Service> for ServiceHandler {
 
     async fn after_publish(&self, svc: &Service, ctx: &HandlerContext) {
         ctx.runtime().dns_resolver_targets.sync_published(svc);
+        crate::services::dns_resolver::ensure_dns_resolver_running(ctx.runtime_arc());
         self.requeue_dependents(svc, "updated", ctx).await;
     }
 
