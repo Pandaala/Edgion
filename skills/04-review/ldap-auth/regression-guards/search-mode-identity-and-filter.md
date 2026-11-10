@@ -21,6 +21,12 @@ following invariants hold and must keep holding:
    text. `{username}` is accepted only inside assertion values; at most 8 slots,
    4096 filter bytes, nesting depth 16; search-mode usernames are capped at 1024
    bytes. Do not "fix" this by RFC 4515-escaping a username into a string filter.
+   Any other unescaped `{` in a value is `MalformedPlaceholder` (a misspelled
+   `{user}` cannot become a literal; literal braces are `\7b`). Extensible
+   matching rules are descriptors or numeric OIDs; numeric OIDs need two arcs
+   (RFC 4512). `search_unique` refuses an empty username for a slotted filter
+   (`EmptyUsername`, no I/O). Resources reports one static message per
+   `FilterError` variant.
 2. **Uniform 401 for every per-user outcome.** No entry, more than one entry,
    sizeLimitExceeded, an entry without exactly one valid `attribute` value
    (non-empty, no leading/trailing space, no control characters), an entry whose
@@ -36,13 +42,22 @@ following invariants hold and must keep holding:
    `bindDn` (`edgion_ldap::dn::equivalent`) is rejected before the user bind:
    otherwise clients could log in as it or lock it out. The comparison
    approximates the directory's `distinguishedNameMatch`: canonical names for
-   the common naming attributes and their OIDs (`cn`/`commonName`/`2.5.4.3`,
-   `uid`, `dc`, `ou`, `o`, ...), decoded escapes and `#hex` BER strings,
-   Unicode lowercase values, RFC 4518 space handling, AVA order and `;`
-   separators. `bindDn` must be in plain string form (`dn::is_string_form`:
-   descriptor types, no `#hex`), so the operator side is always canonical, and
-   it is normalized once per plugin generation (`SearchPlan::service_dn`); an
-   unparsable found DN is denied rather than compared. The effective search
+   the common naming attributes and their OIDs (table `TYPE_ALIASES` in
+   `edgion-ldap/src/dn.rs`), decoded escapes, `#hex` BER strings (short, `0x81` and `0x82`
+   lengths; OCTET/UTF8/Printable/Teletex/IA5/Visible as UTF-8, BMPString,
+   UniversalString), the RFC 4518 section 2.2 map (fixed numeric tables: listed
+   spaces to U+0020, controls and format characters to nothing),
+   context-free per-character lowercase with final sigma unified, insignificant
+   spaces, AVA order, and `;` separators. A well-formed `#hex` element that is
+   not text is opaque and never equals a text value; a `#hex` value that is not
+   exactly one well-formed element, or a string value whose escapes decode to
+   invalid UTF-8, makes the DN unparsable. `bindDn` must be in plain string form
+   (`dn::is_string_form`: descriptor types, no `#hex`, `,` separators only), so
+   the operator side is always canonical, and it is normalized once per plugin
+   generation (`SearchPlan::service_dn`); an unparsable found DN is denied
+   rather than compared. Admission (`dn::is_valid`/`is_string_form`) rejects the
+   RFC 2253 `;` separator; `dn::normalize` accepts it for directory-returned
+   DNs. The effective search
    base must also parse as a DN at admission. Docs require the entry DN,
    not a UPN.
 5. **Service password.** `bindPasswordRef` (Secret key `password`) resolves like
@@ -113,8 +128,9 @@ following invariants hold and must keep holding:
 - **Schema aliases** are not resolved for `attribute`; a multi-valued
   `attribute` denies that user.
 - **DN comparison residual.** `dn::equivalent` does not apply full Unicode
-  normalization (NFKC, RFC 4518 mapping tables) and knows only the alias table
-  in `dn.rs`. A directory returning the service DN with another schema alias or
+  case folding (`ß`/`ss`) or NFKC, maps only the fixed RFC 4518 table (newer
+  Unicode format characters are kept), and knows only the alias table in
+  `dn.rs`. A directory returning the service DN with another schema alias or
   a non-NFKC-equal spelling would escape the guard; directories return their own
   stored spelling, which matches an operator copy of it. The robust alternative,
   an RFC 4532 Who Am I? after the service bind, costs one more round trip per

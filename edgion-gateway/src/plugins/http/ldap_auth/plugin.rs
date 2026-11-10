@@ -171,8 +171,10 @@ impl BindFailure {
 fn bind_failure(error: &edgion_ldap::Error) -> BindFailure {
     use edgion_ldap::Error;
     match error {
-        Error::Io(io) if io.kind() == std::io::ErrorKind::InvalidData => BindFailure::Tls,
-        Error::Closed | Error::Io(_) => BindFailure::Transport,
+        Error::Io(std::io::ErrorKind::InvalidData) => BindFailure::Tls,
+        // A broken session or exhausted IDs means the stream is unusable;
+        // unreachable here (no exchange follows an error), kept exhaustive.
+        Error::Closed | Error::Io(_) | Error::SessionBroken | Error::MessageIdExhausted => BindFailure::Transport,
         Error::FrameTooLarge { .. }
         | Error::Truncated
         | Error::InvalidLength
@@ -184,7 +186,11 @@ fn bind_failure(error: &edgion_ldap::Error) -> BindFailure {
         | Error::StartTlsRejected(_)
         | Error::SearchFailed(_)
         | Error::TooManyReferences
-        | Error::EmptyDn => BindFailure::Protocol,
+        | Error::EmptyDn
+        // Caller-misuse preconditions; unreachable (empty credentials are
+        // rejected before any exchange).
+        | Error::UnauthenticatedBind
+        | Error::EmptyUsername => BindFailure::Protocol,
     }
 }
 

@@ -42,5 +42,6 @@ pub mod filter;
 pub mod proto;
 
 #[cfg(feature = "client")]
-pub use client::{BindSession, Scope};
+pub use client::{BindSession, FoundEntry, MessageId};
 pub use error::Error;
+pub use proto::Scope;

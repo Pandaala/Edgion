@@ -5,7 +5,9 @@
 //! assertion-value bytes into that already-compiled structure; it is never
 //! parsed as filter text, so no username can change the filter's shape
 //! (no LDAP filter injection). `{username}` is recognized only inside
-//! assertion values, on the raw text before `\XX` escape decoding.
+//! assertion values, on the raw text before `\XX` escape decoding. Any
+//! other unescaped `{` in a value is rejected, so a misspelled slot cannot
+//! become a literal; write a literal brace as `\7b`.
 //!
 //! Parsing and encoding are iterative: nesting is tracked with a fixed-size
 //! stack bounded by [`MAX_DEPTH`], and the encoder computes lengths in a
@@ -65,6 +67,8 @@ pub enum FilterError {
     TooManyUsernames,
     #[error("ldap filter places {{username}} outside an assertion value")]
     UsernameOutsideValue,
+    #[error("ldap filter value has a '{{' that is not the {{username}} placeholder")]
+    MalformedPlaceholder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,6 +290,9 @@ impl Builder {
                     index += 3;
                 }
                 b'(' | b')' | b'*' | 0 => return Err(FilterError::InvalidEscape),
+                // A misspelled slot such as `{user}` would otherwise become a
+                // silent literal; a literal brace is written `\7b`.
+                b'{' => return Err(FilterError::MalformedPlaceholder),
                 byte => {
                     literal.push(byte);
                     index += 1;
@@ -455,7 +462,8 @@ fn parse_extensible(item: &[u8], first_colon: usize, eq: usize, out: &mut Builde
             if segment.is_empty() {
                 return Err(FilterError::Syntax);
             }
-            if !is_numeric_oid(segment) {
+            // RFC 4515 `matchingrule = oid`: a descriptor or a numeric OID.
+            if !is_keystring(segment) && !is_numeric_oid(segment) {
                 return Err(FilterError::InvalidAttribute);
             }
             rule = Some(segment);
@@ -514,8 +522,9 @@ pub(crate) fn is_keystring(text: &[u8]) -> bool {
         && text.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
+/// RFC 4512 `numericoid = number 1*( DOT number )`: at least two arcs.
 pub(crate) fn is_numeric_oid(text: &[u8]) -> bool {
-    !text.is_empty()
+    text.contains(&b'.')
         && text.split(|&b| b == b'.').all(|number| {
             !number.is_empty() && number.iter().all(u8::is_ascii_digit) && (number.len() == 1 || number[0] != b'0')
         })

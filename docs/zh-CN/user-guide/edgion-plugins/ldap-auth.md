@@ -56,10 +56,10 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `baseDn` | String | 无 | 基础 DN，必填 |
 | `attribute` | String | 无 | 用户属性，必填（如 `uid`/`cn`） |
 | `bindDnTemplate` | String | 无 | 自定义 Bind DN 模板，必须包含 `{username}` |
-| `bindDn` | String | 无 | 服务账号的**条目 DN**（不能是 UPN 或 `DOMAIN\user`），须为字符串形式：属性名用 `cn` 这类名字而非 OID，且不含 `#hex` 值。设置后进入搜索模式，与 `bindDnTemplate` 互斥 |
+| `bindDn` | String | 无 | 服务账号的**条目 DN**（不能是 UPN 或 `DOMAIN\user`），须为字符串形式：属性名用 `cn` 这类名字而非 OID，不含 `#hex` 值，RDN 之间用 `,` 分隔（不能用旧式的 `;`）。设置后进入搜索模式，与 `bindDnTemplate` 互斥 |
 | `bindPasswordRef` | Object | 无 | 存放服务账号密码的 Secret，密码位于 key `password`；设置 `bindDn` 时必填 |
-| `searchFilter` | String | `(<attribute>={username})` | 搜索模式：包含 `{username}` 的 RFC 4515 过滤器（最多 8 处 `{username}`，最长 4096 字节，嵌套深度最多 16）；扩展匹配规则必须写数字 OID（如 `1.2.840.113556.1.4.1941`），不能写名字 |
-| `searchBase` | String | `baseDn` | 搜索模式：整棵子树搜索的起点 DN；它（未设置时为 `baseDn`）必须是合法 DN |
+| `searchFilter` | String | `(<attribute>={username})` | 搜索模式：包含 `{username}` 的 RFC 4515 过滤器（最多 8 处 `{username}`，最长 4096 字节，嵌套深度最多 16）；扩展匹配规则可以写名字（如 `caseExactMatch`）或数字 OID（如 `1.2.840.113556.1.4.1941`，OID 至少两段）。值里其他的 `{` 会被拒绝，避免拼错的占位符（如 `{user}`）变成普通文本；字面量花括号写成 `\7b`。准入报错会指出具体原因 |
+| `searchBase` | String | `baseDn` | 搜索模式：整棵子树搜索的起点 DN；它（未设置时为 `baseDn`）必须是合法 DN。搜索模式下会校验的 DN（`bindDn`、作为搜索起点的 `searchBase` 或 `baseDn`、组 DN）必须用 `,` 分隔 RDN；旧式的 `;` 分隔符、解码后不是合法 UTF-8 的转义、以及不是单个完整 BER 元素的 `#hex` 值都会被拒绝 |
 | `requiredGroupsAnyOf` | String[] | 无 | 搜索模式：组 DN 列表，用户至少属于其中一个（1 到 32 项，每项为完整 DN） |
 | `requiredGroupsAllOf` | String[] | 无 | 搜索模式：组 DN 列表，用户必须属于全部（1 到 32 项）。与 `requiredGroupsAnyOf` 同时配置时两者都须满足 |
 | `groupAttribute` | String | `memberOf` | 用户条目上列出组 DN 的属性；必须由目录维护，且用户不能修改 |
@@ -227,7 +227,7 @@ config:
 - 用户名以原始字节写入已编译的过滤器，用户名中的 `*`、`(`、`)`、`\` 等字符无法改变
   过滤器结构（不存在 LDAP 注入）。
 - 查不到条目、命中多个条目、条目没有恰好一个合法的 `attribute` 值（非空、首尾无空格、
-  无控制字符）、条目 DN 无法解析、以及命中服务账号自身条目，都返回与密码错误相同的 `401`。`attribute` 必须是目录返回的名字（不解析
+  无控制字符）、条目 DN 无法解析、以及命中服务账号自身条目，都返回与密码错误相同的 `401`。服务账号检查在规范化后比较 DN（常见命名属性的别名与 OID、转义、`#hex` 字符串、RFC 4518 空格与控制字符映射、大小写），不做完整的 Unicode case folding。`attribute` 必须是目录返回的名字（不解析
   `userid` 与 `uid` 之类的别名）；多值属性会拒绝该用户。
 - 服务账号密码被拒绝或未解析时返回通用 `401`，并计入
   `edgion_ldap_auth_errors_total{kind="service_bind_fail"}`，请为它配置告警。

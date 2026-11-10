@@ -240,7 +240,7 @@ fn test_validation_search_mode() {
                 search_base: Some("example.org".to_string()),
                 ..search_base_config()
             },
-            "searchBase (or baseDn when unset) is not a valid DN",
+            "searchBase (or baseDn when unset) is not a valid DN (RDNs separated by `,`)",
         ),
         (
             LdapAuthConfig {
@@ -248,28 +248,28 @@ fn test_validation_search_mode() {
                 base_dn: "example.org".to_string(),
                 ..search_base_config()
             },
-            "searchBase (or baseDn when unset) is not a valid DN",
+            "searchBase (or baseDn when unset) is not a valid DN (RDNs separated by `,`)",
         ),
         (
             LdapAuthConfig {
                 bind_dn: Some("svc@example.com".to_string()),
                 ..search_base_config()
             },
-            "bindDn must be a DN in string form (attribute names, no #hex values)",
+            "bindDn must be a DN in string form (attribute names, no #hex values, `,` between RDNs)",
         ),
         (
             LdapAuthConfig {
                 bind_dn: Some("2.5.4.3=svc,dc=example,dc=com".to_string()),
                 ..search_base_config()
             },
-            "bindDn must be a DN in string form (attribute names, no #hex values)",
+            "bindDn must be a DN in string form (attribute names, no #hex values, `,` between RDNs)",
         ),
         (
             LdapAuthConfig {
                 bind_dn: Some("cn=#0403737663,dc=example,dc=com".to_string()),
                 ..search_base_config()
             },
-            "bindDn must be a DN in string form (attribute names, no #hex values)",
+            "bindDn must be a DN in string form (attribute names, no #hex values, `,` between RDNs)",
         ),
         (
             LdapAuthConfig {
@@ -300,7 +300,70 @@ fn test_validation_search_mode() {
                 search_filter: Some("(&(uid={username})".to_string()),
                 ..search_base_config()
             },
-            "searchFilter is invalid",
+            "searchFilter syntax is invalid",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(uid={user})".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter has a '{' that is not the {username} placeholder; write a literal brace as \\7b",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(5={username})".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter has an invalid attribute description or matching rule",
+        ),
+        (
+            LdapAuthConfig {
+                search_base: Some("ou=people;dc=example,dc=com".to_string()),
+                ..search_base_config()
+            },
+            "searchBase (or baseDn when unset) is not a valid DN (RDNs separated by `,`)",
+        ),
+        (
+            LdapAuthConfig {
+                bind_dn: Some("cn=svc;dc=example,dc=com".to_string()),
+                ..search_base_config()
+            },
+            "bindDn must be a DN in string form (attribute names, no #hex values, `,` between RDNs)",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some(format!("(uid={{username}}{})", "a".repeat(4096))),
+                ..search_base_config()
+            },
+            "searchFilter exceeds the maximum length",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(&(&(&(&(&(&(&(&(&(&(&(&(&(&(&(&(a={username})))))))))))))))))".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter nests too deeply",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(uid={username}\\zz)".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter value has an invalid escape or unescaped special character",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(|(a={username})(a={username})(a={username})(a={username})(a={username})(a={username})(a={username})(a={username})(a={username}))".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter has too many {username} placeholders",
+        ),
+        (
+            LdapAuthConfig {
+                search_filter: Some("(&(uid={username})({username}=x))".to_string()),
+                ..search_base_config()
+            },
+            "searchFilter places {username} outside an assertion value",
         ),
         (
             LdapAuthConfig {
@@ -410,6 +473,11 @@ fn test_group_requirements_validation() {
         group_config(Some(vec![" cn=a,dc=x "]), Some(vec![GROUP])).get_validation_error(),
         None
     );
+    // The legacy `;` RDN separator is rejected in group DNs too.
+    assert_eq!(
+        group_config(Some(vec!["cn=a;dc=x"]), None).get_validation_error(),
+        Some("requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs (RDNs separated by `,`)")
+    );
     let thirty_two = vec![GROUP; MAX_REQUIRED_GROUPS];
     assert_eq!(
         group_config(Some(thirty_two.clone()), None).get_validation_error(),
@@ -423,7 +491,7 @@ fn test_group_requirements_validation() {
     );
 
     let count = "requiredGroupsAnyOf and requiredGroupsAllOf need 1 to 32 groups each";
-    let entries = "requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs";
+    let entries = "requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs (RDNs separated by `,`)";
     let mut thirty_three = thirty_two;
     thirty_three.push(GROUP);
     // The cap applies after trimming.
@@ -571,6 +639,6 @@ fn test_group_null_items_and_null_attribute_decode() {
     assert_eq!(config.group_attribute, "memberOf");
     assert_eq!(
         config.get_validation_error(),
-        Some("requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs")
+        Some("requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs (RDNs separated by `,`)")
     );
 }

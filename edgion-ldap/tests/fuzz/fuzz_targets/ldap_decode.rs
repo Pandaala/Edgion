@@ -6,8 +6,9 @@
 //! - bit 7 set: the rest is newline-separated group DNs (first line: the
 //!   attribute; bit 0 selects nested) for `SearchFilter::group_requirement`;
 //!   the pre-encoded filter must encode to `encoded_len` bytes;
-//! - bit 6 set: the rest is a peer-supplied DN for `dn::is_valid` and
-//!   `dn::equivalent` (reflexivity is asserted for valid DNs);
+//! - bit 6 set: the rest is a DN for `dn::is_valid` (strict admission),
+//!   `dn::normalize` and `dn::equivalent` (reflexivity is asserted for every
+//!   DN that normalizes, including directory spellings with `;`);
 //! - bit 5 set: the rest is filter text for `SearchFilter::compile`, and a
 //!   compiled filter is encoded with a fixed username;
 //! - otherwise the rest is a server frame: bit 4 selects the search-frame
@@ -41,7 +42,8 @@ fuzz_target!(|data: &[u8]| {
     }
     if selector & 0x40 != 0 {
         if let Ok(text) = std::str::from_utf8(rest) {
-            if edgion_ldap::dn::is_valid(text) {
+            let _ = edgion_ldap::dn::is_valid(text);
+            if edgion_ldap::dn::normalize(text).is_some() {
                 assert!(edgion_ldap::dn::equivalent(text, text));
             }
             let _ = edgion_ldap::dn::equivalent(text, "cn=svc,dc=example,dc=com");

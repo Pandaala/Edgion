@@ -444,3 +444,14 @@ fn base_scope_search_request_bytes_exact() {
         expected
     );
 }
+
+#[test]
+fn search_frame_debug_is_redacted() {
+    let frame = SearchFrame::Entry {
+        dn: "uid=secret-user,dc=x".to_string(),
+        identity: Some("secret-user".to_string()),
+    };
+    let rendered = format!("{frame:?}");
+    assert!(!rendered.contains("secret"), "{rendered}");
+    assert!(rendered.contains("[redacted]"));
+}

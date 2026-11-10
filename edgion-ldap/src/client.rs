@@ -10,7 +10,7 @@ use crate::codec::{frame_content_len, length_octets};
 use crate::filter::SearchFilter;
 use crate::proto::{
     decode_bind_response, decode_extended_response, decode_search_frame, encode_bind_request, encode_search_request,
-    encode_start_tls_request, encode_unbind_request, LdapResult, SearchFrame,
+    encode_start_tls_request, encode_unbind_request, LdapResult, Scope, SearchFrame,
 };
 use crate::Error;
 use zeroize::Zeroizing;
@@ -18,23 +18,28 @@ use zeroize::Zeroizing;
 /// Maximum continuation references accepted in one search.
 pub const MAX_SEARCH_REFERENCES: usize = 8;
 
-/// Search scope; the size limit follows from it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    /// The whole subtree under the base (sizeLimit 2: enough to see a second match).
-    Subtree,
-    /// Only the base entry itself (sizeLimit 1).
-    Base,
-}
+/// Largest message ID RFC 4511 allows (`maxInt`, 2^31 - 1).
+const MAX_MESSAGE_ID: u32 = i32::MAX as u32;
 
 /// The single entry a search found.
 ///
 /// `identity` is the entry's single value of the requested attribute, when
-/// it has exactly one non-empty, control-free value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// it has exactly one non-empty, control-free value. The DN is peer bytes
+/// validated only as UTF-8: pass it on as an LDAP string, never to a text
+/// sink. `Debug` redacts both fields.
+#[derive(Clone, PartialEq, Eq)]
 pub struct FoundEntry {
     pub dn: String,
     pub identity: Option<String>,
+}
+
+impl std::fmt::Debug for FoundEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FoundEntry")
+            .field("dn", &"[redacted]")
+            .field("identity", &self.identity.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 /// Longest frame header: identifier, initial length octet, four length octets.
@@ -43,7 +48,8 @@ const MAX_FRAME_HEADER: usize = 6;
 /// The next LDAP message ID of a session.
 ///
 /// Only [`BindSession::start_tls`] produces one, so callers cannot resume with
-/// the reserved unsolicited-notification ID 0 or an out-of-range value.
+/// the reserved unsolicited-notification ID 0. An ID past the RFC 4511 `maxInt`
+/// makes the next request fail with [`Error::MessageIdExhausted`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageId(u32);
 
@@ -55,10 +61,17 @@ pub struct MessageId(u32);
 /// before the caller hands the raw stream to the TLS handshake. Pass the raw
 /// transport (for example `tokio::net::TcpStream`), never a buffered wrapper
 /// such as `tokio::io::BufReader`, whose prefetch would break the same invariant.
+///
+/// **Broken-session invariant:** only a completed, successful exchange leaves
+/// the session usable. Any error, a future dropped mid-exchange, or a search
+/// that returned with unread frames marks it broken; later exchanges then fail
+/// with [`Error::SessionBroken`] without I/O, and [`BindSession::unbind`] only
+/// shuts the stream down.
 pub struct BindSession<S> {
     stream: S,
     next_id: u32,
     buf: Vec<u8>,
+    broken: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
@@ -74,19 +87,43 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
             stream,
             next_id: next_id.0,
             buf: Vec::new(),
+            broken: false,
         }
     }
 
+    /// Mark the session broken for the duration of an exchange; the caller
+    /// clears the mark only after the exchange completed successfully.
+    fn begin_exchange(&mut self) -> Result<(), Error> {
+        if self.broken {
+            return Err(Error::SessionBroken);
+        }
+        self.broken = true;
+        Ok(())
+    }
+
     /// Send a simple BindRequest and decode its BindResponse.
+    ///
+    /// An empty or blank `bind_dn`, or an empty `password`, is refused with
+    /// [`Error::UnauthenticatedBind`] before any I/O: such a bind is anonymous
+    /// or unauthenticated (RFC 4513 section 5.1) and may answer success. A
+    /// non-zero result code is returned as `Ok` and keeps the session usable.
     pub async fn simple_bind(&mut self, bind_dn: &str, password: &[u8]) -> Result<LdapResult, Error> {
+        // A blank DN may parse as the empty (anonymous) name on the server.
+        if bind_dn.trim().is_empty() || password.is_empty() {
+            return Err(Error::UnauthenticatedBind);
+        }
+        self.begin_exchange()?;
         let id = self.send(|id| encode_bind_request(id, bind_dn, password)).await?;
         self.read_frame().await?;
-        decode_bind_response(&self.buf, id)
+        let result = decode_bind_response(&self.buf, id)?;
+        self.broken = false;
+        Ok(result)
     }
 
     /// Request StartTLS. On success returns the raw stream, positioned right
     /// after the ExtendedResponse, and the next message ID for [`BindSession::resume`].
     pub async fn start_tls(mut self) -> Result<(S, MessageId), Error> {
+        self.begin_exchange()?;
         let id = self.send(|id| Zeroizing::new(encode_start_tls_request(id))).await?;
         self.read_frame().await?;
         let result = decode_extended_response(&self.buf, id)?;
@@ -104,8 +141,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
     ///
     /// Returns `Ok(None)` for no entry, a second entry, or sizeLimitExceeded;
     /// callers must not tell these apart. After a second entry the method
-    /// returns without reading the rest of the response, so the session
-    /// holds unread frames: only `unbind` and drop it afterwards.
+    /// returns without reading the rest of the response, so the session is
+    /// left broken (unread frames): only `unbind` remains.
+    ///
+    /// A filter with a `{username}` slot and an empty `username` is refused
+    /// with [`Error::EmptyUsername`] before any I/O.
     pub async fn search_unique(
         &mut self,
         base: &str,
@@ -116,6 +156,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
         time_limit_secs: u32,
     ) -> Result<Option<FoundEntry>, Error> {
         const SIZE_LIMIT_EXCEEDED: u32 = 4;
+        if filter.slots() > 0 && username.is_empty() {
+            return Err(Error::EmptyUsername);
+        }
+        self.begin_exchange()?;
         let id = self
             .send(|id| {
                 Zeroizing::new(encode_search_request(
@@ -135,11 +179,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
             self.read_frame().await?;
             match decode_search_frame(&self.buf, id, attribute)? {
                 SearchFrame::Entry { dn, identity } => {
-                    if dn.is_empty() {
-                        return Err(Error::EmptyDn);
-                    }
+                    // A second entry ends the search whatever its DN; the
+                    // session stays broken because frames remain unread.
                     if found.is_some() {
                         return Ok(None);
+                    }
+                    if dn.is_empty() {
+                        return Err(Error::EmptyDn);
                     }
                     found = Some(FoundEntry { dn, identity });
                 }
@@ -150,21 +196,32 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
                     }
                 }
                 SearchFrame::Done(result) => {
-                    return match result.result_code {
-                        0 => Ok(found),
-                        SIZE_LIMIT_EXCEEDED => Ok(None),
-                        code => Err(Error::SearchFailed(code)),
+                    let outcome = match result.result_code {
+                        0 => found,
+                        SIZE_LIMIT_EXCEEDED => None,
+                        code => return Err(Error::SearchFailed(code)),
                     };
+                    self.broken = false;
+                    return Ok(outcome);
                 }
             }
         }
     }
 
-    /// Send an UnbindRequest, then shut down the write side (on a TLS stream
-    /// this sends close_notify). The protocol defines no response.
-    pub async fn unbind(&mut self) -> Result<(), Error> {
-        self.send(|id| Zeroizing::new(encode_unbind_request(id))).await?;
-        self.stream.shutdown().await.map_err(io_error)
+    /// End the session: send an UnbindRequest unless the session is broken,
+    /// then always shut down the write side (on a TLS stream this sends
+    /// close_notify). The protocol defines no response. Returns the first
+    /// error.
+    pub async fn unbind(mut self) -> Result<(), Error> {
+        let sent = if self.broken {
+            Ok(())
+        } else {
+            self.send(|id| Zeroizing::new(encode_unbind_request(id)))
+                .await
+                .map(|_| ())
+        };
+        let shutdown = self.stream.shutdown().await.map_err(io_error);
+        sent.and(shutdown)
     }
 
     /// Write one request. Every request buffer is zeroized on drop (also on a
@@ -172,7 +229,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
     /// bind request can never be sent from an unwiped buffer.
     async fn send(&mut self, encode: impl FnOnce(u32) -> Zeroizing<Vec<u8>>) -> Result<u32, Error> {
         let id = self.next_id;
-        self.next_id = id.saturating_add(1);
+        // Every exchange already marked the session broken before sending.
+        if id > MAX_MESSAGE_ID {
+            return Err(Error::MessageIdExhausted);
+        }
+        self.next_id = id + 1;
         let request = encode(id);
         self.stream.write_all(&request).await.map_err(io_error)?;
         self.stream.flush().await.map_err(io_error)?;
@@ -196,10 +257,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> BindSession<S> {
 }
 
 fn io_error(err: std::io::Error) -> Error {
-    if err.kind() == std::io::ErrorKind::UnexpectedEof {
-        Error::Closed
-    } else {
-        Error::Io(err)
+    match err.kind() {
+        std::io::ErrorKind::UnexpectedEof => Error::Closed,
+        kind => Error::Io(kind),
     }
 }
 

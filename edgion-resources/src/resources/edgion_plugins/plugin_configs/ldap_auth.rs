@@ -346,12 +346,12 @@ impl LdapAuthConfig {
         }
         // A non-DN base would answer every request with a 503 at run time.
         if !edgion_ldap::dn::is_valid(self.search_base.as_deref().unwrap_or(&self.base_dn)) {
-            return Some("searchBase (or baseDn when unset) is not a valid DN");
+            return Some("searchBase (or baseDn when unset) is not a valid DN (RDNs separated by `,`)");
         }
         // The string form keeps the service-account guard's comparison with
         // the directory's spelling of the DN reliable.
         if !edgion_ldap::dn::is_string_form(bind_dn) {
-            return Some("bindDn must be a DN in string form (attribute names, no #hex values)");
+            return Some("bindDn must be a DN in string form (attribute names, no #hex values, `,` between RDNs)");
         }
         if !edgion_ldap::filter::is_attribute_description(self.attribute.trim()) {
             return Some("attribute is not a valid attribute name");
@@ -366,11 +366,10 @@ impl LdapAuthConfig {
             return Some("bindDn requires TLS certificate verification");
         }
         let filter = self.effective_search_filter();
-        if !filter.contains("{username}") {
-            return Some("searchFilter must contain {username}");
-        }
-        if edgion_ldap::filter::SearchFilter::compile(&filter).is_err() {
-            return Some("searchFilter is invalid");
+        // Compilation reports a missing `{username}` as `NoUsername`, and a
+        // misspelled slot such as `{user}` as `MalformedPlaceholder`.
+        if let Err(error) = edgion_ldap::filter::SearchFilter::compile(&filter) {
+            return Some(search_filter_message(error));
         }
         self.group_requirements_error()
     }
@@ -392,7 +391,9 @@ impl LdapAuthConfig {
             for group in groups {
                 let group = group.trim();
                 if group.len() > MAX_GROUP_DN_LEN || !edgion_ldap::dn::is_valid(group) {
-                    return Some("requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs");
+                    return Some(
+                        "requiredGroupsAnyOf and requiredGroupsAllOf entries must be valid DNs (RDNs separated by `,`)",
+                    );
                 }
             }
         }
@@ -401,6 +402,24 @@ impl LdapAuthConfig {
             return Some("groupAttribute is not a valid attribute name");
         }
         None
+    }
+}
+
+/// Operator-facing admission message for a rejected `searchFilter`.
+fn search_filter_message(error: edgion_ldap::filter::FilterError) -> &'static str {
+    use edgion_ldap::filter::FilterError;
+    match error {
+        FilterError::TooLong => "searchFilter exceeds the maximum length",
+        FilterError::TooDeep => "searchFilter nests too deeply",
+        FilterError::Syntax => "searchFilter syntax is invalid",
+        FilterError::InvalidAttribute => "searchFilter has an invalid attribute description or matching rule",
+        FilterError::InvalidEscape => "searchFilter value has an invalid escape or unescaped special character",
+        FilterError::NoUsername => "searchFilter must contain {username}",
+        FilterError::TooManyUsernames => "searchFilter has too many {username} placeholders",
+        FilterError::UsernameOutsideValue => "searchFilter places {username} outside an assertion value",
+        FilterError::MalformedPlaceholder => {
+            "searchFilter has a '{' that is not the {username} placeholder; write a literal brace as \\7b"
+        }
     }
 }
 

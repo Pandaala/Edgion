@@ -5,8 +5,6 @@
 //! protocolOp, LDAPResult. Optional trailing elements are skipped by length.
 
 #[cfg(feature = "client")]
-use crate::client::Scope;
-#[cfg(feature = "client")]
 use crate::codec::SEARCH_REQUEST;
 #[cfg(feature = "client")]
 use crate::codec::{
@@ -28,6 +26,15 @@ const LDAP_VERSION: u32 = 3;
 /// StartTLS extended operation name (RFC 4511 section 4.14.1).
 const START_TLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
 
+/// Search scope; the size limit follows from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The whole subtree under the base (sizeLimit 2: enough to see a second match).
+    Subtree,
+    /// Only the base entry itself (sizeLimit 1).
+    Base,
+}
+
 /// The only LDAPResult component Edgion consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LdapResult {
@@ -38,11 +45,15 @@ pub struct LdapResult {
 /// Write the LDAPMessage envelope around a protocolOp of `op_len` content bytes.
 fn message(msg_id: u32, op_tag: u8, op_len: usize, write_op: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
     let content_len = element_len(u32_content_len(msg_id)) + element_len(op_len);
-    let mut out = Vec::with_capacity(element_len(content_len));
+    let expected = element_len(content_len);
+    let mut out = Vec::with_capacity(expected);
     write_header(&mut out, SEQUENCE, content_len);
     write_u32(&mut out, INTEGER, msg_id);
     write_header(&mut out, op_tag, op_len);
     write_op(&mut out);
+    // An exact precomputed length means no reallocation leaves an unwiped
+    // copy of a bind password behind.
+    debug_assert_eq!(out.len(), expected, "precomputed LDAP request length is wrong");
     out
 }
 
@@ -171,7 +182,9 @@ pub(crate) fn encode_search_request(
 }
 
 /// One decoded search response message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` redacts the entry DN and identity: callers must never log them.
+#[derive(Clone, PartialEq, Eq)]
 pub enum SearchFrame {
     /// A SearchResultEntry: its DN and, when the entry carries exactly one
     /// valid value for the requested attribute, that value.
@@ -180,6 +193,20 @@ pub enum SearchFrame {
     Reference,
     /// The SearchResultDone that ends the search.
     Done(LdapResult),
+}
+
+impl std::fmt::Debug for SearchFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entry { identity, .. } => f
+                .debug_struct("Entry")
+                .field("dn", &"[redacted]")
+                .field("identity", &identity.as_ref().map(|_| "[redacted]"))
+                .finish(),
+            Self::Reference => f.write_str("Reference"),
+            Self::Done(result) => f.debug_tuple("Done").field(result).finish(),
+        }
+    }
 }
 
 /// Whether an identity value is usable as forwarded header text: non-empty,

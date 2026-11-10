@@ -160,7 +160,12 @@ fn invalid_filters_are_rejected() {
         ("(1a={username})", FilterError::InvalidAttribute),
         ("(a;={username})", FilterError::InvalidAttribute),
         ("(01.2={username})", FilterError::InvalidAttribute),
-        ("(a:caseExactMatch:={username})", FilterError::InvalidAttribute),
+        ("(a:case_Exact:={username})", FilterError::InvalidAttribute),
+        ("(a:1:={username})", FilterError::InvalidAttribute),
+        ("(5={username})", FilterError::InvalidAttribute),
+        ("(a={user})", FilterError::MalformedPlaceholder),
+        ("(a={Username}{username})", FilterError::MalformedPlaceholder),
+        ("(a={username}x{)", FilterError::MalformedPlaceholder),
         ("(:={username})", FilterError::Syntax),
         ("(a::={username})", FilterError::Syntax),
         ("(a:1.23={username})", FilterError::Syntax),
@@ -373,4 +378,55 @@ fn group_requirement_is_pre_encoded_once() {
     filter.encode(b"x", &mut out);
     assert_eq!(out.as_slice(), &bytes[..]);
     assert_eq!(filter.encoded_len(1), bytes.len());
+}
+
+#[test]
+fn descriptor_matching_rules_are_accepted() {
+    for text in [
+        "(cn:caseExactMatch:={username})",
+        "(cn:dn:caseIgnoreMatch:={username})",
+        "(:caseExactMatch:={username})",
+        "(cn:dn:dn:={username})",
+    ] {
+        assert!(SearchFilter::compile(text).is_ok(), "{text}");
+    }
+    // The rule is encoded as given in the [1] matchingRule element.
+    let filter = SearchFilter::compile("(cn:caseExactMatch:={username})").unwrap();
+    let mut out = Vec::new();
+    filter.encode(b"bob", &mut out);
+    let rule = [&[0x81, 14][..], b"caseExactMatch"].concat();
+    assert!(out.windows(rule.len()).any(|window| window == rule.as_slice()));
+    // `dn` before a descriptor rule sets dnAttributes and keeps the rule.
+    let filter = SearchFilter::compile("(cn:dn:caseIgnoreMatch:={username})").unwrap();
+    let mut out = Vec::new();
+    filter.encode(b"bob", &mut out);
+    let rule = [&[0x81, 15][..], b"caseIgnoreMatch"].concat();
+    assert!(out.windows(rule.len()).any(|window| window == rule.as_slice()));
+    assert!(out.ends_with(&[0x84, 0x01, 0xff]));
+}
+
+#[test]
+fn group_dns_may_contain_literal_braces() {
+    // Group DNs are raw assertion values, never parsed for placeholders.
+    assert!(SearchFilter::group_requirement("memberOf", &["cn={g},dc=x"], &[], false).is_ok());
+}
+
+#[test]
+fn numeric_oids_need_two_arcs() {
+    assert!(!is_numeric_oid(b"5"));
+    assert!(!is_numeric_oid(b"1."));
+    assert!(is_numeric_oid(b"1.1"));
+    assert!(is_numeric_oid(b"2.5.4.3"));
+    assert!(!is_attribute_description("5"));
+    assert!(is_attribute_description("2.5.4.3"));
+}
+
+#[test]
+fn literal_braces_need_escaping() {
+    let filter = SearchFilter::compile("(cn=\\7b{username}\\7d)").unwrap();
+    let mut out = Vec::new();
+    filter.encode(b"bob", &mut out);
+    assert!(out.windows(5).any(|window| window == b"{bob}"));
+    // A closing brace alone is not a placeholder attempt and stays literal.
+    assert!(SearchFilter::compile("(cn={username}})").is_ok());
 }

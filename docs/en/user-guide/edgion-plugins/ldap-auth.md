@@ -59,10 +59,10 @@ flow in [Search Mode](#search-mode).
 | `baseDn` | String | **Required** | Base DN |
 | `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
 | `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
-| `bindDn` | String | none | Service-account **entry DN** (not a UPN or `DOMAIN\user`) in string form: attribute names such as `cn`, not OIDs, and no `#hex` values. Setting it selects search mode; mutually exclusive with `bindDnTemplate` |
+| `bindDn` | String | none | Service-account **entry DN** (not a UPN or `DOMAIN\user`) in string form: attribute names such as `cn`, not OIDs, no `#hex` values, and `,` (not the legacy `;`) between RDNs. Setting it selects search mode; mutually exclusive with `bindDnTemplate` |
 | `bindPasswordRef` | Object | none | Secret holding the service-account password under the key `password`; required with `bindDn` |
-| `searchFilter` | String | `(<attribute>={username})` | Search mode: RFC 4515 filter containing `{username}` (at most 8 times, at most 4096 bytes, nesting depth at most 16); an extensible match rule must be a numeric OID such as `1.2.840.113556.1.4.1941`, not a name |
-| `searchBase` | String | `baseDn` | Search mode: base DN of the whole-subtree search; it (or `baseDn` when unset) must be a valid DN |
+| `searchFilter` | String | `(<attribute>={username})` | Search mode: RFC 4515 filter containing `{username}` (at most 8 times, at most 4096 bytes, nesting depth at most 16); an extensible match rule is a name such as `caseExactMatch` or a numeric OID such as `1.2.840.113556.1.4.1941` (OIDs need at least two arcs). Any other `{` in a value is rejected so a misspelled placeholder such as `{user}` cannot become a literal; write a literal brace as `\7b`. The admission error names the specific problem |
+| `searchBase` | String | `baseDn` | Search mode: base DN of the whole-subtree search; it (or `baseDn` when unset) must be a valid DN. In search mode the validated DNs (`bindDn`, `searchBase` or `baseDn` when it is the search base, group DNs) must separate RDNs with `,`; the legacy `;` separator, escapes that decode to invalid UTF-8, and `#hex` values that are not one well-formed BER element are rejected |
 | `requiredGroupsAnyOf` | String[] | none | Search mode: group DNs; the user must be in at least one (1 to 32 entries, each a full DN) |
 | `requiredGroupsAllOf` | String[] | none | Search mode: group DNs; the user must be in every one (1 to 32 entries). With `requiredGroupsAnyOf`, both must hold |
 | `groupAttribute` | String | `memberOf` | Attribute on the user entry that lists group DNs; must be maintained by the directory and not writable by users |
@@ -250,7 +250,10 @@ Rules and guarantees:
 - No entry, more than one entry, an entry without exactly one valid `attribute`
   value (non-empty, no surrounding spaces or control characters), an entry DN the
   plugin cannot parse, and the service account's own entry all return the same
-  `401` as a wrong password. `attribute` must be the name the directory returns (aliases such as
+  `401` as a wrong password. The service-account check compares DNs after
+  normalization (attribute-name aliases and OIDs for common naming attributes,
+  escapes, `#hex` strings, RFC 4518 space and control-character mapping, and
+  case); it does not apply full Unicode case folding. `attribute` must be the name the directory returns (aliases such as
   `userid` for `uid` are not resolved); a multi-valued attribute denies that user.
 - A rejected or unresolved service-account password returns the generic `401` and
   increments `edgion_ldap_auth_errors_total{kind="service_bind_fail"}`; alert on it.

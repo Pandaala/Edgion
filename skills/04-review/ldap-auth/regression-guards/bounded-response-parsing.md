@@ -37,6 +37,22 @@ Every malformed reply ends as a fail-close 503 through the existing
 - **StartTLS invariant:** `BindSession` reads exactly one frame per response and
   never reads ahead (no buffered reader, no speculative read). Bytes after the
   ExtendedResponse must reach the TLS handshake untouched.
+- **Broken-session invariant (2026-11-10):** only a completed, successful
+  exchange leaves a `BindSession` usable. Any `Err` (including `SearchFailed`),
+  a future dropped mid-exchange (`write_all`/`read_exact` are not cancel-safe),
+  and the search early return after a second entry mark it broken; later
+  exchanges return `SessionBroken` without I/O. `unbind(self)` is terminal,
+  sends an UnbindRequest only on a healthy session and always attempts the
+  write-side shutdown. A bind answered with a non-zero result code is `Ok` and
+  keeps the session usable.
+- **Request preconditions:** `simple_bind` refuses an empty DN or password
+  (`UnauthenticatedBind`, RFC 4513 section 5.1 anonymous/unauthenticated binds
+  may answer success) before any I/O. Message IDs never exceed the RFC 4511
+  `maxInt`; exhaustion is `MessageIdExhausted` and breaks the session.
+- **No peer text through `Debug`:** `FoundEntry`, `SearchFrame` and
+  `dn::NormalizedDn` print `[redacted]`; `Error::Io` keeps only the
+  `std::io::ErrorKind`. The request builder debug-asserts its exact
+  precomputed length (no reallocation leaves a password copy).
 
 The plugin (`edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`) keeps dialing
 through `EgressResolver`, builds the rustls `ClientConfig` with
@@ -48,7 +64,8 @@ through `EgressResolver`, builds the rustls `ClientConfig` with
 | bind | result code other than 0/49 | `BindFailed(Result)` (`ldap bind fail`, `bind_fail`) |
 | bind | peer close or stream I/O error | `BindFailed(Transport)` (`ldap bind transport error`, `bind_fail`) |
 | bind | `Io(InvalidData)`: a post-handshake TLS alert (for example a TLS 1.3 client-certificate rejection) | `BindFailed(Tls)` (`ldap bind tls error`, `bind_fail`) |
-| bind | any decode or protocol error | `BindFailed(Protocol)` (`ldap bind protocol error`, `bind_fail`) |
+| bind | any decode or protocol error (also the unreachable `UnauthenticatedBind`/`EmptyUsername`) | `BindFailed(Protocol)` (`ldap bind protocol error`, `bind_fail`) |
+| bind | `SessionBroken`/`MessageIdExhausted` (unreachable: no exchange follows an error) | `BindFailed(Transport)` |
 | StartTLS | `rc != 0` (reachable server refused) | `StartTlsRejected` (`ldap starttls rejected`, `starttls_rejected`) |
 | StartTLS | decode error, peer close, stream I/O error | `ConnectionFailed` (`ldap unreachable`, `unreachable`) |
 | TLS handshake (client-side `connect` future) | SAN pinning rejects | `TlsSanMismatch` |
@@ -58,7 +75,11 @@ through `EgressResolver`, builds the rustls `ClientConfig` with
 The two-phase timeout of the former implementation is kept. Phase 1 covers dial,
 StartTLS and the TLS handshake. Phase 2 covers the bind and a best-effort unbind
 (UnbindRequest, then a write-side shutdown, which sends TLS close_notify as
-ldap3 did) under the same deadline; the unbind never changes the outcome.
+ldap3 did) under the same deadline; the unbind never changes the outcome. Bind
+mode returns early on a bind error or timeout and drops the session; search
+mode always unbinds, which after a library error or timeout is a shutdown only
+(per-user outcomes such as rc 49 or no entry keep the session healthy, so the
+UnbindRequest is still sent).
 
 ## Rationale and evidence
 

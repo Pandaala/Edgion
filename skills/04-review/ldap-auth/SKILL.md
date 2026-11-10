@@ -12,6 +12,7 @@ before applying a decision to current code.
 ## Intentional design
 
 - [LDAP Auth Per-Request Connection — Accepted with Operational Bounds](intentional-design/per-request-connection-accepted.md)
+- [edgion-ldap Codec and DN Leniency — Accepted Design](intentional-design/codec-and-dn-leniency.md)
 
 ## Regression guards
 

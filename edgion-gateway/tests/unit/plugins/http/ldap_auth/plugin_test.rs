@@ -2532,18 +2532,19 @@ fn bind_failure_tags_are_distinct_and_static() {
 #[test]
 fn bind_failure_classes() {
     use edgion_ldap::Error;
-    use std::io::{Error as IoError, ErrorKind};
+    use std::io::ErrorKind;
     assert_eq!(bind_failure(&Error::Closed), BindFailure::Transport);
     assert_eq!(
-        bind_failure(&Error::Io(IoError::from(ErrorKind::ConnectionReset))),
+        bind_failure(&Error::Io(ErrorKind::ConnectionReset)),
         BindFailure::Transport
     );
+    assert_eq!(bind_failure(&Error::SessionBroken), BindFailure::Transport);
+    assert_eq!(bind_failure(&Error::MessageIdExhausted), BindFailure::Transport);
+    assert_eq!(bind_failure(&Error::UnauthenticatedBind), BindFailure::Protocol);
+    assert_eq!(bind_failure(&Error::EmptyUsername), BindFailure::Protocol);
     // rustls reports a post-handshake alert (for example a rejected client
     // certificate under TLS 1.3) as InvalidData.
-    assert_eq!(
-        bind_failure(&Error::Io(IoError::new(ErrorKind::InvalidData, "alert"))),
-        BindFailure::Tls
-    );
+    assert_eq!(bind_failure(&Error::Io(ErrorKind::InvalidData)), BindFailure::Tls);
     assert_eq!(bind_failure(&Error::Truncated), BindFailure::Protocol);
     assert_eq!(
         bind_failure(&Error::UnexpectedMessageId { expected: 1, actual: 2 }),
