@@ -213,6 +213,7 @@ impl EdgionTcpProxy {
             Some(owner.gateway_key()),
             gateway_config.allow_loopback_upstream,
             crate::backends::L4Transport::Connection,
+            &[],
         )
         .await;
         let backend =

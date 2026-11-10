@@ -122,9 +122,10 @@ async fn no_processor_kinds_still_wait_for_namespace_and_phase_completion() {
     let (tx, mut rx) = mpsc::channel(4);
     let (phase_tx, phase_rx) = watch::channel(false);
     let cancel = CancellationToken::new();
+    let runtime = Arc::new(ControllerRuntime::new());
     let task = tokio::spawn(KubernetesCenter::run_caches_ready(
         Arc::new(ConfigSyncServer::new()),
-        Arc::new(ControllerRuntime::new()),
+        runtime.clone(),
         Vec::new(),
         Vec::new(),
         tx,
@@ -136,9 +137,13 @@ async fn no_processor_kinds_still_wait_for_namespace_and_phase_completion() {
     ));
     tokio::task::yield_now().await;
     assert!(rx.try_recv().is_err());
+    assert!(!runtime.processor_registry.is_registration_complete());
     phase_tx.send_replace(true);
     assert!(matches!(rx.recv().await, Some(LifecycleEvent::CachesReady)));
     task.await.unwrap();
+    // The Controller DNS resolver's readiness gate depends on this mark in
+    // Kubernetes mode as well as FS/etcd.
+    assert!(runtime.processor_registry.is_registration_complete());
 }
 
 #[tokio::test]
@@ -198,7 +203,7 @@ async fn pre_cancelled_token_suppresses_caches_ready() {
     // token must stop the tail before CachesReady is sent.
     KubernetesCenter::run_caches_ready(
         css,
-        runtime,
+        runtime.clone(),
         Vec::new(),
         Vec::new(),
         tx,
@@ -212,6 +217,10 @@ async fn pre_cancelled_token_suppresses_caches_ready() {
     assert!(
         rx.try_recv().is_err(),
         "cancelled caches task must not send CachesReady"
+    );
+    assert!(
+        !runtime.processor_registry.is_registration_complete(),
+        "a demoted replica must not open in-process source gates"
     );
 }
 

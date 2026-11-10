@@ -215,7 +215,26 @@ impl ResolvedDnsResolverDefault {
             .dns_resolver
             .as_ref()
             .expect("selected DNS owner has a DNS field");
-        let refresh_policy = crate::backends::DnsRefreshPolicy::from_config(config);
+        // An invalid refresh block is reported Accepted=False by the
+        // Controller; the Gateway then runs the documented defaults (keeping
+        // only the endpoint-table switch) instead of a silently clamped
+        // variant of the rejected values.
+        let errors = config.refresh_errors();
+        let refresh_policy = if errors.is_empty() {
+            crate::backends::DnsRefreshPolicy::from_config(config)
+        } else {
+            tracing::error!(
+                config = %owner.name_any(),
+                errors = ?errors,
+                "Invalid dnsResolver refresh configuration received by the gateway, using default refresh settings"
+            );
+            crate::backends::DnsRefreshPolicy::from_config(
+                &edgion_resources::resources::edgion_gateway_config::DnsResolverConfig {
+                    endpoint_table: config.endpoint_table,
+                    ..Default::default()
+                },
+            )
+        };
         Self {
             candidate: candidate_from_egc_default(owner),
             // The effective `fallbackRefreshSeconds` (unset: 5 clamped into
@@ -254,11 +273,25 @@ struct EdgionGatewayConfigSnapshot {
 
 impl EdgionGatewayConfigSnapshot {
     fn new(configs: HashMap<String, Arc<EdgionGatewayConfig>>) -> Self {
-        let dns_resolver_default = configs
+        let mut dns_owners: Vec<&String> = configs
             .iter()
             .filter(|(_, config)| config.spec.dns_resolver.is_some())
-            .min_by(|a, b| a.0.cmp(b.0))
-            .map(|(_, owner)| ResolvedDnsResolverDefault::resolve(owner))
+            .map(|(key, _)| key)
+            .collect();
+        dns_owners.sort();
+        if let [owner, ignored @ ..] = dns_owners.as_slice() {
+            if !ignored.is_empty() {
+                tracing::warn!(
+                    owner = %owner,
+                    ignored = ?ignored,
+                    "Several EdgionGatewayConfigs define dnsResolver; only the smallest-named one applies process-wide"
+                );
+            }
+        }
+        let dns_resolver_default = dns_owners
+            .first()
+            .and_then(|key| configs.get(*key))
+            .map(|owner| ResolvedDnsResolverDefault::resolve(owner))
             .map(Arc::new);
         let runtime_configs = configs
             .values()

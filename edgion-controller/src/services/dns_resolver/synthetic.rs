@@ -11,6 +11,13 @@ use std::sync::Arc;
 
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
+use tokio::time::Instant;
+
+/// What produced one Service's published slices: the (hostname, resolver
+/// fingerprint) source and the time of the answer. A restarted resolver task
+/// adopts the slices only for the same source and keeps the original answer
+/// time, so a restart never extends how long a stale answer is served.
+pub(crate) type Provenance = ((String, String), Instant);
 
 #[derive(Default)]
 struct Inner {
@@ -21,6 +28,8 @@ struct Inner {
     slices: HashMap<String, Arc<EndpointSlice>>,
     /// Service key -> its slice keys.
     by_service: HashMap<String, BTreeSet<String>>,
+    /// Service key -> provenance of its slices (absent when unknown).
+    provenance: HashMap<String, Provenance>,
 }
 
 /// Controller-published synthetic slices, keyed like the EndpointSlice cache.
@@ -56,6 +65,17 @@ impl DnsSyntheticSlices {
     /// the caller must enqueue; an identical replacement, or a write from a
     /// task that predates the last `clear`, returns nothing and changes nothing.
     pub(crate) fn replace_service(&self, epoch: u64, service_key: &str, slices: Vec<EndpointSlice>) -> Vec<String> {
+        self.replace_service_from(epoch, service_key, None, slices)
+    }
+
+    /// [`Self::replace_service`] that also records what produced the slices.
+    pub(crate) fn replace_service_from(
+        &self,
+        epoch: u64,
+        service_key: &str,
+        provenance: Option<Provenance>,
+        slices: Vec<EndpointSlice>,
+    ) -> Vec<String> {
         let incoming: HashMap<String, EndpointSlice> = slices
             .into_iter()
             .filter_map(|slice| slice_key(&slice).map(|key| (key, slice)))
@@ -80,6 +100,10 @@ impl DnsSyntheticSlices {
             }
             keys.insert(key);
         }
+        match provenance.filter(|_| !keys.is_empty()) {
+            Some(provenance) => inner.provenance.insert(service_key.to_string(), provenance),
+            None => inner.provenance.remove(service_key),
+        };
         if !keys.is_empty() {
             inner.by_service.insert(service_key.to_string(), keys);
         }
@@ -92,6 +116,11 @@ impl DnsSyntheticSlices {
         self.inner.read().by_service.contains_key(service_key)
     }
 
+    /// Provenance of `service_key`'s published slices, when known.
+    pub(crate) fn provenance(&self, service_key: &str) -> Option<Provenance> {
+        self.inner.read().provenance.get(service_key).cloned()
+    }
+
     /// Service keys that currently own slices.
     pub(crate) fn service_keys(&self) -> Vec<String> {
         self.inner.read().by_service.keys().cloned().collect()
@@ -100,6 +129,11 @@ impl DnsSyntheticSlices {
     /// Number of synthetic slices (store-stats leak detection).
     pub(crate) fn len(&self) -> usize {
         self.inner.read().slices.len()
+    }
+
+    /// No slice is published.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.read().slices.is_empty()
     }
 
     /// Drop every slice and reject writes from earlier resolver tasks.

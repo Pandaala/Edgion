@@ -577,8 +577,9 @@ dns_resolver:
 这些设置只作用于带 `edgion.io/dns-resolution-mode: controller` 注解的 ExternalName Service，
 其他 ExternalName Service 由 Gateway 解析；没有开关项。Controller 每隔 `refresh_interval`
 解析一次，把地址作为内存中的 EndpointSlice 经配置同步下发给 Gateway，不写入 Kubernetes
-API，因此文件系统和 etcd 配置中心同样可用。结果不变时不发布任何更新；解析失败保留上次的
-地址，权威空结果会撤下地址。
+API，因此文件系统和 etcd 配置中心同样可用。结果不变时不发布任何更新；解析失败时，上次的
+地址最多保留到最后一次成功解析后 5 分钟；权威空结果会立即撤下地址。操作系统解析器无法区分
+NXDOMAIN 和故障，因此使用它时，已删除的域名最多会保留这 5 分钟。
 
 `lookup_family` 可选 `ipv4Only`（默认）、`ipv6Only`、`all`，修改后需要重启 Controller。
 Service 的 `edgion.io/dns-lookup-family` 注解可热更新覆盖；收窄地址族时会立即用过滤后的

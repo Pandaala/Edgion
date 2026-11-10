@@ -925,6 +925,10 @@ impl KubernetesCenter {
         if cancel.is_cancelled() {
             return;
         }
+        // Every expected processor is registered and ready: the Kubernetes
+        // equivalent of the FS/etcd `spawn_all_controllers` mark. In-process
+        // sources that requeue keys (the Controller DNS resolver) wait on it.
+        registry.mark_registration_complete();
         if let (Some(client), Some(leader_handle)) = (acme_client, leader_handle) {
             Self::start_leader_jobs(&client, &watch_namespaces, runtime, leader_handle);
         }

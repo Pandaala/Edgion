@@ -53,7 +53,7 @@ use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 
 use crate::config::{dns_resolver_config, DnsResolverConfig};
 
-use super::synthetic::DnsSyntheticSlices;
+use super::synthetic::{DnsSyntheticSlices, Provenance};
 use super::targets::DnsResolverTarget;
 
 /// Fallback refresh interval when the configured `refresh_interval` is unparseable.
@@ -107,10 +107,12 @@ impl DnsResolverTask {
     }
 }
 
-/// Start the resolver for `runtime` when it has targets and is not running.
-/// Called by `ServiceHandler` after publishing a Service; idempotent.
+/// Start the resolver for `runtime` when it has targets (or published slices
+/// still to withdraw) and is not running. Called by `ServiceHandler` after
+/// publishing a Service and by the panic watcher; idempotent.
 pub(crate) fn ensure_dns_resolver_running(runtime: &Arc<ControllerRuntime>) {
-    if runtime.dns_resolver_targets.is_empty() || runtime.dns_resolver_task.is_running() {
+    let idle = runtime.dns_resolver_targets.is_empty() && runtime.dns_synthetic_slices.is_empty();
+    if idle || runtime.dns_resolver_task.is_running() {
         return;
     }
     if tokio::runtime::Handle::try_current().is_err() {
@@ -124,8 +126,9 @@ pub(crate) fn ensure_dns_resolver_running(runtime: &Arc<ControllerRuntime>) {
     *guard = Some(task.abort_handle());
     drop(guard);
     // An abort (runtime reset) is silent. A panic is reported and the task is
-    // restarted after a short delay (a reset in between leaves no targets, so
-    // the restart is then a no-op).
+    // restarted after a short delay, even when the last target left meanwhile,
+    // so the dead task's slices are withdrawn (a reset in between clears both
+    // targets and slices, so the restart is then a no-op).
     let runtime = Arc::clone(runtime);
     tokio::spawn(async move {
         if let Err(error) = task.await {
@@ -291,9 +294,17 @@ impl ResolverState {
                     state.clear_answer();
                     changed_keys.extend(slices.replace_service(self.epoch, &key, Vec::new()));
                 } else if slices.has_service(&key) {
-                    // Adopt what an earlier task published as last good from
-                    // now, so transient failures keep it for up to MAX_STALE.
-                    state.last_success = Some(now);
+                    match slices.provenance(&key) {
+                        // Adopt what an earlier task published for the same
+                        // source, keeping its answer time so MAX_STALE still
+                        // counts from the original answer.
+                        Some((published, answered_at)) if published == source => {
+                            state.last_success = Some(answered_at);
+                        }
+                        // Published for another hostname or resolver (or of
+                        // unknown origin): never served for this source.
+                        _ => changed_keys.extend(slices.replace_service(self.epoch, &key, Vec::new())),
+                    }
                 }
                 state.source = Some(source);
             } else if revised && state.addrs.is_some() {
@@ -305,6 +316,7 @@ impl ResolverState {
                     &service,
                     state.addrs.as_deref(),
                     family,
+                    provenance(state),
                 ));
             }
             state.in_flight = true;
@@ -337,6 +349,9 @@ impl ResolverState {
             return Vec::new();
         }
         state.in_flight = false;
+        // The next refresh counts from completion: a slow query (up to the
+        // resolve deadline) never makes the target overdue on arrival.
+        state.next_due = Some(now + self.period);
         match result {
             Ok(addrs) if !addrs.is_empty() => {
                 let normalized = normalize_addrs(addrs);
@@ -372,17 +387,25 @@ impl ResolverState {
             &service,
             state.addrs.as_deref(),
             job.family,
+            provenance(state),
         )
     }
 
-    /// Earliest due refresh.
+    /// Earliest due refresh. Targets with a query in flight are rescheduled
+    /// when it completes, so they never pull the wake time into the past.
     pub(crate) fn next_due(&self, now: Instant) -> Instant {
         self.targets
             .values()
+            .filter(|state| !state.in_flight)
             .filter_map(|state| state.next_due)
             .min()
             .unwrap_or(now + self.period)
     }
+}
+
+/// What produced a target's current answer, recorded with its slices.
+fn provenance(state: &TargetState) -> Option<Provenance> {
+    state.source.clone().zip(state.last_success)
 }
 
 fn external_name(service: &Service) -> Option<String> {
@@ -405,6 +428,7 @@ fn publish(
     service: &Service,
     addrs: Option<&[IpAddr]>,
     family: DnsLookupFamily,
+    provenance: Option<Provenance>,
 ) -> Vec<String> {
     let allowed: Vec<IpAddr> = addrs
         .unwrap_or_default()
@@ -426,7 +450,7 @@ fn publish(
         ),
         None => Vec::new(),
     };
-    slices.replace_service(epoch, service_key, built)
+    slices.replace_service_from(epoch, service_key, provenance, built)
 }
 
 /// Wait until every resource processor is registered and ready, so httpdns
@@ -465,6 +489,7 @@ async fn run(runtime: Arc<ControllerRuntime>) {
                     let keys = state.apply(&job, result, &runtime.dns_synthetic_slices, Instant::now());
                     enqueue(&runtime, keys).await;
                 }
+                next_wake = state.next_due(Instant::now());
                 continue;
             }
         }

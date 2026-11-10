@@ -24,15 +24,26 @@ These invariants must hold:
    therefore bounded by configuration, plus the hard `maxEntries` cap that rejects new
    targets and never evicts referenced ones.
 2. **No residue.** An entry is deleted with its last referrer; a Service delete, mode
-   switch, hostname / resolver / family change or leaving `ExternalName` withdraws its
-   slices in the same mutation. A Service relist is a mark-and-sweep. A periodic worker
+   switch, hostname change or leaving `ExternalName` withdraws its slices in the same
+   mutation. A resolver or family change for the same hostname is make-before-break:
+   the binding keeps the previous entry as `draining` (still referenced, never
+   refreshed: `take_due` skips entries no binding targets) and publishes its answer,
+   filtered to the new family, until the new entry's first result of any kind; then the
+   previous reference is dropped. A failing first result withdraws the endpoints, so a
+   LinkSys change (endpoint policy, failed preparation) still takes effect within one
+   lookup and the replaced resolver generation is never used again (guarded by the
+   `DnsResolutionFlap` `to_blocked` / `to_invalid_connection` phases). A drained
+   Service is excluded from the pending-waiter map. A Service relist is a mark-and-sweep. A periodic worker
    pass (`reconcile_published`) withdraws any Gateway-local slice the table does not
    own. `store-stats.dns_endpoint_table` counts return to zero once no Service uses the
    table, which the integration residue check observes.
 3. **Change suppression.** Answers are normalized by
    `edgion_common::dns::endpoint_slices::normalize_addrs`; an equal set updates only
    timestamps and makes no publisher call, and the coordinator additionally treats an
-   identical republish as a no-op. `activate_service` rebuilds endpoint runtime state on
+   identical republish as a no-op. `BatchingPublisher` merges publications per Service
+   (last wins), so a withdraw followed by an identical republish in one mutation never
+   reaches the coordinator as a change; the worker applies every completed lookup of
+   one wake-up in one mutation (one coordinator transaction). `activate_service` rebuilds endpoint runtime state on
    every membership change, so suppression is what keeps health and outlier state across
    refreshes.
 4. **Partition.** Gateway-local slices live in the coordinator map under the
@@ -40,15 +51,22 @@ These invariants must hold:
    conf_sync updates cannot address them, and `admitted_service_slices` feeds an
    `ExternalName` in `controller` mode only from conf_sync slices, every other
    `ExternalName` only from Gateway-local slices, and every other Service only from
-   conf_sync slices. Epoch preflight and projection use the same admitted list.
+   conf_sync slices without `edgion.io/endpoint-origin: controller-dns` (a Service
+   switched away from `controller` mode never routes to the Controller's resolved
+   addresses while their withdrawal is in flight). Epoch preflight and projection use
+   the same admitted list.
 5. **No cross-source fallback.** `gateway` never falls back to per-request DNS and
    `controller` never bridges to Gateway resolution. The mode decision is the pure
    `backends::external_name_source` (annotation, else EGC `endpointTable`); an invalid
    annotation fails closed.
 6. **Failure semantics.** Success replaces the set; `NoAddresses` withdraws at once;
-   other failures keep the last good set while `now - last_success <= maxStaleSeconds`.
-   Back-off starts at `minRefreshSeconds` and doubles to `min(60 s, maxRefreshSeconds)`.
-   Results for a deleted or recreated entry are discarded by generation.
+   other failures keep the last good set while `now - failing_since <= maxStaleSeconds`,
+   where `failing_since` is the first failure after the last success (counting from the
+   last success would leave almost no tolerance once the refresh interval approaches
+   `maxStale`). Back-off starts at `minRefreshSeconds` and doubles to
+   `min(60 s, maxRefreshSeconds)`. Results for a deleted or recreated entry are
+   discarded by generation. A refresh-policy change pulls every scheduled refresh in to
+   at most `latest_success_delay()`; an invalid refresh block runs the defaults.
 
 ## Rationale and evidence
 
@@ -72,14 +90,22 @@ cached answer and dialed one address, with no pool, health state or L4 support.
 - Not implemented: Prometheus metrics for the table (admin view and store-stats only).
 - Accepted: the first-answer wait is a fixed 2 s, not capped by the route's connect
   timeout, and there is no dedicated "DNS pending" error; after the wait, ordinary
-  selection reports the no-ready-endpoint error.
+  selection reports the no-ready-endpoint error. A wake only means the pending set
+  changed, so `wait_first_answer` re-checks its own Service and keeps waiting on its
+  current signal until the one deadline.
 - Accepted: the UDP datagram path never waits on a pending entry (the datagram is
   dropped like one sent to an empty Service). `system`-mode UDP sessions use the
   hostname-keyed single-flight shared answer cache with a 250 ms budget, so spoofable
   new sources cannot multiply DNS queries or stall the receive loop.
-- Normalization drops link-local answers (169.254.0.0/16, fe80::/10) so metadata
-  addresses never become LB or health-probe targets; loopback is kept and gated per
-  Gateway by `allowLoopbackUpstream` at selection time.
+- Normalization drops link-local (169.254.0.0/16, fe80::/10) and unspecified (0.0.0.0,
+  ::) answers so metadata addresses and "this host" never become LB or health-probe
+  targets; loopback is kept and gated per Gateway by `allowLoopbackUpstream` at
+  selection time.
+- Accepted: settings are process-wide (the smallest-named EGC defining `dnsResolver`);
+  a Service-keyed table cannot hold per-Gateway settings. Several defining EGCs log a
+  warning on every EGC publication.
+- Accepted: an OS lookup that outlives `RESOLVE_TIMEOUT` keeps its blocking thread
+  until the resolver's own limit, although its permit is released.
 
 ## Verification and re-evaluation
 

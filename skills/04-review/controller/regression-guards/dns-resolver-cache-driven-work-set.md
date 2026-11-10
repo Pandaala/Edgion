@@ -38,14 +38,29 @@ a fixed `refresh_interval` (see
 A revised target is handled on the next pass: its last good answer is republished at
 once with the new ports / filtered by the new family, then re-queried. Queries run
 concurrently (`MAX_CONCURRENT_RESOLUTIONS`, `RESOLVE_DEADLINE`) and each answer is
-applied as it arrives. Passes are spaced by `MIN_REFRESH`, coalescing bursts. Success
-replaces the set, `NoAddresses` withdraws it, other failures keep the last good set; an
-invalid family annotation withdraws without querying. Removed targets, and synthetic
-slices whose Service is no longer a target, are withdrawn on the next pass.
+applied as it arrives; the next refresh counts from the answer, and a target with a
+query in flight never pulls the wake time into the past (no re-plan storm while a slow
+query runs). Passes are spaced by `MIN_REFRESH`, coalescing bursts. Success replaces
+the set, `NoAddresses` withdraws it, other failures keep the last good set for at most
+`MAX_STALE` after the last success; an invalid family annotation withdraws without
+querying. Removed targets, and synthetic slices whose Service is no longer a target,
+are withdrawn on the next pass.
+
+Each published Service records its provenance (hostname + resolver fingerprint, answer
+time) in `DnsSyntheticSlices`. A fresh `ResolverState` (a restarted task) adopts
+existing slices only for the same source and keeps the original answer time, so a
+restart neither serves another hostname's answer nor extends `MAX_STALE`; otherwise it
+withdraws them.
 
 Lifecycle: the task belongs to the runtime (`DnsResolverTask`). `ServiceHandler` starts
-it with the first target (`ensure_dns_resolver_running`); `ControllerRuntime::reset`
-aborts it and clears targets and synthetic slices. It is not a leader job: slices are
+it with the first target (`ensure_dns_resolver_running`), which also runs it while
+synthetic slices remain without targets (a panic restart after the last target left
+must still withdraw them); `ControllerRuntime::reset` aborts it and clears targets and
+synthetic slices. The loop waits for `ProcessorRegistry::is_registration_complete() &&
+is_all_ready()` before its first pass; FS/etcd set the mark in
+`spawn_all_controllers` and Kubernetes at the tail of `run_caches_ready` (before
+`CachesReady`, never on a cancelled/demoted iteration). Without the Kubernetes mark the
+resolver never runs in Kubernetes mode. It is not a leader job: slices are
 per-process memory, so every process that runs the resource pipeline (Kubernetes
 all-serve followers, file-system and etcd centers) resolves for itself.
 
@@ -81,7 +96,8 @@ withdrawal paths, family narrowing, ReferenceGrant gating, httpdns preparation r
 `handlers/endpoint_slice_test.rs::synthetic_dns_slices_enter_the_pipeline_only_when_unsourced`
 and `handlers/service_test.rs::publication_hooks_maintain_dns_resolver_targets` (start
 and reset). Integration: `DnsResolution::controller_mode_publishes_endpoints` in the
-file-system harness. The `run()` loop itself has no direct test.
+file-system harness. The `run()` loop itself has no direct test; the Kubernetes
+readiness mark is covered by `center_test/caches_ready_tests.rs`.
 
 Re-evaluate when Service publication hooks change, when the resolver gains another
 input kind, or when the EndpointSlice processor changes how it reads its source.

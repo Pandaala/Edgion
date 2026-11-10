@@ -1774,6 +1774,44 @@ fn gateway_dns_slices_feed_only_non_controller_external_names() {
 }
 
 #[test]
+fn controller_dns_slices_feed_only_controller_mode_external_names() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let ports = external_name_service(None)
+        .spec
+        .as_ref()
+        .unwrap()
+        .ports
+        .clone()
+        .unwrap();
+    let controller_slice = edgion_common::dns::endpoint_slices::build_dns_endpoint_slices(
+        "default",
+        "backend",
+        &ports,
+        &["203.0.113.7".parse().unwrap()],
+        edgion_common::dns::endpoint_slices::DnsSliceOrigin::Controller,
+    )
+    .remove(0);
+    let mut ordinary = (*owned_slice("conf-sync", "conf-sync", "backend", "10.9.9.9")).clone();
+    ordinary.ports = Some(slice_ports(&[("http", 80)]));
+    coordinator.replace_endpoint_slices(&HashMap::from([
+        ("default/backend-edgion-ctl-dns".into(), Arc::new(controller_slice)),
+        ("default/conf-sync".into(), Arc::new(ordinary)),
+    ]));
+
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".into(),
+        external_name_service(Some("controller")),
+    )]));
+    assert_eq!(published_addresses(&coordinator), vec!["10.9.9.9", "203.0.113.7"]);
+
+    // Switched to ClusterIP while the Controller's withdrawal is still in
+    // flight: the resolved external address must never serve it.
+    let cluster_ip = (*service(Some("uid-a"), IntOrString::Int(80))).clone();
+    coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(cluster_ip))]));
+    assert_eq!(published_addresses(&coordinator), vec!["10.9.9.9"]);
+}
+
+#[test]
 fn conf_sync_relist_and_updates_cannot_touch_gateway_dns_slices() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     coordinator.replace_services(&HashMap::from([(

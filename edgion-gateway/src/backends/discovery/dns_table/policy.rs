@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use edgion_resources::resources::edgion_gateway_config::{
-    DnsResolverConfig, DNS_DEFAULT_FALLBACK_REFRESH_SECONDS, DNS_MAX_TTL_SECONDS, DNS_MIN_REFRESH_FLOOR_SECONDS,
-    DNS_MIN_TTL_FACTOR,
+    DnsResolverConfig, DNS_DEFAULT_FALLBACK_REFRESH_SECONDS, DNS_MAX_ENTRIES_LIMIT, DNS_MAX_TTL_SECONDS,
+    DNS_MIN_REFRESH_FLOOR_SECONDS, DNS_MIN_TTL_FACTOR,
 };
 
 /// Longest back-off between retries of a failing target.
@@ -71,7 +71,7 @@ impl DnsRefreshPolicy {
                 .refresh_interval_seconds
                 .map(|seconds| Duration::from_secs(u64::from(seconds).clamp(floor, ceiling))),
             max_stale: Duration::from_secs(u64::from(config.max_stale_seconds).min(ceiling)),
-            max_entries: (config.max_entries as usize).max(1),
+            max_entries: (config.max_entries as usize).clamp(1, DNS_MAX_ENTRIES_LIMIT as usize),
         }
     }
 
@@ -103,6 +103,15 @@ impl DnsRefreshPolicy {
             jitter(base, unit).clamp(floor(), ceiling())
         } else {
             jitter(base, unit).clamp(self.min_refresh, self.max_refresh)
+        }
+    }
+
+    /// Latest delay any successful answer can schedule under this policy; a
+    /// policy change pulls existing refreshes in to at most this far out.
+    pub fn latest_success_delay(&self) -> Duration {
+        match self.refresh_interval {
+            Some(fixed) => jitter(fixed, 1.0).clamp(floor(), ceiling()),
+            None => self.max_refresh,
         }
     }
 

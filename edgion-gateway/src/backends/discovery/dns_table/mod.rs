@@ -21,11 +21,11 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use edgion_common::dns::{resolve_answer, DnsError, DnsQueryPolicy};
+use edgion_common::dns::{resolve_answer, DnsAnswer, DnsError, DnsQueryPolicy};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::Mutex;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio::time::Instant;
 
 pub use policy::DnsRefreshPolicy;
@@ -65,14 +65,31 @@ impl SliceSink for CoordinatorSink {
 
 /// Collects one mutation's publications so they reach the coordinator as a
 /// single transaction instead of one full-state transaction per Service.
+/// Publications for the same Service merge (the last one wins), so a
+/// withdraw followed by an identical republish reaches the coordinator as a
+/// no-op instead of resetting the Service's endpoint runtime state.
 struct BatchingPublisher<'a> {
     sink: &'a dyn SliceSink,
-    batch: Mutex<Vec<(String, Vec<EndpointSlice>)>>,
+    batch: Mutex<PublishBatch>,
+}
+
+#[derive(Default)]
+struct PublishBatch {
+    entries: Vec<(String, Vec<EndpointSlice>)>,
+    index: HashMap<String, usize>,
 }
 
 impl SlicePublisher for BatchingPublisher<'_> {
     fn publish(&self, service_key: &str, slices: Vec<EndpointSlice>) {
-        self.batch.lock().push((service_key.to_string(), slices));
+        let mut batch = self.batch.lock();
+        match batch.index.get(service_key).copied() {
+            Some(position) => batch.entries[position].1 = slices,
+            None => {
+                let position = batch.entries.len();
+                batch.index.insert(service_key.to_string(), position);
+                batch.entries.push((service_key.to_string(), slices));
+            }
+        }
     }
 
     fn published_service_keys(&self) -> BTreeSet<String> {
@@ -137,10 +154,10 @@ impl DnsEndpointTable {
         let mut state = self.state.lock();
         let publisher = BatchingPublisher {
             sink: self.sink.as_ref(),
-            batch: Mutex::new(Vec::new()),
+            batch: Mutex::new(PublishBatch::default()),
         };
         apply(&mut state, self.lookup.as_ref(), &publisher, Instant::now());
-        let batch = publisher.batch.into_inner();
+        let batch = publisher.batch.into_inner().entries;
         if !batch.is_empty() {
             self.sink.publish_batch(batch);
         }
@@ -196,24 +213,39 @@ impl DnsEndpointTable {
     }
 
     /// Wait (bounded) for the first answer of a Service whose target is still
-    /// pending. Lock-free: one atomic load in the steady state, one map lookup
+    /// pending. Lock-free: one atomic load in the steady state, map lookups
     /// while any target is pending.
+    ///
+    /// A wake only means the pending set changed (an answer, or another
+    /// Service leaving a shared entry, or this Service moving to a new
+    /// target), so the wait re-checks this Service and keeps waiting on its
+    /// current signal until the one overall deadline.
     pub async fn wait_first_answer(&self, service_key: &str) {
         if self.pending_entries.load(Ordering::Acquire) == 0 {
             return;
         }
-        let Some(notify) = self.pending_waiters.load().get(service_key).cloned() else {
-            return;
-        };
-        let notified = notify.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        // `mutate` republishes the map before waking waiters: if the answer
-        // landed before registration, the key is already gone here.
-        if !self.pending_waiters.load().contains_key(service_key) {
-            return;
+        let deadline = Instant::now() + FIRST_ANSWER_WAIT;
+        loop {
+            let Some(notify) = self.pending_waiters.load().get(service_key).cloned() else {
+                return;
+            };
+            let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            // `mutate` republishes the map before waking waiters: if the
+            // answer landed (or the target moved) before registration, the
+            // map no longer holds this signal.
+            let current = self.pending_waiters.load();
+            match current.get(service_key) {
+                None => return,
+                Some(latest) if !Arc::ptr_eq(latest, &notify) => continue,
+                Some(_) => {}
+            }
+            drop(current);
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return;
+            }
         }
-        let _ = tokio::time::timeout(FIRST_ANSWER_WAIT, notified).await;
     }
 
     pub fn stats(&self) -> DnsEndpointTableStats {
@@ -224,9 +256,14 @@ impl DnsEndpointTable {
         self.state.lock().entries_view(Instant::now(), MAX_LISTED_ENTRIES)
     }
 
-    fn apply_result(&self, job: &ResolveJob, result: Result<edgion_common::dns::DnsAnswer, DnsError>) {
-        let jitter_unit: f64 = rand::random();
-        self.mutate(|state, _, publisher, now| state.apply_result(job, result, now, jitter_unit, publisher));
+    /// Apply every completed resolution in one mutation: one coordinator
+    /// transaction for however many answers changed.
+    fn apply_results(&self, done: Vec<(ResolveJob, Result<DnsAnswer, DnsError>)>) {
+        self.mutate(|state, _, publisher, now| {
+            for (job, result) in done {
+                state.apply_result(&job, result, now, rand::random(), publisher);
+            }
+        });
     }
 
     /// Withdraw Gateway-local slices the table does not own.
@@ -246,6 +283,10 @@ impl DnsEndpointTable {
     /// `MAX_CONCURRENT_RESOLUTIONS` at a time, until shutdown.
     pub async fn run(&'static self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_RESOLUTIONS));
+        // Completed resolutions come back to this loop, which applies every
+        // result that is ready in one mutation.
+        let (results_tx, mut results_rx) =
+            mpsc::channel::<(ResolveJob, Result<DnsAnswer, DnsError>)>(MAX_CONCURRENT_RESOLUTIONS);
         let mut reconcile = tokio::time::interval(RECONCILE_INTERVAL);
         reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Pick up anything bound before the worker started.
@@ -259,6 +300,7 @@ impl DnsEndpointTable {
                     self.state.lock().cancel_job(&job);
                     continue;
                 };
+                let results = results_tx.clone();
                 tokio::spawn(async move {
                     // The lookup runs in its own task so a panic inside a
                     // resolver backend becomes an ordinary failure result and
@@ -278,10 +320,11 @@ impl DnsEndpointTable {
                         Ok(Err(_)) => Err(DnsError::Io("resolution timed out".to_string())),
                         Err(_) => Err(DnsError::Io("resolution task failed".to_string())),
                     };
-                    // Release the permit before applying: applying wakes the loop,
-                    // which must then see the freed permit.
+                    // Release the permit before reporting: the loop applies the
+                    // result and must then see the freed permit.
                     drop(permit);
-                    self.apply_result(&job, result);
+                    // Fails only after shutdown, when the result no longer matters.
+                    let _ = results.send((job, result)).await;
                 });
             }
             // With every permit busy, due targets cannot start; wait for a
@@ -293,6 +336,13 @@ impl DnsEndpointTable {
             };
             let sleep_until = next_due.unwrap_or_else(|| Instant::now() + RECONCILE_INTERVAL);
             tokio::select! {
+                Some(first) = results_rx.recv() => {
+                    let mut done = vec![first];
+                    while let Ok(more) = results_rx.try_recv() {
+                        done.push(more);
+                    }
+                    self.apply_results(done);
+                }
                 _ = self.wake.notified() => {}
                 _ = tokio::time::sleep_until(sleep_until) => {}
                 _ = reconcile.tick() => self.reconcile(),

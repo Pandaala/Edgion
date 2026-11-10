@@ -564,10 +564,16 @@ ExternalName Services in `gateway` mode (the default; see
 are resolved by a background table in each Gateway. Every returned address becomes
 an ordinary load-balanced endpoint for HTTP, gRPC, TCP, UDP and TLS routes.
 
+These settings are process-wide, like the resolver and family default above: one
+Gateway process uses the `dnsResolver` block of the EGC with the smallest name among
+all EGCs that define one, whichever GatewayClass references it. Define `dnsResolver`
+in one EGC only; a block in another EGC (even a family-only block) can silently
+replace it.
+
 ```yaml
 spec:
   dnsResolver:
-    endpointTable: true          # false: ExternalName uses the OS resolver per request
+    endpointTable: true          # false: unannotated ExternalName Services use the OS resolver
     ttlFactor: 0.5               # refresh = clamp(ttl * ttlFactor, min, max)
     minRefreshSeconds: 5         # at least 2
     maxRefreshSeconds: 300       # at most 2147483647 (largest DNS TTL)
@@ -585,27 +591,41 @@ spec:
 | `maxRefreshSeconds` | `300` | Longest refresh interval; up to 2147483647, the largest DNS TTL. |
 | `fallbackRefreshSeconds` | unset (5) | Refresh interval when the resolver reports no TTL (operating-system resolver, HTTP DNS without `ttlPath`). If set it must lie between min and max; unset means 5 moved into [min, max], so changing only one bound stays valid. |
 | `refreshIntervalSeconds` | unset | Fixed refresh interval; record TTLs and the min/max bounds are ignored (never below 2 s). |
-| `maxStaleSeconds` | `300` | How long the last good addresses are kept while the resolver fails. |
+| `maxStaleSeconds` | `300` | How long the last good addresses are kept once the resolver starts failing. |
 | `maxEntries` | `4096` | Most distinct hostname / resolver / address-family targets; a Service needing a new target beyond it gets no endpoints. |
 
 The durations are integer seconds because the largest DNS TTL (2147483647 s,
-RFC 2181) cannot be written as a duration string.
+RFC 2181) cannot be written as a duration string. An inconsistent block (for
+example `minRefreshSeconds` above `maxRefreshSeconds`, or `fallbackRefreshSeconds`
+outside them) is rejected at admission in Kubernetes and reported `Accepted=False`
+in other modes; a Gateway that receives one logs an error and uses the default
+refresh settings (keeping `endpointTable`). Changing the refresh settings
+reschedules existing entries, so a shorter interval applies at once.
 
 - Services with the same hostname, resolver and family share one entry and one
   query. An entry is deleted together with its last Service, so deleted Services
   and changed hostnames never leave endpoints behind.
 - Answers are sorted before comparison; an unchanged answer changes nothing, so
   health checks and outlier ejection keep their state across refreshes.
-- A failing resolver keeps the last good addresses for `maxStaleSeconds`, retrying
-  from `minRefreshSeconds` and doubling up to 60 seconds. An authoritative empty
-  answer withdraws the endpoints at once. The operating-system resolver cannot
-  tell NXDOMAIN from an outage, so a removed name stays until `maxStaleSeconds`.
+- A failing resolver keeps the last good addresses for `maxStaleSeconds`, counted
+  from the first failed refresh. Retries start at `minRefreshSeconds` and double up
+  to 60 seconds (never beyond `maxRefreshSeconds`, never below `minRefreshSeconds`).
+  An authoritative empty answer withdraws the endpoints at once. The
+  operating-system resolver cannot tell NXDOMAIN from an outage, so a removed name
+  stays until `maxStaleSeconds`.
+- Changing a Service's (or the default) resolver or address family keeps serving
+  the previous answer, restricted to the new family, until the new resolver's first
+  result, so a working resolver change causes no gap in endpoints. If that first
+  result is a failure the endpoints are withdrawn: a broken new configuration takes
+  effect instead of being masked, and the previous resolver is not queried again.
+  A hostname change withdraws the old addresses at once.
 - A request or TCP/TLS connection for a target that has never been resolved waits
   at most 2 seconds for the first answer. UDP never waits; a datagram that arrives
   before the first answer is dropped and the client's retransmission succeeds.
-- Link-local answers (169.254.0.0/16, fe80::/10) are dropped and never become
-  endpoints or health-check targets.
-- Each refresh is jittered by ±10 % and stays within the min/max bounds.
+- Link-local (169.254.0.0/16, fe80::/10) and unspecified (0.0.0.0, ::) answers are
+  dropped and never become endpoints or health-check targets.
+- Each refresh is jittered by ±10 %. A TTL-derived refresh stays within the min/max
+  bounds; a fixed `refreshIntervalSeconds` only stays above 2 seconds.
 - `GET /api/v1/dns/endpoint-table` on the Gateway admin API lists the entries,
   their addresses, status and referring Services.
 
@@ -613,7 +633,11 @@ RFC 2181) cannot be written as a duration string.
 
 AI provider hostnames and external destinations of the RegionRoute and
 DynamicExternalUpstream plugins are chosen per request, so they use a bounded
-answer cache instead of the endpoint table. They use this resolver and
+answer cache instead of the endpoint table. New UDP sessions to a `system`-mode
+ExternalName Service also resolve through this cache (operating-system resolver,
+at most 250 ms per datagram), so a flood of new client addresses cannot multiply
+DNS queries; HTTP, gRPC, TCP and TLS `system`-mode traffic asks the operating
+system on every request or connection without it. They use this resolver and
 `lookupFamily` default (or the Gateway's override); IP-literal destinations are
 used as written. At most 256 addresses are kept per answer, keyed by resolver,
 hostname and address family, and every use still applies the upstream address

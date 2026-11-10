@@ -159,7 +159,9 @@ pub mod edgion {
     /// Backend DNS family override: ipv4Only, ipv6Only, or all. On a Service it
     /// applies to that `ExternalName` backend; on a Gateway it applies only to
     /// AI endpoints and external jumps (an `ExternalName` inherits Service ->
-    /// EGC -> ipv4Only). Absence inherits; invalid values fail DNS dispatch closed.
+    /// EGC -> ipv4Only in `gateway`/`system` mode, Service -> Controller config
+    /// -> ipv4Only in `controller` mode). Absence inherits; invalid values fail
+    /// DNS dispatch closed.
     pub const DNS_LOOKUP_FAMILY: &str = "edgion.io/dns-lookup-family";
 
     /// Inline standard-DNS resolver override. Value: a comma/space-separated

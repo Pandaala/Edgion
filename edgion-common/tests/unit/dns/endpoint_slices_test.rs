@@ -45,6 +45,12 @@ fn normalize_drops_link_local_but_keeps_loopback() {
 }
 
 #[test]
+fn normalize_drops_unspecified_addresses() {
+    let normalized = normalize_addrs([ip("0.0.0.0"), ip("::"), ip("10.0.0.1")]);
+    assert_eq!(normalized, vec![ip("10.0.0.1")]);
+}
+
+#[test]
 fn normalize_is_independent_of_answer_order() {
     let a = normalize_addrs([ip("1.1.1.3"), ip("1.1.1.1"), ip("1.1.1.2")]);
     let b = normalize_addrs([ip("1.1.1.2"), ip("1.1.1.3"), ip("1.1.1.1")]);

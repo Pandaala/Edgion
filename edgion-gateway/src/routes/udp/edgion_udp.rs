@@ -418,6 +418,7 @@ impl EdgionUdpProxy {
             Some(owner.gateway_key()),
             gateway_config.allow_loopback_upstream,
             crate::backends::L4Transport::Datagram,
+            &[],
         )
         .await;
         let (pinned_endpoint, upstream_addr) =

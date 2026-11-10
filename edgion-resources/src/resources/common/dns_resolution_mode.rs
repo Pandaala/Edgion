@@ -16,7 +16,8 @@ pub enum DnsResolutionMode {
     /// outlier ejection apply).
     Gateway,
     /// The Gateway asks the OS resolver on every request, connection or UDP
-    /// session; no Edgion cache and no endpoint table.
+    /// session; no endpoint table. Only new UDP sessions go through the shared
+    /// single-flight answer cache, so spoofable sources cannot multiply queries.
     System,
     /// The Controller resolves and publishes the endpoints; the Gateway reads
     /// only those.

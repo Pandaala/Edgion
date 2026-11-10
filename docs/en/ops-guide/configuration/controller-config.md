@@ -616,7 +616,10 @@ such Service every `refresh_interval` and publishes the addresses as in-memory
 EndpointSlices that reach Gateways through config sync; nothing is written to the
 Kubernetes API, so it works the same with the file-system and etcd configuration
 centers. An unchanged answer publishes nothing. A failed lookup keeps the last
-good addresses; an authoritative empty answer removes them.
+good addresses for at most 5 minutes after the last successful answer; an
+authoritative empty answer removes them at once. The operating-system resolver
+cannot tell NXDOMAIN from an outage, so with it a removed name stays for up to
+those 5 minutes.
 
 `lookup_family` accepts `ipv4Only` (default), `ipv6Only`, or `all` and requires a
 Controller restart to change. A Service `edgion.io/dns-lookup-family` annotation

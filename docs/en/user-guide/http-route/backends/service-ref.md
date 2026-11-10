@@ -113,9 +113,13 @@ clamped to 5–300 seconds by default; see the
 [EdgionGatewayConfig DNS settings](../../../ops-guide/configuration/edgion-gateway-config.md#backend-dns-endpoint-table)).
 An unchanged answer changes nothing, so health and outlier state survive refreshes.
 If the resolver fails, the last good addresses are kept for up to 5 minutes; a
-name that no longer exists (authoritative empty answer) is withdrawn at once.
-Link-local answers such as `169.254.169.254` are never used. The Gateway drops the
-endpoints of a deleted or changed Service immediately.
+name that no longer exists (authoritative empty answer) is withdrawn at once. The
+operating-system resolver cannot tell a missing name from an outage, so with it a
+removed name is kept for those 5 minutes too. Link-local and unspecified answers
+such as `169.254.169.254` or `0.0.0.0` are never used. The Gateway drops the
+endpoints of a deleted Service, or one whose hostname changed, immediately; a
+resolver or address-family change keeps serving the previous answer until the new
+resolver's first result (a failing new resolver then withdraws the endpoints).
 
 The resolver is chosen by the Service annotations `edgion.io/dns-resolver` or
 `edgion.io/dns-resolver-ref`, then the EdgionGatewayConfig default (`gateway`

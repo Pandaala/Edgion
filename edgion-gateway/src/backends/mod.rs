@@ -453,6 +453,7 @@ pub(crate) async fn prepare_l4_service(
     gateway_key: Option<&str>,
     allow_loopback: bool,
     transport: L4Transport,
+    dialed: &[std::net::IpAddr],
 ) -> L4ServicePrep {
     let Ok(target) = selected.service() else {
         return L4ServicePrep::Select(None);
@@ -467,24 +468,26 @@ pub(crate) async fn prepare_l4_service(
     let Some((available, active)) = selector::load_active_projection(target.key()) else {
         return L4ServicePrep::Select(None);
     };
-    if available
+    let invalid_mode = available
         .raw
         .service
         .spec
         .as_ref()
         .and_then(|spec| spec.type_.as_deref())
         == Some("ExternalName")
-        && available.dns_resolution_mode.is_err()
-    {
-        return L4ServicePrep::Failed;
-    }
-    let Some(hostname) = system_mode_hostname(&available).map(Box::<str>::from) else {
+        && available.dns_resolution_mode.is_err();
+    let hostname = system_mode_hostname(&available).map(Box::<str>::from);
+    if !invalid_mode && hostname.is_none() {
         return L4ServicePrep::Select(Some((available, active)));
-    };
+    }
     if !policy::service_ancestor_admitted(target, gateway_key) {
-        // The terminal gate refuses this backend; no DNS work for it.
+        // The terminal gate refuses this backend (and reports it); no DNS
+        // work or DNS diagnosis for it.
         return L4ServicePrep::Select(Some((available, active)));
     }
+    let Some(hostname) = hostname.filter(|_| !invalid_mode) else {
+        return L4ServicePrep::Failed;
+    };
     let egc = crate::config::get_egc_dns_resolver_default();
     let Ok(family) = external_name_family(
         available.dns_lookup_family,
@@ -525,6 +528,8 @@ pub(crate) async fn prepare_l4_service(
     };
     let mut ips = ips;
     rotate_addresses(&mut ips, next_address_rotation());
+    // A retry of the same connection tries addresses it has not dialed yet.
+    prefer_undialed(&mut ips, dialed);
     // An unsafe-only answer still yields an address so the caller's own
     // address-safety check rejects it with its usual status.
     let addr = match first_safe_inet_addr(&ips, port, allow_loopback) {

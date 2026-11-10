@@ -499,6 +499,11 @@ spec:
                 dnsResolver:
                   type: object
                   description: "Data-plane default DNS policy for ExternalName and AI hostname backends"
+                  x-kubernetes-validations:
+                    - rule: "!has(self.minRefreshSeconds) || !has(self.maxRefreshSeconds) || self.minRefreshSeconds <= self.maxRefreshSeconds"
+                      message: "minRefreshSeconds must not exceed maxRefreshSeconds"
+                    - rule: "!has(self.fallbackRefreshSeconds) || ((!has(self.minRefreshSeconds) || self.fallbackRefreshSeconds >= self.minRefreshSeconds) && (!has(self.maxRefreshSeconds) || self.fallbackRefreshSeconds <= self.maxRefreshSeconds))"
+                      message: "fallbackRefreshSeconds must be within [minRefreshSeconds, maxRefreshSeconds]"
                   properties:
                     lookupFamily:
                       type: string
@@ -524,7 +529,7 @@ spec:
                     endpointTable:
                       type: boolean
                       default: true
-                      description: "Global default for ExternalName Services without edgion.io/dns-resolution-mode: true resolves through the Gateway-local endpoint table (gateway mode); false uses the OS resolver per request/connection (system mode)"
+                      description: "Default for ExternalName Services without edgion.io/dns-resolution-mode: true resolves through the Gateway-local endpoint table (gateway mode); false uses the OS resolver per request/connection (system mode). Like every dnsResolver field it is process-wide: a Gateway uses the dnsResolver block of the smallest-named EGC that defines one"
                     ttlFactor:
                       type: number
                       default: 0.5
@@ -550,7 +555,7 @@ spec:
                       format: int64
                       minimum: 2
                       maximum: 2147483647
-                      description: "Refresh interval when the resolver reports no record TTL (must lie within min/max; unset: 5 clamped into [min, max]); also the fallback answer freshness for AI endpoints and external jumps (capped at 300 there)"
+                      description: "Refresh interval when the resolver reports no record TTL (must lie within min/max; unset: 5 clamped into [min, max]); also the fallback answer freshness of the shared answer cache used by AI endpoints, external jumps and new system-mode UDP sessions (capped at 300 there)"
                     refreshIntervalSeconds:
                       type: integer
                       format: int64

@@ -71,6 +71,8 @@ struct Entry {
     addrs: Arc<[IpAddr]>,
     status: EntryStatus,
     last_success: Option<Instant>,
+    /// Start of the current run of transient failures; `maxStale` counts from here.
+    failing_since: Option<Instant>,
     next_refresh: Instant,
     failures: u32,
     in_flight: bool,
@@ -82,6 +84,10 @@ struct Binding {
     service: Arc<Service>,
     /// The entry this Service reads, when the table owns it.
     target: Option<DnsTargetKey>,
+    /// Make-before-break: after a resolver or family switch for the same
+    /// hostname, the previous entry stays referenced (but is no longer
+    /// refreshed) and its answer stays published until `target`'s first result.
+    draining: Option<DnsTargetKey>,
     /// Owned but refused because the table is full.
     rejected: bool,
     /// Gateway-local slices are currently published for this Service.
@@ -274,7 +280,16 @@ impl TableState {
         if self.inputs == inputs {
             return;
         }
+        let policy_changed = self.inputs.policy != inputs.policy;
         self.inputs = inputs;
+        if policy_changed {
+            // A shorter refresh setting applies now, not after each entry's
+            // already-scheduled (possibly far-off) refresh.
+            let latest = schedule(now, self.inputs.policy.latest_success_delay());
+            for entry in self.entries.values_mut() {
+                entry.next_refresh = entry.next_refresh.min(latest);
+            }
+        }
         self.recompute_all(lookup, publisher, now);
     }
 
@@ -304,16 +319,19 @@ impl TableState {
             .as_ref()
             .and_then(|service| desired_target(service, &self.inputs, lookup));
         let previous = self.services.remove(service_key);
+        let was_rejected = previous.as_ref().is_some_and(|binding| binding.rejected);
 
         let Some(service) = service else {
             if let Some(previous) = previous {
-                self.release(service_key, previous, publisher);
+                self.release(service_key, previous, None, None, publisher);
             }
             return;
         };
 
         // Same target: keep the binding; republish only if the ports changed
         // or nothing was published yet.
+        let mut draining = None;
+        let mut published = false;
         if let Some(previous) = previous {
             if previous.target.is_some() && previous.target.as_ref() == desired.as_ref().map(|(key, _)| key) {
                 let ports_changed = !same_ports(&previous.service, &service);
@@ -327,6 +345,7 @@ impl TableState {
                     Binding {
                         service,
                         target: Some(key),
+                        draining: previous.draining,
                         rejected: false,
                         published: previous.published,
                     },
@@ -336,14 +355,26 @@ impl TableState {
                 }
                 return;
             }
-            self.release(service_key, previous, publisher);
+            let next = desired.as_ref().map(|(key, _)| key);
+            draining = self.drain_source(&previous, next);
+            if draining.is_some() {
+                published = previous.published;
+            }
+            self.release(
+                service_key,
+                previous,
+                draining.as_ref(),
+                next.cloned().as_ref(),
+                publisher,
+            );
         }
 
         let mut binding = Binding {
             service,
             target: None,
+            draining: None,
             rejected: false,
-            published: false,
+            published,
         };
         if let Some((key, spec)) = desired {
             if let Some(entry) = self.entries.get_mut(&key) {
@@ -352,7 +383,7 @@ impl TableState {
                 self.pending_dirty |= entry.status == EntryStatus::Pending;
                 binding.target = Some(key);
             } else if self.entries.len() >= self.inputs.policy.max_entries {
-                if !binding.rejected {
+                if !was_rejected {
                     tracing::warn!(
                         component = "dns_endpoint_table",
                         service = service_key,
@@ -373,6 +404,7 @@ impl TableState {
                         addrs: Arc::from(Vec::new()),
                         status: EntryStatus::Pending,
                         last_success: None,
+                        failing_since: None,
                         next_refresh: now,
                         failures: 0,
                         in_flight: false,
@@ -383,20 +415,71 @@ impl TableState {
                 binding.target = Some(key);
             }
         }
+        match draining {
+            Some(drain) if binding.target.is_some() => binding.draining = Some(drain),
+            Some(drain) => self.drop_ref(service_key, &drain),
+            None => {}
+        }
         self.services.insert(service_key.to_string(), binding);
         self.publish_service(service_key, publisher);
     }
 
-    /// Withdraw a Service's slices and drop its reference; delete the entry
-    /// when no Service references it any more.
-    fn release(&mut self, service_key: &str, binding: Binding, publisher: &dyn SlicePublisher) {
-        if binding.published {
+    /// Make-before-break for a resolver or family switch: the answer an earlier
+    /// target gave for the same hostname stays published until `next`'s first
+    /// result. A success then replaces it; a failure withdraws it, so a broken
+    /// new resolver configuration still takes effect within one lookup. A
+    /// hostname change never drains (the old addresses belong to another
+    /// name), nor does a switch onto a target that already has a result.
+    fn drain_source(&self, previous: &Binding, next: Option<&DnsTargetKey>) -> Option<DnsTargetKey> {
+        let next = next?;
+        if self
+            .entries
+            .get(next)
+            .is_some_and(|entry| entry.status != EntryStatus::Pending)
+        {
+            return None;
+        }
+        // Creating `next` while the old entry lives on must stay within the cap.
+        if !self.entries.contains_key(next) && self.entries.len() >= self.inputs.policy.max_entries {
+            return None;
+        }
+        let serving = |key: &DnsTargetKey| {
+            key.hostname == next.hostname && key != next && self.entries.get(key).is_some_and(|e| !e.addrs.is_empty())
+        };
+        if let Some(old) = previous.target.as_ref().filter(|key| serving(key)) {
+            return Some(old.clone());
+        }
+        // Switching again before the previous switch completed keeps the
+        // original answer.
+        previous.draining.clone().filter(|drain| serving(drain))
+    }
+
+    /// Withdraw a Service's slices (unless `keep` stays published) and drop its
+    /// references except `keep` and `next` (which the caller rebinds); delete
+    /// entries no Service references any more.
+    fn release(
+        &mut self,
+        service_key: &str,
+        binding: Binding,
+        keep: Option<&DnsTargetKey>,
+        next: Option<&DnsTargetKey>,
+        publisher: &dyn SlicePublisher,
+    ) {
+        if binding.published && keep.is_none() {
             publisher.publish(service_key, Vec::new());
         }
-        let Some(target) = binding.target else {
-            return;
-        };
-        let Some(entry) = self.entries.get_mut(&target) else {
+        let targets = [binding.target, binding.draining];
+        for target in targets.into_iter().flatten() {
+            if Some(&target) != keep && Some(&target) != next {
+                self.drop_ref(service_key, &target);
+            }
+        }
+    }
+
+    /// Drop one Service's reference to an entry; delete the entry with its
+    /// last referrer.
+    fn drop_ref(&mut self, service_key: &str, target: &DnsTargetKey) {
+        let Some(entry) = self.entries.get_mut(target) else {
             return;
         };
         entry.referrers.remove(service_key);
@@ -408,7 +491,7 @@ impl TableState {
             self.released.push(Arc::clone(&entry.first_answer));
         }
         if entry.referrers.is_empty() {
-            let entry = self.entries.remove(&target).expect("entry present");
+            let entry = self.entries.remove(target).expect("entry present");
             if entry.status == EntryStatus::Pending {
                 self.pending_entries -= 1;
             }
@@ -436,12 +519,26 @@ impl TableState {
         let Some(binding) = self.services.get_mut(service_key) else {
             return;
         };
-        let addrs = binding
-            .target
-            .as_ref()
-            .and_then(|target| self.entries.get(target))
-            .map(|entry| Arc::clone(&entry.addrs))
-            .unwrap_or_else(|| Arc::from(Vec::new()));
+        let draining = binding.draining.as_ref().and_then(|drain| self.entries.get(drain));
+        let addrs = match binding.target.as_ref() {
+            Some(target) => match self.entries.get(target) {
+                // Until the new target's first result, serve the previous
+                // answer, restricted to the new target's family.
+                Some(entry) if entry.status == EntryStatus::Pending && draining.is_some() => draining
+                    .map(|old| {
+                        old.addrs
+                            .iter()
+                            .copied()
+                            .filter(|ip| target.family.allows(*ip))
+                            .collect::<Vec<_>>()
+                    })
+                    .map(Arc::from)
+                    .unwrap_or_else(|| Arc::from(Vec::new())),
+                Some(entry) => Arc::clone(&entry.addrs),
+                None => Arc::from(Vec::new()),
+            },
+            None => Arc::from(Vec::new()),
+        };
         let slices = match service_key.split_once('/') {
             Some((namespace, name)) => build_dns_endpoint_slices(
                 namespace,
@@ -466,10 +563,20 @@ impl TableState {
 
     /// Take up to `limit` due targets and mark them in flight.
     pub(crate) fn take_due(&mut self, now: Instant, limit: usize) -> Vec<ResolveJob> {
+        let services = &self.services;
         let mut due: Vec<(&DnsTargetKey, &Entry)> = self
             .entries
             .iter()
             .filter(|(_, entry)| !entry.in_flight && entry.next_refresh <= now)
+            // An entry kept only to bridge a switch is never refreshed through
+            // its (replaced) resolver; it goes with the switch's first result.
+            .filter(|(key, entry)| {
+                entry.referrers.iter().any(|referrer| {
+                    services
+                        .get(referrer)
+                        .is_some_and(|binding| binding.target.as_ref() == Some(*key))
+                })
+            })
             .collect();
         due.sort_by_key(|(_, entry)| entry.next_refresh);
         let jobs: Vec<ResolveJob> = due
@@ -531,12 +638,14 @@ impl TableState {
             Ok(answer) if !answer.addrs.is_empty() => {
                 entry.status = EntryStatus::Ready;
                 entry.last_success = Some(now);
+                entry.failing_since = None;
                 entry.failures = 0;
                 entry.next_refresh = schedule(now, policy.success_delay(answer.ttl, jitter_unit));
                 Arc::from(normalize_addrs(answer.addrs))
             }
             Ok(_) | Err(DnsError::NoAddresses) => {
                 entry.status = EntryStatus::Gone;
+                entry.failing_since = None;
                 entry.failures = entry.failures.saturating_add(1);
                 entry.next_refresh = schedule(now, policy.failure_delay(entry.failures, jitter_unit));
                 Arc::clone(&empty)
@@ -545,9 +654,12 @@ impl TableState {
                 entry.status = EntryStatus::Failing;
                 entry.failures = entry.failures.saturating_add(1);
                 entry.next_refresh = schedule(now, policy.failure_delay(entry.failures, jitter_unit));
-                let keep = entry
-                    .last_success
-                    .is_some_and(|last| now.saturating_duration_since(last) <= policy.max_stale);
+                // `maxStale` counts from the first failure, not the last
+                // success: a refresh scheduled close to `maxStale` after the
+                // last answer still gets the full tolerance.
+                let failing_since = *entry.failing_since.get_or_insert(now);
+                let keep =
+                    entry.last_success.is_some() && now.saturating_duration_since(failing_since) <= policy.max_stale;
                 if keep {
                     Arc::clone(&entry.addrs)
                 } else {
@@ -557,11 +669,7 @@ impl TableState {
         };
         let changed = next_addrs[..] != entry.addrs[..];
         entry.addrs = next_addrs;
-        let referrers: Vec<String> = if changed {
-            entry.referrers.iter().cloned().collect()
-        } else {
-            Vec::new()
-        };
+        let referrers: Vec<String> = entry.referrers.iter().cloned().collect();
         if was_pending {
             self.pending_entries -= 1;
             self.pending_dirty = true;
@@ -569,7 +677,29 @@ impl TableState {
             // woken request observes the new endpoints.
             self.released.push(Arc::clone(&entry.first_answer));
         }
-        for service_key in referrers {
+        // Services switching onto this target stop serving their previous
+        // answer at its first result, whatever it is.
+        let mut finished = Vec::new();
+        for service_key in &referrers {
+            let Some(binding) = self.services.get_mut(service_key) else {
+                continue;
+            };
+            if binding.target.as_ref() != Some(&job.target) {
+                continue;
+            }
+            if let Some(drain) = binding.draining.take() {
+                finished.push((service_key.clone(), drain));
+            }
+        }
+        for (service_key, old) in &finished {
+            self.drop_ref(service_key, old);
+        }
+        let republish: Vec<String> = if changed {
+            referrers
+        } else {
+            finished.into_iter().map(|(service_key, _)| service_key).collect()
+        };
+        for service_key in republish {
             self.publish_service(&service_key, publisher);
         }
     }
@@ -592,6 +722,12 @@ impl TableState {
                 entry
                     .referrers
                     .iter()
+                    // A Service still serving its previous answer never waits.
+                    .filter(|service_key| {
+                        self.services
+                            .get(*service_key)
+                            .is_none_or(|binding| binding.draining.is_none())
+                    })
                     .map(|service_key| (service_key.clone(), Arc::clone(&entry.first_answer)))
             })
             .collect()
@@ -654,10 +790,12 @@ impl TableState {
     }
 }
 
-/// `now + delay`, saturating far in the future instead of overflowing.
+/// `now + delay`; when the platform clock cannot represent that, one day out
+/// (and never a panic).
 fn schedule(now: Instant, delay: Duration) -> Instant {
     now.checked_add(delay)
-        .unwrap_or_else(|| now + Duration::from_secs(u64::from(u32::MAX)))
+        .or_else(|| now.checked_add(Duration::from_secs(86_400)))
+        .unwrap_or(now)
 }
 
 /// Bound on one resolution, independent of the resolver's own timeouts.

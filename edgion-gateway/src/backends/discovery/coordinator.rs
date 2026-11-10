@@ -1,5 +1,6 @@
 use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
+use edgion_common::dns::endpoint_slices::DnsSliceOrigin;
 use edgion_common::dns::DnsLookupFamily;
 use edgion_resources::constants::annotations::edgion::{
     DNS_LOOKUP_FAMILY, DNS_RESOLUTION_MODE, DNS_RESOLVER, DNS_RESOLVER_REF,
@@ -1469,17 +1470,30 @@ fn gateway_dns_slice_key(slice: &EndpointSlice) -> String {
 /// table owns it); every other Service reads conf_sync slices only. No mode
 /// ever mixes the two partitions.
 fn admits_gateway_dns_slices(service: &Service) -> bool {
-    let is_external_name = service.spec.as_ref().and_then(|spec| spec.type_.as_deref()) == Some("ExternalName");
-    if !is_external_name {
-        return false;
-    }
+    is_external_name(service) && controller_mode_annotation(service) != Ok(Some(DnsResolutionMode::Controller))
+}
+
+/// Controller-published DNS slices feed only a `controller`-mode
+/// `ExternalName` Service. Any other Service (for example one just switched
+/// to `ClusterIP` or another mode) ignores them while the Controller's
+/// withdrawal is still in flight, so it never routes to resolved external
+/// addresses.
+fn admits_controller_dns_slices(service: &Service) -> bool {
+    is_external_name(service) && controller_mode_annotation(service) == Ok(Some(DnsResolutionMode::Controller))
+}
+
+fn is_external_name(service: &Service) -> bool {
+    service.spec.as_ref().and_then(|spec| spec.type_.as_deref()) == Some("ExternalName")
+}
+
+fn controller_mode_annotation(service: &Service) -> Result<Option<DnsResolutionMode>, &'static str> {
     let annotation = service
         .metadata
         .annotations
         .as_ref()
         .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
         .map(String::as_str);
-    DnsResolutionMode::from_annotation(annotation) != Ok(Some(DnsResolutionMode::Controller))
+    DnsResolutionMode::from_annotation(annotation)
 }
 
 /// The admitted slices of one Service, in key order. Shared by epoch preflight
@@ -1490,11 +1504,14 @@ fn admitted_service_slices<'a>(
     service: &Service,
 ) -> Vec<(&'a str, &'a LiveSourceRecord<EndpointSlice>)> {
     let local = admits_gateway_dns_slices(service);
+    let controller_dns = admits_controller_dns_slices(service);
     let mut slices: Vec<(&str, &LiveSourceRecord<EndpointSlice>)> = state
         .endpoint_slices
         .iter()
         .filter(|(key, slice)| {
-            is_gateway_dns_key(key) == local && endpoint_slice_matches_service(&slice.resource, service_key)
+            is_gateway_dns_key(key) == local
+                && (controller_dns || DnsSliceOrigin::of(&slice.resource) != Some(DnsSliceOrigin::Controller))
+                && endpoint_slice_matches_service(&slice.resource, service_key)
         })
         .map(|(key, slice)| (key.as_str(), slice))
         .collect();

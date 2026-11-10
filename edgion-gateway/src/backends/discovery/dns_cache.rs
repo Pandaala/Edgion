@@ -11,9 +11,11 @@ use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_s
 use edgion_common::dns::DnsAnswerCache;
 
 /// Fallback freshness of an upstream answer whose resolver reports no record
-/// TTL (EGC `dnsResolver.fallbackRefreshSeconds` default). Kept in sync with
-/// the EGC schema default.
-pub const DEFAULT_DNS_CACHE_TTL: Duration = Duration::from_secs(5);
+/// TTL (EGC `dnsResolver.fallbackRefreshSeconds` default), used when no EGC
+/// defines `dnsResolver`.
+pub const DEFAULT_DNS_CACHE_TTL: Duration = Duration::from_secs(
+    edgion_resources::resources::edgion_gateway_config::DNS_DEFAULT_FALLBACK_REFRESH_SECONDS as u64,
+);
 
 /// Lower bound on shard count for the upstream answer cache.
 ///

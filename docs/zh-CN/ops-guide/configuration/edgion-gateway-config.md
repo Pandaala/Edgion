@@ -454,10 +454,15 @@ DNS 默认值沿用现有全局规则：在定义 DNS 配置的 EGC 中选择 st
 的 ExternalName Service 由每个 Gateway 内的后台端点表解析。返回的每个地址都成为普通的
 负载均衡端点，适用于 HTTP、gRPC、TCP、UDP 和 TLS 路由。
 
+与上面的解析器和地址族默认值一样，这些设置在整个进程内生效：一个 Gateway 进程只使用
+所有定义了 `dnsResolver` 的 EGC 中名称最小的那个 EGC 的配置，与哪个 GatewayClass 引用它
+无关。请只在一个 EGC 中定义 `dnsResolver`；其他 EGC 中的配置块（即使只设置了地址族）
+可能在不报错的情况下取代它。
+
 ```yaml
 spec:
   dnsResolver:
-    endpointTable: true          # false：ExternalName 每个请求调用操作系统解析器
+    endpointTable: true          # false：未加注解的 ExternalName Service 使用操作系统解析器
     ttlFactor: 0.5               # 刷新间隔 = clamp(ttl * ttlFactor, min, max)
     minRefreshSeconds: 5         # 最小 2
     maxRefreshSeconds: 300       # 最大 2147483647（DNS TTL 上限）
@@ -475,27 +480,41 @@ spec:
 | `maxRefreshSeconds` | `300` | 最长刷新间隔，最大 2147483647（DNS TTL 上限）。 |
 | `fallbackRefreshSeconds` | 不设置（5） | 解析器不返回 TTL 时（操作系统解析器、无 `ttlPath` 的 HTTP DNS）的刷新间隔。显式设置时必须位于 min 与 max 之间；不设置时取 5 并收敛到 [min, max]，因此只改上限或下限也不会失效。 |
 | `refreshIntervalSeconds` | 不设置 | 固定刷新间隔，设置后忽略记录 TTL 和 min/max 上下限（最低 2 秒）。 |
-| `maxStaleSeconds` | `300` | 解析失败时保留上次地址的时长。 |
+| `maxStaleSeconds` | `300` | 解析开始失败后保留上次地址的时长。 |
 | `maxEntries` | `4096` | 不同主机名 / 解析器 / 地址族组合的上限；超出后新的目标没有端点。 |
 
 时长字段使用整数秒，因为 DNS TTL 上限（2147483647 秒，RFC 2181）无法用时长字符串表示。
+不一致的配置（例如 `minRefreshSeconds` 大于 `maxRefreshSeconds`，或 `fallbackRefreshSeconds`
+不在两者之间）在 Kubernetes 中由准入校验拒绝，其他模式下标记为 `Accepted=False`；Gateway
+收到这样的配置时记录错误日志，并使用默认刷新设置（保留 `endpointTable`）。修改刷新设置会
+重新调度已有条目，缩短的间隔立即生效。
 
 - 主机名、解析器和地址族都相同的 Service 共用一个条目、一次查询。条目随最后一个引用它的
   Service 一起删除，Service 删除或主机名变更都不会残留端点。
 - 解析结果排序后比较，结果不变时不做任何更新，健康检查和异常剔除状态在刷新后保留。
-- 解析失败时保留上次地址 `maxStaleSeconds`，从 `minRefreshSeconds` 开始倍增重试，最长
-  60 秒。权威空结果立即撤下端点。操作系统解析器无法区分 NXDOMAIN 和故障，因此已删除的
-  域名会保留到 `maxStaleSeconds`。
+- 解析失败时，从第一次刷新失败起保留上次地址 `maxStaleSeconds`。重试从 `minRefreshSeconds`
+  开始倍增，最长 60 秒（不超过 `maxRefreshSeconds`，也不低于 `minRefreshSeconds`）。权威空
+  结果立即撤下端点。操作系统解析器无法区分 NXDOMAIN 和故障，因此已删除的域名会保留到
+  `maxStaleSeconds`。
+- 修改 Service（或默认）的解析器或地址族时，在新解析器返回第一个结果之前继续使用上次的
+  结果（只保留新地址族的地址），因此切换到可用的解析器不会造成端点空窗。如果第一个结果是
+  失败，则撤下端点：错误的新配置会立即生效而不会被旧结果掩盖，也不会再用旧解析器查询。
+  修改主机名则立即撤下旧地址。
 - 从未解析成功的目标，HTTP 请求或 TCP/TLS 连接最多等待 2 秒的首次解析。UDP 不等待：
   首次解析完成前到达的数据报被丢弃，由客户端重传。
-- 链路本地地址（169.254.0.0/16、fe80::/10）会被丢弃，不会成为端点或健康检查目标。
-- 每次刷新加 ±10% 抖动，并保持在 min/max 范围内。
+- 链路本地地址（169.254.0.0/16、fe80::/10）和未指定地址（0.0.0.0、::）会被丢弃，不会成为
+  端点或健康检查目标。
+- 每次刷新加 ±10% 抖动。按 TTL 计算的刷新保持在 min/max 范围内；固定的
+  `refreshIntervalSeconds` 只保证不低于 2 秒。
 - Gateway 管理 API `GET /api/v1/dns/endpoint-table` 可查看条目、地址、状态和引用的 Service。
 
 ## 按请求的 DNS 应答缓存
 
 AI 供应商域名以及 RegionRoute、DynamicExternalUpstream 插件的外部目标在每个请求中才确定，
-因此使用一个有界应答缓存，而不是端点表。它们使用这里的解析器和 `lookupFamily` 默认值
+因此使用一个有界应答缓存，而不是端点表。`system` 模式 ExternalName Service 的新 UDP 会话
+也通过这个缓存解析（操作系统解析器，每个数据报最多等待 250 毫秒），避免大量新客户端地址
+放大 DNS 查询；`system` 模式的 HTTP、gRPC、TCP 和 TLS 流量不经过该缓存，每个请求或连接都
+直接询问操作系统。它们使用这里的解析器和 `lookupFamily` 默认值
 （或 Gateway 的覆盖值）；IP 字面量目标按原样使用。每个应答最多保留 256 个地址，按解析器、
 域名和地址族区分，每次使用前仍执行上游地址安全检查。
 

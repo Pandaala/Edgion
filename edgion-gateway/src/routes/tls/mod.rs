@@ -100,11 +100,19 @@ pub(super) async fn resolve_tls_service_attempt<'a>(
     let Some(selected) = select_tls_backend(unit, ctx) else {
         return TlsBackendAttempt::Terminal;
     };
+    // Earlier attempts of this connection (system-mode retries prefer
+    // addresses not dialed yet).
+    let dialed: Vec<std::net::IpAddr> = ctx
+        .upstream_info
+        .iter()
+        .filter_map(|info| info.addr.as_deref()?.parse().ok())
+        .collect();
     let prep = crate::backends::prepare_l4_service(
         selected,
         gateway_key,
         allow_loopback,
         crate::backends::L4Transport::Connection,
+        &dialed,
     )
     .await;
     if prep.is_failed() {

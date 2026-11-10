@@ -230,8 +230,8 @@ fn invalid_family_withdraws_without_querying() {
 fn next_due_follows_the_fixed_interval() {
     let mut h = Harness::new();
     h.targets.sync_published(&service("svc", &[], &[80]));
-    h.plan();
-    assert_eq!(h.state.next_due(h.now), h.now + MIN_REFRESH + DEFAULT_REFRESH);
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    assert_eq!(h.state.next_due(h.now), h.now + DEFAULT_REFRESH);
     assert_eq!(
         ResolverState::new(&DnsResolverConfig::default(), 0).next_due(h.now),
         h.now + DEFAULT_REFRESH
@@ -573,6 +573,8 @@ fn in_flight_targets_are_not_planned_twice() {
     h.now += Duration::from_secs(60);
     assert!(h.plan().0.is_empty(), "due again but still in flight");
     h.apply(&jobs[0], Ok(vec!["10.0.0.1"]));
+    assert!(h.plan().0.is_empty(), "the next refresh counts from completion");
+    h.now += DEFAULT_REFRESH;
     assert_eq!(h.plan().0.len(), 1);
 }
 
@@ -589,4 +591,77 @@ fn a_restarted_task_keeps_published_slices_until_its_first_answer() {
     assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
     assert!(h.apply(&jobs[0], Err(DnsError::Io("down".into()))).is_empty());
     assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+}
+
+#[test]
+fn a_restarted_task_never_adopts_slices_of_another_source() {
+    let mut h = Harness::new();
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    // The hostname changes while no task runs (for example during a panic restart).
+    let mut moved = service("svc", &[], &[80]);
+    moved.spec.as_mut().unwrap().external_name = Some("other.example.com".into());
+    h.targets.sync_published(&moved);
+    h.state = ResolverState::new(&DnsResolverConfig::default(), h.slices.epoch());
+    let (jobs, changed) = h.plan();
+    assert_eq!(changed.len(), 1, "the old hostname's answer is withdrawn at once");
+    assert!(h.slices.service_keys().is_empty());
+    assert_eq!(jobs.len(), 1);
+}
+
+#[test]
+fn a_restart_does_not_extend_max_stale() {
+    let mut h = Harness::new();
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    h.now += Duration::from_secs(200);
+    h.state = ResolverState::new(&DnsResolverConfig::default(), h.slices.epoch());
+    let (jobs, _) = h.plan();
+    assert!(h.apply(&jobs[0], Err(DnsError::Io("down".into()))).is_empty());
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+    // 400 s after the original answer: past MAX_STALE although the task is new.
+    h.now += Duration::from_secs(200);
+    h.apply_all(Err(DnsError::Io("down".into())));
+    assert!(h.addresses("svc-edgion-ctl-dns").is_empty());
+}
+
+#[test]
+fn in_flight_targets_do_not_pull_the_wake_time_into_the_past() {
+    let mut h = Harness::new();
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    let (jobs, _) = h.plan();
+    // The query outlives the refresh period.
+    h.now += Duration::from_secs(30);
+    assert!(h.state.next_due(h.now) > h.now, "an in-flight target is not due");
+    h.apply(&jobs[0], Ok(vec!["10.0.0.1"]));
+    assert_eq!(
+        h.state.next_due(h.now),
+        h.now + h.state.period,
+        "the next refresh counts from completion"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_with_no_targets_still_withdraws_orphaned_slices() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let svc = service("svc", &[], &[80]);
+    runtime.dns_synthetic_slices.replace_service(
+        runtime.dns_synthetic_slices.epoch(),
+        "app/svc",
+        edgion_common::dns::endpoint_slices::build_dns_endpoint_slices(
+            "app",
+            "svc",
+            svc.spec.as_ref().unwrap().ports.as_deref().unwrap(),
+            &["10.0.0.1".parse().unwrap()],
+            DnsSliceOrigin::Controller,
+        ),
+    );
+    assert!(runtime.dns_resolver_targets.is_empty());
+    ensure_dns_resolver_running(&runtime);
+    assert!(
+        runtime.dns_resolver_task.is_running(),
+        "published slices without targets still need a task to withdraw them"
+    );
+    runtime.reset();
+    assert!(!runtime.dns_resolver_task.is_running());
 }

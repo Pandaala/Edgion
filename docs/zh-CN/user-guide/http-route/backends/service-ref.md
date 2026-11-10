@@ -111,8 +111,10 @@ spec:
 `gateway` 模式按记录 TTL 刷新（默认 `ttl x 0.5`，限制在 5–300 秒，见
 [EdgionGatewayConfig DNS 设置](../../../ops-guide/configuration/edgion-gateway-config.md#后端-dns-端点表)）。
 解析结果不变时不做任何更新，健康检查和异常剔除状态得以保留。解析器出错时最多保留上次
-的地址 5 分钟；权威的空结果（域名已不存在）会立即撤下端点。`169.254.169.254` 这类链路本地
-地址永远不会被使用。Service 删除或修改后，其端点立即撤下。
+的地址 5 分钟；权威的空结果（域名已不存在）会立即撤下端点。操作系统解析器无法区分域名不存在
+和故障，因此使用它时，已删除的域名同样会保留这 5 分钟。`169.254.169.254`、`0.0.0.0` 这类链路
+本地地址和未指定地址永远不会被使用。Service 删除或主机名变更后，其端点立即撤下；修改解析器
+或地址族时，在新解析器返回第一个结果前继续使用上次的结果（新解析器失败则撤下端点）。
 
 解析器优先级：Service 注解 `edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref`，然后
 是 EdgionGatewayConfig 默认值（`gateway` 模式）或 Controller 默认值（`controller` 模式），

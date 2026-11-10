@@ -701,6 +701,30 @@ fn l4_timeout_accessor_does_not_retain_an_obsolete_parent_snapshot() {
 }
 
 #[test]
+fn invalid_dns_refresh_settings_fall_back_to_defaults_but_keep_the_switch() {
+    let _g = TEST_MUTEX.lock();
+    clear_store();
+    let handler = EdgionGatewayConfigHandler::new();
+    let mut config = make_config("dns-invalid-refresh");
+    config.spec.dns_resolver = Some(DnsResolverConfig {
+        endpoint_table: false,
+        min_refresh_seconds: 600,
+        max_refresh_seconds: 300,
+        ..Default::default()
+    });
+    handler.full_set(&HashMap::from([("a".to_string(), Arc::new(config))]));
+    let resolved = get_egc_dns_resolver_default().expect("the DNS owner is still selected");
+    let policy = resolved.refresh_policy();
+    assert!(!policy.endpoint_table, "the endpoint-table switch is kept");
+    assert_eq!(
+        policy.min_refresh,
+        Duration::from_secs(5),
+        "an inverted range is not clamped into use"
+    );
+    assert_eq!(policy.max_refresh, Duration::from_secs(300));
+}
+
+#[test]
 fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
     let _g = TEST_MUTEX.lock();
     clear_store();

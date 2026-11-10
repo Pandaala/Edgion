@@ -57,8 +57,10 @@ impl ProcessorRegistry {
 
     /// Mark that all processors have been registered (Phase 1 + Phase 2 complete).
     ///
-    /// Called by `spawn_all_controllers` after both phases finish spawning.
-    /// Wakes any task waiting in `wait_registry_ready`.
+    /// Called by `spawn_all_controllers` (FS/etcd) after both phases finish
+    /// spawning, and by the Kubernetes caches-ready tail once every expected
+    /// kind is registered and ready. Wakes any task waiting in
+    /// `wait_registry_ready`.
     pub fn mark_registration_complete(&self) {
         self.registration_complete.store(true, Ordering::Release);
         self.ready_notify.notify_waiters();

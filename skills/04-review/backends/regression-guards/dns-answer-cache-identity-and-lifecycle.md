@@ -19,7 +19,7 @@ All DNS answer caching goes through one canonical mechanism,
 |---|---|---|
 | `egress_answer_cache()` (`edgion-common`) | `EgressResolver`s with operator-configured destinations (Gateway plugins, LinkSys, Wasm callouts with allowlisted origins, GeoIP, Controller OAuth2) | 4096 entries, 16 shards |
 | `request_egress_answer_cache()` (`edgion-gateway/src/plugins/http/common/outbound/egress.rs`) | `EgressResolver::new_request_influenced`: DSL `http.call` URLs and the redirects they follow | 1024 entries, 8 shards |
-| `upstream_dns_cache()` (`edgion-gateway/src/backends/discovery/dns_cache.rs`) | AI provider endpoints, ExternalJump destinations of RegionRoute / DynamicExternalUpstream (`util::net::resolve_domain`) | `lru_cache` defaults with an 8-shard floor |
+| `upstream_dns_cache()` (`edgion-gateway/src/backends/discovery/dns_cache.rs`) | AI provider endpoints, ExternalJump destinations of RegionRoute / DynamicExternalUpstream (`util::net::resolve_domain`), and new UDP sessions to `system`-mode ExternalName Services (`backends::prepare_l4_service`, 250 ms budget, single-flight so spoofable sources cannot multiply queries) | `lru_cache` defaults with an 8-shard floor |
 
 Callers must not add another DNS cache type; a new instance is justified only to isolate a
 consumer class. The instances are separate so names a request or upstream can choose cannot
@@ -27,8 +27,8 @@ evict the answers of upstream or operator-configured egress consumers. Consumers
 zero fallback TTL bypass caching entirely (the HTTPDNS bootstrap fetcher, OTLP transport).
 Deliberately uncached resolution: the Controller DNS resolver service and the Gateway DNS
 endpoint table (both resolve in the background and publish EndpointSlices; see
-[endpoint table lifecycle](dns-endpoint-table-lifecycle.md)), ExternalName `system` mode (OS
-resolver per attempt), and the unguarded DSL client
+[endpoint table lifecycle](dns-endpoint-table-lifecycle.md)), ExternalName `system` mode on
+HTTP, gRPC, TCP and TLS (OS resolver per attempt), and the unguarded DSL client
 (reqwest's default resolver, only when `httpBlockPrivateIps` is off). Every resolver answer is
 truncated to 256 addresses (`MAX_ANSWER_ADDRS`) before it reaches any consumer.
 
@@ -137,8 +137,9 @@ Per-lookup hickory resolvers are built with their own response cache disabled.
   and `outbound_egress_dns_cache_ttl_ms` are fallback TTLs.
 - A predispatch connect failure still marks the whole AI backend tried; same-backend re-dial on
   another address is not implemented (rotation limits a dead address to its share of first
-  attempts). ExternalName backends no longer use this cache: their addresses are ordinary
-  endpoints with LB, health check and outlier ejection (2026-11-10 DNS resolution redesign).
+  attempts). ExternalName backends no longer use this cache, except new UDP sessions in
+  `system` mode: `gateway`/`controller` addresses are ordinary endpoints with LB, health check
+  and outlier ejection (2026-11-10 DNS resolution redesign).
 - Accepted costs (second post-merge review, 2026-11-07): each entry stores its fingerprint twice
   (map key and LRU node; ~1-2.5 KB with HTTPDNS, capacity-bounded); queued cold waiters are
   released one by one by the FIFO flight mutex (visible only on a cold key at very high QPS);

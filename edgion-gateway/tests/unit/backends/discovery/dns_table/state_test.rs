@@ -393,10 +393,136 @@ fn transient_failure_keeps_last_good_until_max_stale() {
     );
     h.advance(300);
     h.resolve_due(Err(DnsError::Io("timeout".to_string())));
+    assert_eq!(
+        h.recorder.addresses(&key("a")),
+        vec!["10.0.0.1"],
+        "maxStale counts from the first failure"
+    );
+    // The next retry (after the doubled back-off) lands past maxStale.
+    h.advance(10);
+    assert_eq!(h.resolve_due(Err(DnsError::Io("timeout".to_string()))), 1);
     assert!(
         h.recorder.addresses(&key("a")).is_empty(),
         "withdrawn once past maxStale"
     );
+}
+
+#[test]
+fn a_long_ttl_refresh_still_gets_the_full_stale_tolerance() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    // TTL 3600 x 0.5 is clamped to maxRefresh (300 s) = maxStale.
+    h.resolve_due(answer(&["10.0.0.1"], Some(3600)));
+    h.advance(300);
+    assert_eq!(h.resolve_due(Err(DnsError::Io("servfail".to_string()))), 1);
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"]);
+}
+
+fn with_resolver(name: &str, resolver: &str) -> Arc<Service> {
+    external_name(
+        name,
+        "a.example.com",
+        &[(edgion_resources::constants::annotations::edgion::DNS_RESOLVER, resolver)],
+        &[80],
+    )
+}
+
+#[test]
+fn resolver_switch_keeps_the_previous_answer_until_the_new_target_answers() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    let calls = h.recorder.calls();
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"], "no withdrawal");
+    assert_eq!(h.state.stats().entries, 2, "the previous entry stays referenced");
+    assert!(
+        !h.state.pending_waiters().contains_key(&key("a")),
+        "a Service still serving its previous answer never waits"
+    );
+    assert_eq!(
+        h.resolve_due(answer(&["10.0.0.2"], None)),
+        1,
+        "only the new target is due"
+    );
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.2"]);
+    assert_eq!(h.state.stats().entries, 1, "the previous entry is released");
+    assert!(h.recorder.calls() > calls);
+}
+
+#[test]
+fn a_failing_new_resolver_takes_effect_at_its_first_result() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"]);
+    h.resolve_due(Err(DnsError::Io("unreachable".to_string())));
+    assert!(
+        h.recorder.addresses(&key("a")).is_empty(),
+        "a broken new resolver is never masked by the previous answer"
+    );
+    assert_eq!(h.state.stats().entries, 1, "the previous entry is released");
+}
+
+#[test]
+fn the_bridged_entry_is_not_refreshed_through_the_replaced_resolver() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    h.advance(60);
+    let jobs = h.state.take_due(h.now, usize::MAX);
+    assert_eq!(jobs.len(), 1, "only the new target is queried");
+    assert_ne!(jobs[0].target.resolver, "system");
+}
+
+#[test]
+fn switching_back_during_a_switch_reuses_the_answered_entry() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"]);
+    assert_eq!(h.state.stats().entries, 1);
+    assert_eq!(h.state.stats().pending_entries, 0, "never re-resolved from scratch");
+}
+
+#[test]
+fn a_family_switch_serves_only_the_new_family_meanwhile() {
+    let mut h = Harness::new();
+    h.upsert(
+        "a",
+        external_name("a", "a.example.com", &[(DNS_LOOKUP_FAMILY, "all")], &[80]),
+    );
+    h.resolve_due(answer(&["10.0.0.1", "2001:db8::1"], None));
+    h.upsert(
+        "a",
+        external_name("a", "a.example.com", &[(DNS_LOOKUP_FAMILY, "ipv6Only")], &[80]),
+    );
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["2001:db8::1"]);
+}
+
+#[test]
+fn a_shorter_refresh_policy_pulls_far_refreshes_in() {
+    let mut h = Harness::with_inputs(inputs_with(DnsResolverConfig {
+        refresh_interval_seconds: Some(86_400),
+        ..Default::default()
+    }));
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    assert!(h.state.entries_view(h.now, 10)[0].next_refresh_in_secs > 80_000);
+    h.state.set_inputs(
+        inputs_with(DnsResolverConfig {
+            refresh_interval_seconds: Some(30),
+            ..Default::default()
+        }),
+        lookup(),
+        &h.recorder,
+        h.now,
+    );
+    assert!(h.state.entries_view(h.now, 10)[0].next_refresh_in_secs <= 33);
 }
 
 #[test]

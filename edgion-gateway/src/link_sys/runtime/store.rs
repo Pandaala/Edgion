@@ -134,6 +134,9 @@ impl LinkSysStore {
         }
         self.rebuild_clients_with_dispatch(&LINK_SYS_SOURCE_EVENT_LOCK, |snapshot| {
             RUNTIMES.retry_admission(&snapshot);
+            // A newly admitted httpdns LinkSys changes which resolver its
+            // referrers use; nothing else would re-key them.
+            crate::backends::dns_endpoint_table().on_resolver_sources_changed();
         });
     }
 
