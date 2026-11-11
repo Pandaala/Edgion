@@ -538,14 +538,40 @@ impl EdgionGatewayCli {
             "FIPS status resolved"
         );
 
-        // 4d. Outbound HTTP transport limits must be installed before any
+        // 4d. System CA trust: the fixed OS CA bundle backs backend TLS (Pingora
+        // `ca_file`) and every outbound TLS client. Install it before any TLS
+        // client or the Pingora server configuration is built. Without a usable
+        // bundle the Gateway refuses to start.
+        let system_trust = edgion_common::system_trust::install_system_trust()
+            .map_err(|error| anyhow!("System CA trust setup failed: {error:#}"))?;
+        let system_ca_bundle = system_trust
+            .bundle_file()
+            .ok_or_else(|| anyhow!("System CA trust was installed without a bundle file"))?;
+        pingora::validate_backend_ca_file(system_ca_bundle)?;
+        tracing::info!(
+            target: "startup",
+            path = %system_ca_bundle.display(),
+            certificates = system_trust.certificates().len(),
+            skipped_certificates = system_trust.skipped_certificates(),
+            "System CA trust loaded"
+        );
+        if system_trust.skipped_certificates() > 0 {
+            tracing::warn!(
+                target: "startup",
+                path = %system_ca_bundle.display(),
+                skipped_certificates = system_trust.skipped_certificates(),
+                "System CA bundle has certificates outbound clients cannot use; backend TLS may still trust them"
+            );
+        }
+
+        // 4e. Outbound HTTP transport limits must be installed before any
         // canonical reqwest client can be constructed.
         edgion_common::link_sys_core::http_client::configure_outbound_http2_max_header_list_size(
             config.gateway.outbound_http2_max_header_list_size,
         )
         .map_err(|error| anyhow!("Invalid outbound HTTP configuration: {error}"))?;
 
-        // 4e. Outbound egress: install the gateway-local defaults (block_private,
+        // 4f. Outbound egress: install the gateway-local defaults (block_private,
         // DNS cache TTL) that `EgressResolver` falls back to when a resource does
         // not set `target.blockPrivate` / an explicit TTL. Must run before any
         // `ManagedOutboundClient` can be built.
@@ -564,7 +590,7 @@ impl EdgionGatewayCli {
 
         crate::plugins::http::wasm::admission::initialize(config.gateway.wasm_limits).map_err(anyhow::Error::msg)?;
 
-        // 4f. Wasm OCI artifacts are retained only in bounded process memory.
+        // 4g. Wasm OCI artifacts are retained only in bounded process memory.
         #[cfg(feature = "wasm")]
         {
             use crate::plugins::http::wasm::oci::cache::{configure_oci_memory_cache, OciMemoryCacheConfig};

@@ -289,9 +289,10 @@ fn validate_material_pair(pair: BoundTlsMaterial<'_>) -> Result<(), TlsMaterialP
 /// The effective CA trust source after resolving global defaults and local
 /// overrides.
 pub enum EffectiveCa {
-    /// Built-in webpki roots compiled into the binary.
+    /// The process-wide OS trust set ([`crate::system_trust`]); the same
+    /// bundle backs Gateway backend TLS.
     System,
-    /// PEM bundles that REPLACE the public roots (private CA mode).
+    /// PEM bundles that REPLACE the System roots (private CA mode).
     /// Each inner `Vec<u8>` is one complete PEM bundle (may contain multiple
     /// certificates).
     Custom(Vec<Vec<u8>>),
@@ -385,7 +386,7 @@ pub fn set_outbound_global_default(cfg: Arc<GlobalOutboundTlsSnapshot>) -> bool 
 ///   using the resolved Secrets; fails with `OutboundTlsCaMissing` if no resolved
 ///   Secret carries a valid `tls.ca.crt` PEM.
 /// - `wellKnownCACertificates: System` or both absent → `EffectiveCa::System`
-///   (built-in webpki roots).
+///   (the process-wide OS trust set).
 ///
 /// # Validation-block precedence and global CA fallback
 ///
@@ -752,7 +753,7 @@ fn resolve_effective_tls(
                 .collect::<Result<_, _>>()?;
             EffectiveCa::Custom(bundles)
         }
-        // wellKnownCACertificates: System, or both absent → public roots.
+        // wellKnownCACertificates: System, or both absent → OS trust set.
         CaInput::System => EffectiveCa::System,
         CaInput::Pem(pem) => EffectiveCa::Custom(vec![pem.to_vec()]),
     };

@@ -73,8 +73,8 @@ spellings are rejected. `verify: false` is rejected; omitted verification is tru
 | `validation.subjectAltNames` | Optional additional SAN constraints, enforced after normal chain/hostname verification |
 | `clientCertificateRef` | Optional same-namespace Secret containing `tls.crt` and `tls.key` |
 
-Custom CA bundles replace public roots. Without a custom CA source, built-in
-public roots apply. Global `outboundTls` defaults are not inherited. Resolved
+Custom CA bundles replace System roots. Without a custom CA source, the Gateway
+System CA bundle applies (the OS CA bundle at a fixed path, shared with backend TLS). Global `outboundTls` defaults are not inherited. Resolved
 material is Controller-owned, omitted from CRDs and redacted in admin output.
 
 TLS configuration or Secret/ConfigMap changes replace the probe generation.

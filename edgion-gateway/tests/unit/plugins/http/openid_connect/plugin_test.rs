@@ -4067,14 +4067,16 @@ fn callback_path_normalized_for_absolute_url_redirect_uri() {
 }
 
 #[test]
-fn oidc_san_pinning_config_builds_with_system_ca() {
+fn oidc_san_pinning_config_builds_with_ca() {
     use crate::tls::validation::build_verified_outbound_tls;
     use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
     use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
 
+    // A generated CA keeps this test independent of the host CA bundle.
+    let ca = rcgen::generate_simple_self_signed(vec!["idp.example.com".to_string()]).unwrap();
     let resolved = ResolvedOutboundTls {
         verify: true,
-        ca: EffectiveCa::System,
+        ca: EffectiveCa::Custom(vec![ca.cert.pem().into_bytes()]),
         client_identity: None,
         san: None,
     };

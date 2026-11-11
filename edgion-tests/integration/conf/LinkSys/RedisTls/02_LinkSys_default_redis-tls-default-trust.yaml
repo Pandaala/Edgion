@@ -1,4 +1,4 @@
-# Scheme-only TLS uses built-in webpki roots and must reject this private test CA.
+# Scheme-only TLS uses the Gateway System CA bundle and must reject this private test CA.
 apiVersion: edgion.io/v1
 kind: LinkSys
 metadata:

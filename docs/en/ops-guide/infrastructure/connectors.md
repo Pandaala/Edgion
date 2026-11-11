@@ -1,5 +1,9 @@
 # Connectors (LinkSys)
 
+> ⚠️ **Breaking Change (v0.1.0)**
+>
+> `wellKnownCACertificates: System` (and an omitted CA) now means the OS CA bundle at a fixed path (the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`) for backend TLS and every Gateway outbound client. Outbound clients no longer use a compiled-in Mozilla root list, and the Gateway refuses to start without a usable bundle. Install `ca-certificates` in custom images and reference private CAs with `caCertificateRefs`. See the [release note](../../release-notes/2026-11-10-system-ca-trust.md).
+
 > **🔌 Edgion extension**
 > 
 > Connectors are external-system integrations defined by the `LinkSys` CRD (`edgion.io/v1`); they are not part of standard Gateway API.
@@ -183,11 +187,11 @@ Every backend accepts the same `tls` block for securing the connection.
 tls:
   enabled: true
   verify: true                 # verify peer certificate (default true); false is honored (operator responsibility)
-  validation:                  # optional; omit to use built-in webpki root CAs
+  validation:                  # optional; omit to use the System CA bundle
     caCertificateRefs:         # list of CA cert refs; for LinkSys, only kind: Secret is supported
       - kind: Secret
         name: my-ca-bundle     # Secret must have a ca.crt key (type kubernetes.io/tls or Opaque)
-    wellKnownCACertificates: System  # alternatively, explicitly use built-in webpki roots
+    wellKnownCACertificates: System  # alternatively, explicitly use the System CA bundle
     # Phase 1: hostname and subjectAltNames are schema-exposed but not enforced.
     # Configuring them causes Accepted=False until Phase 2.
   clientCertificateRef:
@@ -200,9 +204,9 @@ tls:
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
 | `verify` | Boolean | `true` | Verify the peer TLS certificate when the block is enabled. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis, Etcd and OTLP reject `verify: false` in enabled blocks — their SDKs have no skip-verify API. |
-| `validation` | Object | none | Optional trust anchor configuration. Omit to use built-in webpki root CAs. |
-| `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the built-in roots. |
-| `validation.wellKnownCACertificates` | String | none | Explicitly use built-in webpki root CAs. Allowed value: `System`. |
+| `validation` | Object | none | Optional trust anchor configuration. Omit to use the System CA bundle of the consuming process (Gateway or Controller): the OS CA bundle at a fixed path (the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`). In the Gateway it is shared with backend TLS; Controller-side consumers (the HTTPDNS background resolver and the OAuth2 credential source) use the Controller image bundle. |
+| `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the System roots. |
+| `validation.wellKnownCACertificates` | String | none | Explicitly use the System CA bundle of the consuming process. Allowed value: `System`. |
 | `clientCertificateRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
 
 The client mTLS identity (certificate + private key) must be provided via `clientCertificateRef`.
@@ -339,7 +343,7 @@ Standalone and Sentinel use `pool.size`. Cluster uses one multiplexed topology c
 An operation has one `timeout.command` budget. Unknown outcomes are never replayed. Only MOVED is followed,
 up to `maxRedirects`. Multi-key commands must stay in one Cluster hash slot; cross-slot operations do not fan out.
 Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling and probe duration add latency.
-System TLS trust uses compiled-in webpki roots. Configure an explicit CA reference for a private CA.
+System TLS trust uses the Gateway System CA bundle (the OS CA bundle at a fixed path). For a private CA, configure an explicit CA reference.
 Sentinel publishes the address confirmed as master by a unique plurality of reachable sentinels; a tie does not publish. Each Sentinel votes once, identified by its run ID (`SENTINEL MYID`, Redis 6.2+), even when it is reachable by both a configured name and a learned IP; a Sentinel that does not answer `SENTINEL MYID` casts no vote. Sentinel nodes share data-node credentials. After publication, Cluster recovery dials the current known
 primaries as well as the configured seeds, so losing the original seed does not prevent topology refresh.
 A new generation must establish real connectivity before ordinary replacement. Forced refresh keeps retire-first behavior.
@@ -1638,7 +1642,7 @@ Create the referenced Secrets in the same namespace: `collector-auth` contains
 `kubernetes.io/tls` Secret containing `tls.crt` and `tls.key`. Omit `auth` for an
 unauthenticated collector. Omit the TLS block to use HTTPS with system roots;
 omit only `clientCertificateRef` when client authentication is unnecessary.
-Custom CA certificates replace public roots. Cross-namespace Secret references
+Custom CA certificates replace System roots. Cross-namespace Secret references
 require a ReferenceGrant. Authentication supports only a Bearer token from a
 Secret (at most 8192 bytes); arbitrary metadata and inline credentials are rejected.
 

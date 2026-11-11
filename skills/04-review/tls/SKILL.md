@@ -46,6 +46,7 @@ before applying a decision to current code.
 - [Backend TLS connection-pool trust and identity isolation](regression-guards/backend-tls-pool-isolation.md)
 - [EdgionTls incremental and atomic publication](regression-guards/edgion-tls-incremental-atomic-publication.md)
 - [tls-08 — Backend (upstream) TLS CA bundle loads every PEM block + fail-closed](regression-guards/backend-ca-bundle-multi-pem.md)
+- [infra3-03 — `System` CA means one OS bundle file at a fixed path](regression-guards/system-ca-single-trust-store.md)
 - [Boring 5 FIPS opt-in build and verification](regression-guards/boring-v5-fips-build-verification.md)
 - [tls-06 — mTLS CA bundle loads every PEM block](regression-guards/ca-bundle-multi-pem.md)
 - [tls-F002 — cipher config failure is now fail-closed (no silent default-suite fallback)](regression-guards/cipher-fail-closed.md)

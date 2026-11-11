@@ -220,6 +220,7 @@ fn redis_pem_material_distinguishes_plaintext_from_default_trust() {
     assert!(plain.redis_tls_material().unwrap().is_none());
     let tls = PreparedRedisTls::with_snapshot(owner("rediss://redis.example:6380", None), defaults).unwrap();
     let material = tls.redis_tls_material().unwrap().unwrap();
-    assert!(material.root_pem.is_none());
+    // Default trust is the explicit process System bundle, never redis-rs's own store.
+    assert_eq!(material.root_pem.as_slice(), crate::system_trust::system_trust().pem());
     assert!(material.client_identity.is_none());
 }

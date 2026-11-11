@@ -184,6 +184,14 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 并发探测若属于旧连接代次，其结果不能覆盖此次重载。无需新增健康检查 RPC、常驻备用连接，
 也无需增加配置项。
 
+### System CA 包（启动前提）
+
+`wellKnownCACertificates: System`（以及未配置 CA）使用固定路径的 OS CA 包：按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件。
+它没有配置项。后端 TLS 与 Gateway 所有出向客户端共用这个文件。找不到这样的文件，或者它不是普通文件、
+超过 8 MiB、PEM 格式错误、没有可用证书、BoringSSL 无法加载时，Gateway 拒绝启动。官方镜像和安装包都会安装
+`ca-certificates`，自定义镜像也必须安装。要信任私有 CA，请使用 `caCertificateRefs`（BackendTLSPolicy、
+资源自身或 EdgionGatewayConfig `outboundTls`），它会替换 `System`。参见[后端 TLS](../../user-guide/http-route/backends/backend-tls.md)。
+
 ### conf_sync_security
 
 **必填配置。** conf_sync gRPC 通道会把解析后的 Secret（TLS 私钥、后端凭证）下发到 Gateway，

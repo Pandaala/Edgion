@@ -3,7 +3,7 @@
 # Connects to the nginx TLS terminator (es-tls-proxy, https://127.0.0.1:19201)
 # whose server cert is signed by the backend test CA. The CA is supplied via
 # caSecretRef -> es-backend-ca (a ca.crt Secret in `default`, created at runtime
-# by run_es_test.sh). caSource: SecretRef REPLACES the public webpki roots with
+# by run_es_test.sh). caSource: SecretRef REPLACES the System CA roots with
 # this private CA, so the handshake succeeds ONLY because the private CA is
 # trusted — proving the REPLACE trust model end-to-end.
 apiVersion: edgion.io/v1

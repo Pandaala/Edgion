@@ -2,13 +2,12 @@
 # =============================================================================
 # edgion-cli End-to-End Integration Test
 #
-# Verifies 6 subcommands work end-to-end against a live controller:
+# Verifies 5 subcommands work end-to-end against a live controller:
 #   1. login     — persist a pre-shared token, empty-token rejection (token-only)
 #   2. apply     — single file, multi-doc, nonexistent file, invalid YAML
 #   3. get       — list all, single resource, with -o yaml, unknown kind
 #   4. delete    — existing resource, nonexistent resource, delete-then-verify
 #   5. gen-certs — file output mode (no K8s required), idempotent with --force
-#   6. reload    — trigger config reload (no-op in FileSystem mode, must exit 0)
 #
 # Actual subcommand flags used (verified against source):
 #   login:     --server <URL> --token <TOKEN>
@@ -16,7 +15,6 @@
 #   get:       <kind> [<name>] [-n <ns>] [-o table|json|yaml|wide]
 #   delete:    <kind> <name> [-n <ns>]  OR  --file <path>
 #   gen-certs: --output file --output-dir <dir> [--force]
-#   reload:    (no args)
 #
 # Usage:
 #   ./test_cli_commands.sh                   # full run: start, test, stop
@@ -551,23 +549,6 @@ run_gen_certs_tests() {
 }
 
 # ===========================================================================
-# ===  TEST SUITE: reload  ==================================================
-# ===========================================================================
-run_reload_tests() {
-    log_section "6. reload"
-
-    # Case 6.1: reload → exit 0 (FileSystem mode is no-op but must not panic)
-    assert_exit0 \
-        "reload: exits 0 (FileSystem mode no-op)" \
-        cli_authed reload
-
-    # Case 6.2: reload with explicit -t server target → should fail (only center supported)
-    assert_exit_nonzero \
-        "reload: -t server target → exit non-zero (only center supported)" \
-        "$CLI" --server "$CONTROLLER_URL" -t server reload
-}
-
-# ===========================================================================
 # ===  MAIN  ================================================================
 # ===========================================================================
 main() {
@@ -611,7 +592,6 @@ main() {
     run_get_tests
     run_delete_tests
     run_gen_certs_tests
-    run_reload_tests
 
     # --- Summary ---
     echo ""

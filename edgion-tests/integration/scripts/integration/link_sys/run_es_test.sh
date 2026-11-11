@@ -553,10 +553,10 @@ assert_json_success "All-clients health check" "$RESP"
 # ── 3.5 Outbound TLS: caSource SecretRef (private-CA REPLACE) ───────────────
 # es-tls-test connects to the nginx TLS terminator (https://127.0.0.1:19201)
 # whose server cert is signed by the backend test CA. caSource: SecretRef
-# REPLACES the public roots with that private CA, so a successful PING proves the
+# REPLACES the System roots with that private CA, so a successful PING proves the
 # connector actually completed a TLS handshake trusting only the private CA.
 # es-tls-systemca is the negative control: same endpoint, caSource: System →
-# the private CA is not in the public roots → handshake fails → never connects.
+# the private CA is not in the System CA bundle → handshake fails → never connects.
 log_info "─── 3.5 Outbound TLS (caSource: SecretRef, CA REPLACE) ───"
 ES_TLS_CLIENT="default_es-tls-test"
 ES_TLS_SYSTEMCA_CLIENT="default_es-tls-systemca"
@@ -577,7 +577,7 @@ assert_eq "es-tls-test connected=true over TLS" "true" "$(echo "$RESP" | jq -r '
 RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_SYSTEMCA_CLIENT}/ping")
 assert_json_failure "es-tls-systemca PING fails (System roots do not trust the private CA)" "$RESP"
 RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_SYSTEMCA_CLIENT}/health")
-assert_ne "es-tls-systemca never connects (proves SecretRef REPLACES public roots)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+assert_ne "es-tls-systemca never connects (proves SecretRef REPLACES System roots)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
 
 # ── 3.6 Outbound TLS: verify=false honored (M-A1, no env gate) ──────────────
 # es-tls-noverify hits the SAME private-cert endpoint with NO CA and verify=false.

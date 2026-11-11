@@ -168,7 +168,7 @@ spec:
                                     required: [kind, name]
                                 wellKnownCACertificates:
                                   type: string
-                                  description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                                  description: "Use the process OS CA bundle (/etc/ssl/certs/ca-certificates.crt in the shipped images)"
                                   enum: [System]
                                 hostname:
                                   type: string

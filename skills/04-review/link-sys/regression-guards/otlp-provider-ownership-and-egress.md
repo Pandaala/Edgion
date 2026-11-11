@@ -28,7 +28,7 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   Resolved secrets are schema-excluded and admin-redacted, but serialized for sync.
 - Native Tonic 0.14 channel retains hostname authority/SNI while each connector and
   probe dial calls canonical EgressResolver on exact addresses. No hostname fallback,
-  environment proxy or redirect path exists. Custom CA replaces public roots.
+  environment proxy or redirect path exists. Custom CA replaces System roots.
 - An interceptor overwrites SDK environment metadata with the resolved bounded
   Secret-only map. Authorization metadata is marked sensitive. SDK internal logs
   are disabled and shared mandatory filtering suppresses tonic::transport/rustls/h2
@@ -200,7 +200,7 @@ PreparedTransport retains the owning TLS input alongside the single constructed
 native Tonic 0.14 Endpoint and metadata. Initialization retries, exporter channels
 and reconnects do not re-read global policy or clone TLS config/Secret objects.
 Common owns canonical resolution and capability checks; Gateway keeps the sole
-native conversion with explicit webpki System roots, custom CA replacement,
+native conversion with explicit process System roots ([System CA single trust store](../../tls/regression-guards/system-ca-single-trust-store.md)), custom CA replacement,
 mTLS, destination SNI, deadlines, H2 and canonical dial-time egress unchanged.
 Pure preparation/hash checks do not parse PEM or emit TLS audit. Cold TLS
 construction uses the audited canonical resolver. Live transport evidence must

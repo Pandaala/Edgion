@@ -50,12 +50,12 @@ inert through the canonical owning selection.
   WebhookCandidate retains the actual owner and captured snapshot. Its owning
   ManagedOutboundClient entry checks source and active pairing, then selects
   Service target scheme and canonical HTTP construction from the proved active
-  field. Inactive HTTP TLS uses public WebPKI defaults without cloning/removing config or
+  field. Inactive HTTP TLS uses System trust defaults without cloning/removing config or
   consuming inherited policy. URL targets retain their explicit scheme.
 - Elasticsearch's EsCandidate retains the shared actual PreparedLinkSysTls
   container and checks active inherited authority before persistent planning.
   Its fixed-header owning HTTP factory derives config/auth from that owner and
-  borrows the same captured TLS selection. Absent/disabled TLS retains public WebPKI
+  borrows the same captured TLS selection. Absent/disabled TLS retains System
   HTTPS trust without global inheritance. Bulk and recovery reuse the Client;
   init continues publishing unhealthy after a failed initial probe. Ordinary
   custom failure retains a callable prior publication; forced refresh withdraws
@@ -111,7 +111,7 @@ that actual owner and validates active inheritance. OAuth2Provider derives its
 endpoint, scopes and egress policy from the same owner and builds through
 build_outbound_client_with_tls_selection using the captured defaults. It keeps
 only the Client and existing request metadata after construction. Absent/disabled
-local TLS retains secure HTTPS with public WebPKI trust and consumes no global policy.
+local TLS retains secure HTTPS with System trust and consumes no global policy.
 Raw-owner UID/generation, frozen references, Grant revision, Secret UID/RV,
 issuer/fallback checks, LeaderFence and publication/CAS remain independent and
 unchanged: a stable captured owner is not authority to use stale credentials.
@@ -161,7 +161,8 @@ provider-owned runtime refactor; current preparation tests live in client.rs):
 - `redis-tls-integration-coverage` (historical Fred run, 2026-09-13): that run
   exercised scheme-only `rediss://` through Fred's native trust source and
   `SSL_CERT_FILE`. It is not the current redis-rs contract. Current default trust
-  is the compiled webpki root set. Scheme-only `rediss://` must fail closed against
+  is the explicit process System bundle (the fixed host OS bundle path;
+  `SSL_CERT_FILE` is not consulted). Scheme-only `rediss://` must fail closed against
   the private test CA. Explicit `caCertificateRefs` and mTLS remain the successful
   handshakes. Container reuse across later work directories is a separate runner
   invariant: see
@@ -187,8 +188,8 @@ dependencies and scheme behavior must be reviewed together with front-end gates.
 - `g9a-007`: historical correction unifying outbound reqwest TLS loading.
 - `disabled-tls-publication-readiness`: fixed; inactive LinkSys TLS no longer
   blocks reference resolution/readiness or changes Webhook transport selection.
-- `redis-tls-integration-coverage`: current default trust is compiled webpki
-  roots and rejects the private test CA. Custom-CA and mutual-TLS handshakes
+- `redis-tls-integration-coverage`: current default trust is the process System
+  bundle and rejects the private test CA. Custom-CA and mutual-TLS handshakes
   remain the successful isolated coverage. The 2026-09-13 native-trust success
   is historical Fred evidence.
 
@@ -221,16 +222,16 @@ other providers' distinct native TLS policies are not changed by this adapter.
 ## Reqwest 0.13 complete HTTP TLS configuration
 
 The canonical HTTP factory uses reqwest 0.13.5. Verified HTTP clients receive one
-complete Rustls configuration with explicit Ring, public WebPKI roots or custom
+complete Rustls configuration with explicit Ring, process System roots or custom
 CA REPLACE semantics, ordered client identity and HTTP/2 + HTTP/1.1 ALPN. An
-absent/inactive TLS selection uses public roots without reading global outbound
+absent/inactive TLS selection uses System roots without reading global outbound
 TLS policy. Complete caller-prepared Gateway SAN configurations remain intact;
 the factory does not add CA/identity/verify flags after selecting them.
 
 Reqwest's preconfigured backend ignores later builder root/identity flags and
-does not fill ALPN. Its native 0.13 trust defaults differ from the old WebPKI
-feature. The explicit verified configuration preserves Edgion's existing trust
-contract. The platform-verifier crate remains transitive but does not supply
+does not fill ALPN. Its native 0.13 trust defaults are not used. The explicit
+verified configuration supplies the single process System bundle shared with
+backend TLS (infra3-03, [System CA single trust store](../../tls/regression-guards/system-ca-single-trust-store.md)). The platform-verifier crate remains transitive but does not supply
 trust for these verified HTTP clients.
 
 HTTP custom CA input retains canonical whole-bundle/DER checks and caps before

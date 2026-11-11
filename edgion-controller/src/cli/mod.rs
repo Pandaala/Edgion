@@ -417,6 +417,28 @@ impl EdgionControllerCli {
             );
         }
 
+        // 1c. Load System CA trust (the OS CA bundle at a fixed path) before any
+        // outbound client (etcd, HTTPDNS, OAuth2) can use it, so the bundle is
+        // reported at startup. The Controller deliberately only warns when it is
+        // unusable: its System-trust handshakes then fail closed.
+        let system_trust = edgion_common::system_trust::system_trust();
+        match system_trust.source() {
+            edgion_common::system_trust::SystemTrustSource::Loaded(path) => tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "system_ca_trust_loaded",
+                path = %path.display(),
+                certificates = system_trust.certificates().len(),
+                skipped_certificates = system_trust.skipped_certificates(),
+                "System CA trust loaded"
+            ),
+            edgion_common::system_trust::SystemTrustSource::Unavailable(reason) => tracing::warn!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                event = "system_ca_trust_unavailable",
+                reason = %reason,
+                "System CA trust is unavailable; System-trust TLS handshakes will fail"
+            ),
+        }
+
         // Resolve transport after metrics installation but before any leadership
         // task can initialize CA work. The same choice reaches service startup.
         let transport = ConfSyncTransport::prepare(

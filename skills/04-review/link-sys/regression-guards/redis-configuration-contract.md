@@ -67,7 +67,8 @@ still selects TLS and inherits global defaults through an empty local policy.
 Consumed inherited axes join the material digest, with local override masks.
 RedisCandidate supplies the same preparation and fingerprint to every runner
 retry. Construction resolves one canonical PEM material selection. Transport builds
-redis-rs verifying connections; default roots are webpki, custom roots replace
+redis-rs verifying connections; default roots are the explicit process System
+bundle ([System CA single trust store](../../tls/regression-guards/system-ca-single-trust-store.md)), custom roots replace
 them, and client identity uses the same ownership proof. Disabled references
 remain inert. The test-util actual-owner fixture uses the production path.
 

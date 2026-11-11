@@ -1,5 +1,9 @@
 # Backend TLS
 
+> ⚠️ **Breaking Change (v0.1.0)**
+>
+> `wellKnownCACertificates: System` (and an omitted CA) now means the OS CA bundle at a fixed path (the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`) for backend TLS and every Gateway outbound client. Outbound clients no longer use a compiled-in Mozilla root list, and the Gateway refuses to start without a usable bundle. Install `ca-certificates` in custom images and reference private CAs with `caCertificateRefs`. See the [release note](../../../release-notes/2026-11-10-system-ca-trust.md).
+
 Configure TLS connections from the Gateway to backend services using the standard Gateway API `BackendTLSPolicy` resource.
 
 ## Overview
@@ -177,7 +181,7 @@ spec:
 
 ### Example 2: Trust the system CA bundle
 
-Use `wellKnownCACertificates: System` when the backend presents a certificate issued by a publicly trusted CA (for example, an external HTTPS API exposed through an `ExternalName` Service).
+Use `wellKnownCACertificates: System` when the backend presents a certificate issued by a CA in the Gateway's system bundle (for example, an external HTTPS API exposed through an `ExternalName` Service). `System` is the OS CA bundle of the Gateway host or image at a fixed path (the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`); it is not configurable. Gateway outbound clients (OIDC, LDAP, LinkSys, OTLP, ...) load the same file for `System`. To trust a private CA, reference it with `caCertificateRefs` (Example 1) instead; a custom CA replaces the system bundle. The Gateway refuses to start when no bundle exists or it is invalid, so a custom image must install `ca-certificates`. BoringSSL also consults its default certificate locations for backend `System` verification (`/etc/ssl/cert.pem` and `/etc/ssl/certs`, or `SSL_CERT_FILE`/`SSL_CERT_DIR` when set); keep them consistent with the bundle.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

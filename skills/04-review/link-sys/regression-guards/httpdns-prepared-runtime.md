@@ -67,8 +67,8 @@ The reference-contract implementation retains actual LinkSys owners in the opaqu
 HttpDnsCandidate alongside prepared reference topology and one captured EGC global
 TLS snapshot. Incoming source identity and active local pairing proof precede reuse
 in both Gateway runtime publication and Controller ServiceDnsState. Enabled TLS
-also checks the independently inherited axes. Absent/disabled TLS retains native
-system trust/no client and does not consume global TLS; its actual source identity
+also checks the independently inherited axes. Absent/disabled TLS retains System
+trust (process OS bundle)/no client and does not consume global TLS; its actual source identity
 is still checked. Only another provider returns no candidate: malformed existing
 HTTPDNS preserves its authored fallback as a failed generation.
 

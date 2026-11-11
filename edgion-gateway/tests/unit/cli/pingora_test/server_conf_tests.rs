@@ -205,3 +205,34 @@ fn downstream_tls_offload_cli_values_override_file_values() {
         Some((3, 2))
     );
 }
+
+#[test]
+fn backend_system_trust_reads_the_process_system_bundle() {
+    // Backend `System` trust and outbound clients must read one bundle file.
+    let (_, conf) = load_server_conf(None, &[]);
+    let expected = edgion_common::system_trust::system_trust()
+        .bundle_file()
+        .map(|path| path.to_string_lossy().into_owned());
+    assert_eq!(conf.ca_file, expected);
+}
+
+#[cfg(feature = "boringssl")]
+#[test]
+fn backend_ca_file_precheck_accepts_pem_and_rejects_unloadable_files() {
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut good = NamedTempFile::new().unwrap();
+    good.write_all(params.self_signed(&key).unwrap().pem().as_bytes())
+        .unwrap();
+    validate_backend_ca_file(good.path()).unwrap();
+
+    // Pingora would panic on these in `set_ca_file`; startup must fail cleanly.
+    let mut garbage = NamedTempFile::new().unwrap();
+    garbage
+        .write_all(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+        .unwrap();
+    assert!(validate_backend_ca_file(garbage.path()).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    assert!(validate_backend_ca_file(&dir.path().join("absent.pem")).is_err());
+}

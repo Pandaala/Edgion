@@ -102,8 +102,6 @@ tonic.workspace = true
 tonic-prost.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-# Built-in webpki roots for building custom rustls ClientConfig (ext_proc connector)
-webpki-roots.workspace = true
 # Custom hyper connector for the ext_proc tonic channel (TLS toggle / custom CA / mTLS)
 hyper-util.workspace = true
 x509-parser.workspace = true

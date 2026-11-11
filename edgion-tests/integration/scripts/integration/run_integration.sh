@@ -1252,7 +1252,8 @@ probe_redis_ready() {
 # will trust. Host certificate files are the only identity source: a docker
 # exec against container-local /certs can succeed for a healthy leftover
 # container even after make-test-certs.sh replaced the host material that
-# Gateway custom-CA and mTLS Secrets will load. Default trust does not read SSL_CERT_FILE.
+# Gateway custom-CA and mTLS Secrets will load. Gateway System trust is the host OS
+# CA bundle, which never contains the test CA.
 probe_redis_tls_identity() {
     local host=$1 port=$2 require_client_cert=$3
     local certs_dir="${REDIS_COMPOSE_DIR:-${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis}/certs"

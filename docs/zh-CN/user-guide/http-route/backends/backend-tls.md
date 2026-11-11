@@ -1,5 +1,9 @@
 # 后端 TLS
 
+> ⚠️ **破坏性变更（v0.1.0）**
+>
+> `wellKnownCACertificates: System`（以及未配置 CA）现在指固定路径的 OS CA 包（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件），后端 TLS 与 Gateway 所有出向客户端共用。出向客户端不再使用编译进程序的 Mozilla 根证书列表；找不到可用的 CA 包时 Gateway 拒绝启动。自定义镜像请安装 `ca-certificates`，私有 CA 请用 `caCertificateRefs` 引用。详见[发布说明](../../../release-notes/2026-11-10-system-ca-trust.md)。
+
 使用标准 Gateway API 的 `BackendTLSPolicy` 资源配置 Gateway 到后端服务的 TLS 连接。
 
 ## 概述
@@ -175,7 +179,7 @@ spec:
 
 ### 示例 2：信任系统 CA 包
 
-当后端持有公共受信 CA 颁发的证书时（例如通过 `ExternalName` Service 暴露的外部 HTTPS API），使用 `wellKnownCACertificates: System`。
+当后端证书由 Gateway 系统 CA 包中的 CA 颁发时（例如通过 `ExternalName` Service 暴露的外部 HTTPS API），使用 `wellKnownCACertificates: System`。`System` 指 Gateway 主机或镜像中固定路径的 OS CA 包（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件），不可配置。Gateway 出向客户端（OIDC、LDAP、LinkSys、OTLP 等）的 `System` 也读取同一个文件。要信任私有 CA，请改用 `caCertificateRefs` 引用它（见示例 1），自定义 CA 会替换系统 CA 包。找不到 CA 包或 CA 包无效时 Gateway 会拒绝启动，因此自定义镜像必须安装 `ca-certificates`。后端 `System` 校验时 BoringSSL 还会读取其默认证书位置（`/etc/ssl/cert.pem` 和 `/etc/ssl/certs`，或已设置的 `SSL_CERT_FILE`/`SSL_CERT_DIR`），请保持它们与该 CA 包一致。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

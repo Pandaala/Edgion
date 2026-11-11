@@ -194,6 +194,17 @@ material, even when the Controller is unreachable. A concurrent probe made again
 an older connection generation cannot overwrite that reload. No additional health
 RPC, persistent standby fleet, or operator setting is required.
 
+### System CA bundle (startup prerequisite)
+
+`wellKnownCACertificates: System` (and an omitted CA) uses the OS CA bundle at a fixed
+path: the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`. There is no setting for it. The same file backs backend TLS and every
+Gateway outbound client. The Gateway refuses to start when no such file exists, or when it
+is not a regular file, exceeds 8 MiB, contains malformed PEM, has no usable certificate, or
+cannot be loaded by BoringSSL. The shipped images and packages install `ca-certificates`;
+a custom image must do the same. To trust a private CA, use `caCertificateRefs`
+(BackendTLSPolicy, the resource, or EdgionGatewayConfig `outboundTls`), which replaces
+`System`. See [Backend TLS](../../user-guide/http-route/backends/backend-tls.md).
+
 ### Gateway admin API authentication
 
 The admin API (`gateway.admin_listen`, default `127.0.0.1:12001`) is protected by a

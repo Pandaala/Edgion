@@ -189,7 +189,7 @@ pub fn build_outbound_client(cfg: OutboundClientConfig) -> anyhow::Result<Client
 }
 
 /// Build from the actual validated local selection and captured inheritance.
-/// Inactive/absent policy retains public WebPKI trust without global inheritance.
+/// Inactive/absent policy retains System trust without global inheritance.
 /// Raw TLS overrides in cfg are rejected before client construction.
 pub fn build_outbound_client_with_tls_selection(
     cfg: OutboundClientConfig,

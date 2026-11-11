@@ -68,6 +68,19 @@ fn build_cli_client() -> Result<Client> {
     .context("Failed to create HTTP client")
 }
 
+/// An `https://` server is verified against the OS CA bundle. Without one,
+/// every handshake fails with an opaque `UnknownIssuer`, so say why up front.
+fn warn_if_system_trust_unavailable(base_url: &str) {
+    if !base_url.to_ascii_lowercase().starts_with("https://") {
+        return;
+    }
+    if let edgion_common::system_trust::SystemTrustSource::Unavailable(reason) =
+        edgion_common::system_trust::system_trust().source()
+    {
+        eprintln!("Warning: HTTPS server certificates cannot be verified (System CA trust unavailable: {reason})");
+    }
+}
+
 /// EdgionClient for interacting with Controller/Gateway APIs
 pub struct EdgionClient {
     client: Client,
@@ -94,6 +107,7 @@ impl EdgionClient {
             };
             format!("http://localhost:{}", port)
         });
+        warn_if_system_trust_unavailable(&base_url);
 
         Ok(Self {
             client,
@@ -123,6 +137,7 @@ impl EdgionClient {
             };
             format!("http://localhost:{}", port)
         });
+        warn_if_system_trust_unavailable(&base_url);
 
         Ok(Self {
             client,

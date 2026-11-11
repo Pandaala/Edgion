@@ -10,7 +10,7 @@ use super::OutboundSanVerifier;
 
 /// Build a verified HTTPS configuration from canonical outbound TLS resolution.
 ///
-/// Custom roots replace public roots. The verifier always checks the CA chain,
+/// Custom roots replace the process System roots. The verifier always checks the CA chain,
 /// expiry and URL hostname, then enforces any additional SAN policy. This helper
 /// deliberately never disables verification, including when the resolved policy
 /// has `verify=false`; callers needing that mode use the common TLS factory.
@@ -25,15 +25,13 @@ pub fn build_verified_outbound_tls(
         .map_err(|e| format!("{context} TLS: rustls provider error: {e}"))?;
 
     // Root store
-    let mut roots = RootCertStore::empty();
-    match &resolved.ca {
-        EffectiveCa::System => {
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        }
+    let roots = match &resolved.ca {
+        EffectiveCa::System => edgion_common::system_trust::system_trust().root_store(),
         EffectiveCa::Custom(bundles) => {
             if bundles.is_empty() {
                 return Err(format!("{context} TLS: CA PEM contained no valid certificates"));
             }
+            let mut roots = RootCertStore::empty();
             for bundle in bundles {
                 let mut added = 0usize;
                 for cert in CertificateDer::pem_slice_iter(bundle) {
@@ -47,11 +45,12 @@ pub fn build_verified_outbound_tls(
                     return Err(format!("{context} TLS: CA PEM bundle contained no valid certificates"));
                 }
             }
+            std::sync::Arc::new(roots)
         }
-    }
+    };
 
     // Wrap webpki verifier with OutboundSanVerifier
-    let webpki = WebPkiServerVerifier::builder_with_provider(std::sync::Arc::new(roots), provider)
+    let webpki = WebPkiServerVerifier::builder_with_provider(roots, provider)
         .build()
         .map_err(|e| format!("{context} TLS: webpki verifier build error: {e}"))?;
     let san_verifier = std::sync::Arc::new(OutboundSanVerifier::new(webpki, san_policy));

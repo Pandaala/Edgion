@@ -19,7 +19,8 @@ its private AsyncConnectionConfig without the resolver. Do not use its Sentinel
 helper, which likewise opens discovery connections without this injection.
 Cluster builder uses async_dns_resolver; direct connections use set_dns_resolver.
 Canonical outbound_tls preparation supplies roots and client identity at build
- time. Custom roots replace defaults; system mode uses compiled webpki roots.
+ time. Custom roots replace defaults; system mode passes the process System
+ bundle explicitly ([System CA single trust store](../../tls/regression-guards/system-ca-single-trust-store.md)).
 The dependency retains non-zeroizing private-key PEM copies; Edgion's prepared
 material remains zeroizing. Never log connection settings or discovered targets.
 

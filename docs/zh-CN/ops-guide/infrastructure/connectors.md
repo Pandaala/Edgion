@@ -1,5 +1,9 @@
 # 连接器（LinkSys）
 
+> ⚠️ **破坏性变更（v0.1.0）**
+>
+> `wellKnownCACertificates: System`（以及未配置 CA）现在指固定路径的 OS CA 包（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件），后端 TLS 与 Gateway 所有出向客户端共用。出向客户端不再使用编译进程序的 Mozilla 根证书列表；找不到可用的 CA 包时 Gateway 拒绝启动。自定义镜像请安装 `ca-certificates`，私有 CA 请用 `caCertificateRefs` 引用。详见[发布说明](../../release-notes/2026-11-10-system-ca-trust.md)。
+
 > **🔌 Edgion 扩展**
 >
 > 连接器由 `LinkSys` CRD（`edgion.io/v1`）定义，用于集成外部系统，不属于标准 Gateway API 规范。
@@ -166,11 +170,11 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 tls:
   enabled: true
   verify: true                 # 验证对端证书（默认 true）；false 由运维人员负责，启动时记录 WARN
-  validation:                  # 可选；省略则使用内置 webpki 根证书
+  validation:                  # 可选；省略则使用 System CA 包
     caCertificateRefs:         # CA 证书引用列表；LinkSys 仅支持 kind: Secret
       - kind: Secret
         name: my-ca-bundle     # Secret 须包含 ca.crt 键（类型 kubernetes.io/tls 或 Opaque）
-    wellKnownCACertificates: System  # 或显式使用内置 webpki 根证书
+    wellKnownCACertificates: System  # 或显式使用 System CA 包
     # Phase 1：hostname 和 subjectAltNames 字段已暴露，但暂不强制执行，配置后 Accepted=False。
   clientCertificateRef:
     name: my-client-tls        # 包含 tls.crt + tls.key 的 Secret，用于客户端 mTLS
@@ -182,9 +186,9 @@ tls:
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
 | `verify` | Boolean | `true` | TLS 块启用时验证对端证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis、Etcd 和 OTLP 拒绝启用块中的 `verify: false`，其 SDK 无跳过验证 API。 |
-| `validation` | Object | none | 可选信任锚配置。省略则使用内置 webpki 根证书。 |
-| `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换**内置根证书。 |
-| `validation.wellKnownCACertificates` | String | none | 显式使用内置 webpki 根证书。允许值：`System`。 |
+| `validation` | Object | none | 可选信任锚配置。省略则使用该连接器所在进程（Gateway 或 Controller）的 System CA 包：固定路径的 OS CA 包（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件）。在 Gateway 中与后端 TLS 共用；Controller 侧的使用方（HTTPDNS 后台解析、OAuth2 凭据源）使用 Controller 镜像的 CA 包。 |
+| `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换** System 根证书。 |
+| `validation.wellKnownCACertificates` | String | none | 显式使用所在进程的 System CA 包。允许值：`System`。 |
 | `clientCertificateRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
 
 客户端 mTLS 身份（证书 + 私钥）必须通过 `clientCertificateRef` 提供。
@@ -304,7 +308,7 @@ redis-rs 建立连接前会立即对每个解析地址分类。生产模式始�
 连接器级覆盖。此防护属于纵深防御，不能替代 Gateway Pod 的 `NetworkPolicy`。共享配置和地址
 分类详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。
 
-`pool.size` 只作用于 standalone 和 Sentinel。Cluster 使用一个多路复用拓扑客户端并忽略该字段。一次操作共用 `timeout.command` 总期限；执行结果未知时不重放。只跟随 MOVED，次数不超过 `maxRedirects`。多键命令必须位于同一个 Cluster hash slot，跨 slot 操作不会拆分到多个节点。健康检查以名义 5 秒周期主动发送 PING/ROLE，调度和探测耗时会额外增加检测延迟。系统信任使用编译进程序的 webpki 根证书；私有 CA 必须显式配置引用。Sentinel 发布在可达 Sentinel 中获得唯一相对多数、且 ROLE 确认为 master 的地址；票数并列时这一轮不发布。每个 Sentinel 按其 run ID（`SENTINEL MYID`，需 Redis 6.2+）只计一票，即使它同时可通过配置的域名和学习到的 IP 访问；不响应 `SENTINEL MYID` 的 Sentinel 不计票。Sentinel 与数据节点共用凭据。客户端发布后，Cluster 恢复会同时拨号当前已知主节点和配置的 seed，因此摘掉最初的 seed 不会阻止拓扑刷新。新一代必须先建立真实连接，普通替换才会生效。强制刷新仍先退役旧实例。
+`pool.size` 只作用于 standalone 和 Sentinel。Cluster 使用一个多路复用拓扑客户端并忽略该字段。一次操作共用 `timeout.command` 总期限；执行结果未知时不重放。只跟随 MOVED，次数不超过 `maxRedirects`。多键命令必须位于同一个 Cluster hash slot，跨 slot 操作不会拆分到多个节点。健康检查以名义 5 秒周期主动发送 PING/ROLE，调度和探测耗时会额外增加检测延迟。系统信任使用 Gateway 的 System CA 包（固定路径的 OS CA 包）；私有 CA 请显式配置 CA 引用。Sentinel 发布在可达 Sentinel 中获得唯一相对多数、且 ROLE 确认为 master 的地址；票数并列时这一轮不发布。每个 Sentinel 按其 run ID（`SENTINEL MYID`，需 Redis 6.2+）只计一票，即使它同时可通过配置的域名和学习到的 IP 访问；不响应 `SENTINEL MYID` 的 Sentinel 不计票。Sentinel 与数据节点共用凭据。客户端发布后，Cluster 恢复会同时拨号当前已知主节点和配置的 seed，因此摘掉最初的 seed 不会阻止拓扑刷新。新一代必须先建立真实连接，普通替换才会生效。强制刷新仍先退役旧实例。
 
 > **说明**：`topology.sentinel.password`（独立于 Redis 节点认证的 Sentinel 自身密码）字段已被移除——该字段在运行时从未被消费（no-op）。如果现有 CR 的 `topology.sentinel` 下包含 `password:` 字段，Kubernetes API server 在重新 apply 时会静默裁剪该字段，不会导致解析错误。
 
@@ -1504,7 +1508,7 @@ spec:
 `collector-ca` 使用 `ca.crt` 键，`collector-client` 是包含 `tls.crt` 和 `tls.key`
 的 `kubernetes.io/tls` Secret。不需要认证时省略 `auth`；使用 HTTPS 系统根证书时
 省略整个 TLS 块；不需要客户端认证时省略 `clientCertificateRef`。自定义 CA 会替换
-公共根证书。跨命名空间引用 Secret 需要 ReferenceGrant。认证仅支持来自 Secret 的
+System 根证书。跨命名空间引用 Secret 需要 ReferenceGrant。认证仅支持来自 Secret 的
 Bearer token，最多 8192 字节；任意 metadata 和内联凭据均不支持。
 
 另行配置 Gateway 进程中的日志输出：

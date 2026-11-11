@@ -26,7 +26,7 @@ The startup path is split between `run()`, `run_after_logging()`, and
 | 1 | `EdgionControllerConfig::load()` | Merge CLI, environment variables, and config-file parameters |
 | 2 | `init_controller_config()` / `init_global_test_mode()` | Initialize global config and test-mode flag |
 | 3 | `init_environment()` | Initialize the working directory (work_dir priority: CLI > ENV > Config > default `.`), and the logging system |
-| 4 | Observability initialization | Install metrics recorder and process-level observability |
+| 4 | Observability initialization | Install metrics recorder and process-level observability, then load System CA trust (code step 1c): INFO with the bundle path, or WARN only when unusable, after which `System`-trust handshakes fail closed |
 | 5 | `ShutdownHandle::new()` | Create the shared signal broadcaster |
 | 6 | `ConfMgr::create()` | Select FileSystem/Kubernetes/Etcd and create its `ControllerRuntime` |
 | 7 | Security/auth initialization | Resolve admin/scoped tokens, build Authorizer, federation reload channel, and optional federation supervisor |

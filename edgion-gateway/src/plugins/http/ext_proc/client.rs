@@ -437,7 +437,8 @@ fn validate_effective_tls_capabilities(resolved: &ResolvedOutboundTls) -> Result
 ///
 /// Root selection mirrors the LinkSys path:
 /// - [`EffectiveCa::Custom`] → the PEM is the ONLY trust root (REPLACE).
-/// - [`EffectiveCa::System`] → the built-in webpki roots.
+/// - [`EffectiveCa::System`] → the process-wide OS trust set
+///   ([`edgion_common::system_trust`]).
 /// - `verify == false` → an accept-all verifier (reachable only because the
 ///   resolver honored the operator's verify=false (provider_can_disable=true)).
 ///
@@ -456,12 +457,10 @@ fn build_rustls_config(
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier::new()))
     } else {
-        let mut roots = RootCertStore::empty();
-        match &resolved.ca {
-            EffectiveCa::System => {
-                roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            }
+        let roots = match &resolved.ca {
+            EffectiveCa::System => edgion_common::system_trust::system_trust().root_store(),
             EffectiveCa::Custom(bundles) => {
+                let mut roots = RootCertStore::empty();
                 let mut added = 0usize;
                 for bundle in bundles {
                     for cert in CertificateDer::pem_slice_iter(bundle) {
@@ -475,8 +474,9 @@ fn build_rustls_config(
                 if added == 0 {
                     return Err("ext_proc TLS CA PEM did not contain any valid certificates".to_string());
                 }
+                Arc::new(roots)
             }
-        }
+        };
         builder.with_root_certificates(roots)
     };
 

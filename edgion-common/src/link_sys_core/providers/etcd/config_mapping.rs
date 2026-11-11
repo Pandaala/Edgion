@@ -66,7 +66,8 @@ pub(super) fn build_owned_options(input: &PreparedLinkSysTls) -> Result<Prepared
     );
     let tls = input.with_tls_selection(|proof, defaults| {
         if proof.active_field().is_none() {
-            return Ok(None);
+            // Inactive TLS uses System trust without global inheritance.
+            return Ok(default_tls_options(&config.endpoints));
         }
         let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, "Etcd", defaults)
             .map_err(tls_configuration_error)?;
@@ -87,7 +88,7 @@ pub(super) fn build_bootstrap_options(
 ) -> Result<PreparedOptions> {
     validate_fields(&config.endpoints, config.timeout.as_ref(), config.keep_alive.as_ref())?;
     let tls = match config.tls.as_ref() {
-        None => None,
+        None => default_tls_options(&config.endpoints),
         Some(material) => {
             let defaults = defaults.ok_or_else(|| anyhow::anyhow!("Etcd bootstrap TLS requires captured defaults"))?;
             let resolved = outbound_tls::resolve_etcd_bootstrap_tls_audited(material, defaults)
@@ -223,17 +224,40 @@ fn tls_configuration_error(error: edgion_resources::EdgionErrorCode) -> anyhow::
     )
 }
 
+/// etcd-client gives `https://` endpoints an empty tonic TLS config when no
+/// options are set, which trusts no root. Without a TLS block, an all-HTTPS
+/// endpoint set therefore gets `System` trust, the meaning of an omitted CA
+/// everywhere else. Other endpoint sets keep no options: etcd-client rejects
+/// TLS options for `http://` endpoints and applies them to scheme-less ones.
+fn uses_default_system_tls(endpoints: &[String]) -> bool {
+    !endpoints.is_empty() && endpoints.iter().all(|endpoint| endpoint.starts_with("https://"))
+}
+
+fn default_tls_options(endpoints: &[String]) -> Option<TlsOptions> {
+    uses_default_system_tls(endpoints).then(|| {
+        ca_pem_bundles(&EffectiveCa::System)
+            .into_iter()
+            .fold(TlsOptions::new(), |options, bundle| {
+                options.ca_certificate(Certificate::from_pem(bundle))
+            })
+    })
+}
+
+/// The PEM bundles handed to etcd-client, one per `ca_certificate()` call.
+/// tonic loads no roots implicitly, so System trust must be passed explicitly.
+fn ca_pem_bundles(ca: &EffectiveCa) -> Vec<&[u8]> {
+    match ca {
+        EffectiveCa::Custom(bundles) => bundles.iter().map(Vec::as_slice).collect(),
+        EffectiveCa::System => vec![crate::system_trust::system_trust().pem()],
+    }
+}
+
 fn tls_options_from_resolved(resolved: outbound_tls::ResolvedOutboundTls) -> Result<TlsOptions> {
     resolved.reject_unsupported_identity_policy("Etcd")?;
 
     let mut tls_options = TlsOptions::new();
-
-    if let EffectiveCa::Custom(bundles) = &resolved.ca {
-        // etcd-client accepts one Certificate per `ca_certificate()` call;
-        // iterate over all resolved PEM bundles and add each in turn.
-        for bundle in bundles {
-            tls_options = tls_options.ca_certificate(Certificate::from_pem(bundle.as_slice()));
-        }
+    for bundle in ca_pem_bundles(&resolved.ca) {
+        tls_options = tls_options.ca_certificate(Certificate::from_pem(bundle));
     }
 
     if let Some((cert_pem, key_pem)) = &resolved.client_identity {

@@ -261,7 +261,7 @@ Etcd 模式面向非 Kubernetes（裸金属 / 虚拟机）生产环境：Control
 | `endpoints` | `Array<String>` | **必填** | etcd 集群端点列表，如 `["http://10.0.0.1:2379"]` |
 | `key_prefix` | `String` | `/edgion` | 存入 etcd 的所有配置键的前缀 |
 | `auth` | Object | — | 可选的 etcd 用户名 / 密码认证（`auth.username`、`auth.password`） |
-| `tls` | Object | — | 可选，用于 **Controller→etcd** 连接的 TLS（文件路径）：`tls.ca_cert_file`、`tls.client_cert_file`、`tls.client_key_file`。与 conf_sync mTLS 通道无关 |
+| `tls` | Object | — | 可选，用于 **Controller→etcd** 连接的 TLS（文件路径）：`tls.ca_cert_file`、`tls.client_cert_file`、`tls.client_key_file`。未配置 `ca_cert_file` 时信任 System CA 包：固定路径的 OS CA 包（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件）。与 conf_sync mTLS 通道无关 |
 | `connect_timeout_ms` | `Integer` | `5000` | etcd 连接（拨号）超时，毫秒 |
 | `request_timeout_ms` | `Integer` | `10000` | 共享 conf_center etcd 客户端一元调用的单请求超时，毫秒。**注意**：它**不会**作用于阻塞式的 Leader 竞选 `campaign()` RPC（竞选客户端刻意不设置通道级超时），因此运维无需为竞选调整此值 |
 | `cache_ready_deadline_secs` | `Integer` | `180` | 本 Controller 成为 Leader 后，所有资源 kind 首次加载到就绪的超时上限（秒）。这是启动阶段唯一的超时，各阶段内部没有独立超时。**必须 `> 30`**。超时后启动失败，Controller 退出。key prefix 下数据量大或 etcd 较慢时应调大 |

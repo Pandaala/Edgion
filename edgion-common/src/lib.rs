@@ -11,6 +11,7 @@ pub mod observe;
 pub mod secret;
 pub mod singleflight;
 pub mod startup;
+pub mod system_trust;
 pub mod test_mode;
 pub mod time;
 pub mod tls_validation;

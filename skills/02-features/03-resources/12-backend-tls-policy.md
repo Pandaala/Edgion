@@ -72,7 +72,7 @@ spec:
 | `hostname` | `String` | Yes | TLS SNI and certificate validation hostname |
 | `caCertificateRefs` | `Vec<CACertRef>?` | No | BoringSSL only: CA certificate reference list (supports Secret and ConfigMap; ConfigMap reads the `ca.crt` key) |
 | `subjectAltNames` | `Vec<SubjectAltName>?` | No | Additional SAN allowlist; enforced by the BoringSSL build only |
-| `wellKnownCACertificates` | `String?` | No | `System`: use system CA certificates with the supported BoringSSL Gateway |
+| `wellKnownCACertificates` | `String?` | No | `System`: use the Gateway System CA bundle (the OS CA bundle at the first existing fixed path, `/etc/ssl/certs/ca-certificates.crt` in the shipped images), the same file outbound clients use for `System` |
 
 **SubjectAltName**:
 

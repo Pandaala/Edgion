@@ -73,9 +73,10 @@ fn verified_tls_enforces_roots_hostname_and_optional_sans() {
 fn verified_tls_rejects_mismatched_client_identity() {
     let certificate = rcgen::generate_simple_self_signed(vec!["client.example.com".to_string()]).unwrap();
     let other = rcgen::generate_simple_self_signed(vec!["client.example.com".to_string()]).unwrap();
+    // A custom CA keeps this identity test independent of the host CA bundle.
     let mut resolved = ResolvedOutboundTls {
         verify: true,
-        ca: EffectiveCa::System,
+        ca: EffectiveCa::Custom(vec![certificate.cert.pem().into_bytes()]),
         client_identity: Some((
             certificate.cert.pem().into_bytes(),
             other.signing_key.serialize_pem().into_bytes().into(),

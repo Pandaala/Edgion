@@ -1766,7 +1766,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
- "webpki-roots",
  "x509-parser 0.18.1",
  "zeroize",
  "zstd",
@@ -1953,7 +1952,6 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat",
- "webpki-roots",
  "wiremock",
  "x509-parser 0.18.1",
  "yaml_serde",
@@ -6662,7 +6660,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
- "webpki-roots",
 ]
 
 [[package]]

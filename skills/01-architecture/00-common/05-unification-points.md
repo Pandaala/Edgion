@@ -85,7 +85,7 @@ is a bug" rule also gets a line there.
 The factory accepts either schema-level `tls` or `preconfigured_tls`, never both.
 Its owning-selection entry instead borrows a proved actual field and one captured
 global snapshot, rejecting raw `tls`, `tls_defaults` and `preconfigured_tls`
-substitutions. An absent/disabled HTTPDNS or Webhook field uses native TLS defaults without
+substitutions. An absent/disabled HTTPDNS or Webhook field uses System trust defaults without
 consuming inherited trust. Other raw-input consumers remain tracked for migration.
 Verified HTTPS clients needing SAN constraints use the shared Gateway
 `tls::validation::build_verified_outbound_tls` builder and the latter input.
@@ -121,6 +121,16 @@ policy. TLS/client construction failure must never select an unconfigured client
 - **Rule**: every outbound TLS configuration (CA bundle, client cert/mTLS,
   verification toggles) MUST resolve through it — including non-reqwest
   dialers.
+- **System roots**: `EffectiveCa::System` has one source,
+  `edgion_common::system_trust::system_trust()`, which loads the OS bundle at the
+  first existing fixed path in `SYSTEM_CA_FILES` once per process (no setting, no
+  `SSL_CERT_FILE`). The Gateway
+  passes the same file to Pingora `ServerConf.ca_file` for backend TLS. Custom
+  trust is `caCertificateRefs`, which replaces System. Do not load roots in a
+  `wellKnownCACertificates` consumer (`webpki_roots`, `with_webpki_roots`,
+  `with_native_roots`, `rustls-native-certs`); see
+  `skills/04-review/tls/regression-guards/system-ca-single-trust-store.md` for
+  the exempt non-`System` clients (ACME, kube-client).
 - Backend policy consumers use its pure `resolve_outbound_tls_with_defaults`
   entry with explicit defaults, so LinkSys global trust or client credentials
   cannot override backend identity. Configuration audit logging remains in
@@ -131,8 +141,8 @@ policy. TLS/client construction failure must never select an unconfigured client
   `WebhookCandidate` plus the fixed-variant managed owning entry. Both use the canonical
   HTTP factory's `build_outbound_client_with_tls_selection`: one actual LinkSys and
   captured global snapshot supply incoming proof, replay comparison and build.
-  Raw TLS substitutions are rejected; absent/disabled HTTPDNS/Webhook TLS keeps native
-  system trust without global inheritance. Common's pure active-local inheritance
+  Raw TLS substitutions are rejected; absent/disabled HTTPDNS/Webhook TLS keeps
+  System trust without global inheritance. Common's pure active-local inheritance
   check and masked inherited-axis fingerprint encoder share the same canonical
   precedence; comparison performs no PEM parsing or TLS audit. RedisCandidate's
   Common PreparedRedisTls adapter applies the same actual selection/pair checker,
@@ -504,8 +514,9 @@ The immutable connection input keeps ordinary/election SDK options for all
 reconnect/probe/election paths. Controller's explicit EtcdBootstrapConfig supplies
 trusted disk PEM/YAML material without fabricating resource references. Private
 borrowed adapters enter the same canonical TLS precedence/materialization core.
-The bootstrap input is not resource authority. SDK option/PEM cloning and SDK
-root-store behavior are unchanged and are not new Edgion guarantees.
+The bootstrap input is not resource authority. SDK option/PEM cloning is
+unchanged. `System` trust passes the process System bundle explicitly as PEM
+(tonic loads no roots implicitly); a custom CA replaces it.
 
 ### OTLP actual-owner HTTPS defaults
 

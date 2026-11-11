@@ -23,6 +23,10 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--help` | `-h` | Show help information | - |
 | `--version` | `-V` | Show version information | - |
 
+An `https://` `--server` is verified against the host's OS CA bundle at a fixed path
+(the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`); `SSL_CERT_FILE` and the macOS Keychain are not consulted. On a host
+without such a bundle the CLI prints a warning and HTTPS verification fails.
+
 `edgion-cli` is **token-only**: it authenticates to the Controller Admin API with a
 single Bearer token (Istio-style). There is no username/password login and no OIDC
 in the CLI. The token can be the local admin token or an `edg_`-prefixed `cli_tokens`

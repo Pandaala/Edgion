@@ -472,8 +472,8 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 /// - `verify=false` with no SAN policy → `AcceptAllVerifier` (operator's responsibility).
 /// - `verify=false` with non-empty SAN policy → full webpki + `OutboundSanVerifier` (fail-secure:
 ///   SAN policy overrides skip-verify).
-/// - `System` → webpki built-in roots (binary-embedded, not OS cert store).
-/// - `Custom(pem)` → private CA bundle, REPLACES public roots entirely.
+/// - `System` → the process-wide OS CA bundle (`edgion_common::system_trust`).
+/// - `Custom(pem)` → private CA bundle, REPLACES the System roots entirely.
 /// - Client identity (`client_identity`) → `with_client_auth_cert`; absent → `with_no_client_auth`.
 /// - No ALPN protocols: LDAP does not negotiate ALPN.
 fn build_ldap_rustls_config(
@@ -499,12 +499,10 @@ fn build_ldap_rustls_config(
             .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAllVerifier::new()))
     } else {
         // Either verify=true, or a SAN policy is set (which overrides verify=false).
-        let mut roots = RootCertStore::empty();
-        match &resolved.ca {
-            EffectiveCa::System => {
-                roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            }
+        let roots = match &resolved.ca {
+            EffectiveCa::System => edgion_common::system_trust::system_trust().root_store(),
             EffectiveCa::Custom(bundles) => {
+                let mut roots = RootCertStore::empty();
                 let mut added = 0usize;
                 for bundle in bundles {
                     for cert in CertificateDer::pem_slice_iter(bundle) {
@@ -518,14 +516,15 @@ fn build_ldap_rustls_config(
                 if added == 0 {
                     return Err("LdapAuth TLS: CA PEM did not contain any valid certificates".to_string());
                 }
+                std::sync::Arc::new(roots)
             }
-        }
+        };
         // If the operator supplied a SAN pinning policy, wrap the webpki
         // verifier in OutboundSanVerifier so that the handshake is also
         // checked against the configured subjectAltNames.
         if !san_policy.is_empty() {
             let webpki = rustls::client::WebPkiServerVerifier::builder_with_provider(
-                std::sync::Arc::new(roots),
+                roots,
                 std::sync::Arc::new(rustls::crypto::ring::default_provider()),
             )
             .build()

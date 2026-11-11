@@ -649,6 +649,26 @@ previously missing this field, so a CLI flag was parsed by clap and then silentl
 config merge, leaving only YAML/env able to set it. `require_fips` keeps its OR semantics in the
 merge — the CLI flag can only turn it on, never override a file's `true` back to `false`.
 
+### System CA trust (not configurable)
+
+`wellKnownCACertificates: System` (or an omitted CA) always means the OS CA bundle
+at the first existing fixed path (`SYSTEM_CA_FILES`): `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu, Alpine, shipped images), `/etc/pki/tls/certs/ca-bundle.crt` (RHEL family, the Rocky packages), `/etc/ssl/cert.pem` (macOS). No field, CLI flag or
+`SSL_CERT_FILE` selects it. The same file backs backend TLS (passed to Pingora as
+`ServerConf.ca_file`) and every `EffectiveCa::System` consumer. The Gateway loads it
+at startup step 4d and refuses to start when no candidate exists, or the selected
+one is not a regular file, is over 8 MiB, has malformed PEM, has no certificate
+rustls can use, or is not loadable by BoringSSL. Backend verification also
+consults BoringSSL default locations (`SSL_CERT_*` or `/etc/ssl/cert.pem` and
+`/etc/ssl/certs`), an accepted residual described in the knowledge page below.
+
+Custom trust uses Kubernetes CA references, which replace `System`:
+BackendTLSPolicy `validation.caCertificateRefs` for backends, a resource's own
+`validation.caCertificateRefs`, or the cluster-wide
+`EdgionGatewayConfig.spec.outboundTls.validation.caCertificateRefs` for outbound
+clients. A base image whose bundle is at none of these paths must link or mount it
+at one of them. See
+[System CA single trust store](../../04-review/tls/regression-guards/system-ca-single-trust-store.md).
+
 ### fips_policy
 
 Gateway-local tri-state that selects the FIPS-approved TLS policy (approved cipher list + curves)
@@ -774,6 +794,7 @@ production enablement even when the startup WARN goes unread.
 - Tune Pingora workers and keepalive: change `server`
 - Tune the default RateLimitLocal precision: change `rate_limit`
 - Require BoringSSL FIPS mode at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
+- Trust a private CA: reference it with `caCertificateRefs` (backend: BackendTLSPolicy; outbound: the resource or EGC `outboundTls`); `System` is the fixed OS bundle and has no setting
 - Tune the Wasm `source.oci` memory cache / pull behavior: change `gateway.wasm_oci_cache_max_entries` / `wasm_oci_cache_ttl_secs` / `wasm_oci_cache_purge_interval_secs` / `wasm_oci_cache_max_bytes` / `wasm_oci_pull_timeout_secs` / `wasm_oci_pull_attempts`. Artifacts are not persisted across restart. Up to four OCI acquisition pipelines bound transient work separately from retained cache allocations. Last-plugin removal clears retained entries; active compiled modules follow their existing reference lifecycle.
 
 ## OTLP output references

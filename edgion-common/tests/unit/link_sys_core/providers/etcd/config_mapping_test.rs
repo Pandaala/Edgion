@@ -22,7 +22,7 @@ fn owned_tls(config: &EtcdClientConfig) -> Result<Option<TlsOptions>> {
     let input = PreparedLinkSysTls::from_link_sys(Arc::new(owner))?;
     input.with_tls_selection(|proof, defaults| {
         if proof.active_field().is_none() {
-            return Ok(None);
+            return Ok(default_tls_options(&config.endpoints));
         }
         let resolved = outbound_tls::resolve_validated_outbound_tls_audited(proof, false, "Etcd", defaults)
             .map_err(tls_configuration_error)?;
@@ -385,4 +385,35 @@ fn ordinary_and_election_timeout_policy_preserves_request_only_and_base_options(
         Duration::from_millis(MAX_DIAL_TIMEOUT_MS)
     );
     assert_eq!(clamped_dial_timeout(750), Duration::from_millis(750));
+}
+
+#[test]
+fn system_trust_is_passed_explicitly_and_custom_ca_replaces_it() {
+    // tonic adds no roots by itself: System must arrive as the process bundle.
+    assert_eq!(
+        ca_pem_bundles(&EffectiveCa::System),
+        vec![crate::system_trust::system_trust().pem()]
+    );
+    let custom = EffectiveCa::Custom(vec![b"first".to_vec(), b"second".to_vec()]);
+    assert_eq!(ca_pem_bundles(&custom), vec![&b"first"[..], &b"second"[..]]);
+}
+
+#[test]
+fn omitted_tls_gives_all_https_endpoints_system_trust_only() {
+    let endpoints = |list: &[&str]| list.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+    assert!(uses_default_system_tls(&endpoints(&[
+        "https://a:2379",
+        "https://b:2379"
+    ])));
+    // etcd-client rejects TLS options for http:// and would apply them to
+    // scheme-less endpoints, so those keep plaintext.
+    assert!(!uses_default_system_tls(&endpoints(&[
+        "https://a:2379",
+        "http://b:2379"
+    ])));
+    assert!(!uses_default_system_tls(&endpoints(&["a:2379"])));
+    assert!(!uses_default_system_tls(&endpoints(&["http://a:2379"])));
+    assert!(!uses_default_system_tls(&[]));
+    assert!(default_tls_options(&endpoints(&["https://a:2379"])).is_some());
+    assert!(default_tls_options(&endpoints(&["http://a:2379"])).is_none());
 }

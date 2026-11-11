@@ -5,7 +5,7 @@
 //!
 //! CA trust sources are configured via the `validation` block, which supports:
 //! - `caCertificateRefs`: references to Secret/ConfigMap resources holding CA bundles
-//! - `wellKnownCACertificates`: use system well-known (e.g., Mozilla roots)
+//! - `wellKnownCACertificates`: use the process OS CA bundle (`edgion_common::system_trust`)
 //!
 //! mTLS client identity is specified via `clientCertificateRef` (kubernetes.io/tls Secret).
 

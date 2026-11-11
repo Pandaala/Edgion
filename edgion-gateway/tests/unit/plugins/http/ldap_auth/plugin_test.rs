@@ -597,7 +597,7 @@ fn run_ldap_new_tls_case_table() {
 fn make_resolved_verify_true(
     san_names: Vec<edgion_resources::resources::backend_tls_policy::SubjectAltName>,
 ) -> edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls {
-    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     let san = if san_names.is_empty() {
         None
@@ -609,16 +609,22 @@ fn make_resolved_verify_true(
     };
     ResolvedOutboundTls {
         verify: true,
-        ca: EffectiveCa::System,
+        ca: test_ca(),
         client_identity: None,
         san,
     }
 }
 
+/// A generated CA keeps verifier construction independent of the host bundle.
+fn test_ca() -> edgion_common::link_sys_core::outbound_tls::EffectiveCa {
+    let ca = rcgen::generate_simple_self_signed(vec!["ldap.example.com".to_string()]).unwrap();
+    edgion_common::link_sys_core::outbound_tls::EffectiveCa::Custom(vec![ca.cert.pem().into_bytes()])
+}
+
 fn make_resolved_verify_false_with_san(
     san_names: Vec<edgion_resources::resources::backend_tls_policy::SubjectAltName>,
 ) -> edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls {
-    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     let san = if san_names.is_empty() {
         None
@@ -630,7 +636,7 @@ fn make_resolved_verify_false_with_san(
     };
     ResolvedOutboundTls {
         verify: false,
-        ca: EffectiveCa::System,
+        ca: test_ca(),
         client_identity: None,
         san,
     }

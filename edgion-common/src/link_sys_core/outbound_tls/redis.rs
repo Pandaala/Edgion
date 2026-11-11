@@ -21,7 +21,9 @@ pub struct PreparedRedisTls {
 
 /// Canonical Redis TLS material. Do not derive Debug: the identity is secret.
 pub struct RedisTlsMaterial {
-    pub root_pem: Option<Vec<u8>>,
+    /// Explicit roots, always present: redis-rs falls back to its compiled-in
+    /// default store when none are passed, which would be a second `System`.
+    pub root_pem: Vec<u8>,
     pub client_identity: Option<(Vec<u8>, zeroize::Zeroizing<Vec<u8>>)>,
 }
 
@@ -90,14 +92,14 @@ impl PreparedRedisTls {
             // Reuse canonical PEM, key-pair and unsupported-policy validation.
             crate::link_sys_core::tls::build_effective_rustls_client_config(&resolved)?;
             let root_pem = match &resolved.ca {
-                super::EffectiveCa::System => None,
+                super::EffectiveCa::System => crate::system_trust::system_trust().pem().to_vec(),
                 super::EffectiveCa::Custom(bundles) => {
                     let mut pem = Vec::new();
                     for bundle in bundles {
                         pem.extend_from_slice(bundle.as_slice());
                         pem.push(b'\n');
                     }
-                    Some(pem)
+                    pem
                 }
             };
             Ok(Some(RedisTlsMaterial {

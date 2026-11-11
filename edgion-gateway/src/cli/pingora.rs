@@ -48,6 +48,26 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> Result<ServerConf> {
 
     let error_log = config.server.error_log.clone();
 
+    // Backend `System` trust reads the same bundle as outbound clients. Pingora
+    // loads the file later, while listener construction builds its upstream
+    // connectors, and unwraps that load. Recheck it here: a file BoringSSL
+    // cannot load becomes an error instead of a panic, and a file replaced since
+    // step 4d is refused instead of giving backends different anchors.
+    let system_trust = edgion_common::system_trust::system_trust();
+    let ca_file = system_trust
+        .bundle_file()
+        .map(|path| {
+            validate_backend_ca_file(path)?;
+            let reloaded = edgion_common::system_trust::SystemTrust::load(path)?;
+            anyhow::ensure!(
+                reloaded.certificates() == system_trust.certificates(),
+                "system CA file {} changed after startup loaded it; restart the Gateway",
+                path.display()
+            );
+            Ok(path.to_string_lossy().into_owned())
+        })
+        .transpose()?;
+
     let conf = ServerConf {
         daemon: false,
         threads,
@@ -59,6 +79,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> Result<ServerConf> {
         max_retries: PINGORA_MAX_UPSTREAM_ATTEMPTS,
         downstream_tls_offload_threadpools: offload.map(|(pools, _)| pools),
         downstream_tls_offload_thread_per_pool: offload.map(|(_, threads)| threads),
+        ca_file,
         ..Default::default()
     };
 
@@ -72,6 +93,29 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> Result<ServerConf> {
     );
 
     Ok(conf)
+}
+
+/// Prove BoringSSL can load the System CA bundle before Pingora does.
+/// Pingora unwraps `set_ca_file` while building upstream connectors, so a file
+/// it cannot load must fail startup here instead of panicking later. rustls
+/// skips anchors it cannot use, so its acceptance does not imply BoringSSL's.
+pub(crate) fn validate_backend_ca_file(path: &std::path::Path) -> Result<()> {
+    #[cfg(feature = "boringssl")]
+    {
+        use pingora_core::tls::ssl::{SslConnector, SslMethod};
+        let mut builder = SslConnector::builder(SslMethod::tls())
+            .map_err(|error| anyhow::anyhow!("failed to create a BoringSSL connector: {error}"))?;
+        builder.set_ca_file(path).map_err(|error| {
+            anyhow::anyhow!(
+                "BoringSSL cannot load the system CA file {}: {error}. \
+                     Install a valid PEM CA bundle (ca-certificates) at that path",
+                path.display()
+            )
+        })?;
+    }
+    #[cfg(not(feature = "boringssl"))]
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(test)]

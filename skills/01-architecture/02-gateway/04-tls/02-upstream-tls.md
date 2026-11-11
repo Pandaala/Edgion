@@ -25,7 +25,14 @@ edgion-gateway/src/tls/runtime/backend/
 Key configuration items:
 
 - **Target backend**: the Service to enable TLS against, specified via `targetRef`.
-- **Verification**: CA certificate, hostname verification.
+- **Verification**: CA certificate, hostname verification. `caCertificateRefs`
+  are set per peer (`peer.options.ca`), which replaces the connector store.
+  `wellKnownCACertificates: System` leaves `peer.options.ca` unset, so the
+  connector store applies: Pingora `ServerConf.ca_file`, which startup sets to the
+  OS bundle selected from the fixed `edgion_common::system_trust::SYSTEM_CA_FILES` that outbound
+  clients also use. Note that `SslConnector::builder` also loads BoringSSL default
+  verify paths into that store; see
+  [System CA single trust store](../../../04-review/tls/regression-guards/system-ca-single-trust-store.md).
 - **mTLS**: the Gateway, acting as the client, presents its certificate to the backend.
 
 The BackendTLSPolicy lookup happens inside `pg_upstream_peer.rs`, where the route namespace info is available, so namespace inheritance is handled correctly.

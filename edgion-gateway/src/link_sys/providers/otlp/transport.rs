@@ -59,7 +59,9 @@ impl PreparedTransport {
                 .domain_name(parsed.host.clone())
                 .timeout(timeout.min(CONNECT_DEADLINE));
             match resolved.ca {
-                EffectiveCa::System => tls = tls.with_webpki_roots(),
+                EffectiveCa::System => {
+                    tls = tls.ca_certificate(Certificate::from_pem(edgion_common::system_trust::system_trust().pem()))
+                }
                 EffectiveCa::Custom(bundles) => {
                     for bundle in bundles {
                         parse_canonical_ca_bundle(&bundle).map_err(|_| "invalid_tls")?;

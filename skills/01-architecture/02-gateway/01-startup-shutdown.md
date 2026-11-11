@@ -24,8 +24,10 @@ Keep this page grouped by responsibility instead of freezing a shorter historica
 3. Reject `--integration-testing-mode` unless the explicit production-unsafe environment gate is set.
 4. Install the Prometheus recorder before emitting startup metrics.
 5. Detect host/module FIPS state, enforce `require_fips`, resolve `fips_policy`, and publish gauges.
-6. Configure outbound-egress defaults, Wasm OCI pull tuning, and the bounded process-memory artifact cache.
-7. Initialize rate-limit, LRU, sensitive-field, AllEndpointStatus, request-duration,
+6. Load System CA trust from the fixed OS bundle and precheck it with BoringSSL; refuse to start
+   when it is unusable. It must precede every TLS client and `ServerConf`.
+7. Configure outbound-egress defaults, Wasm OCI pull tuning, and the bounded process-memory artifact cache.
+8. Initialize rate-limit, LRU, sensitive-field, AllEndpointStatus, request-duration,
    backend-request, path-normalization, and access-log option globals.
 
 `fips_policy` resolves environment over the already-merged CLI/file value over `auto`. An invalid
@@ -79,7 +81,8 @@ Shared HTTP-family policy admission is performed by the existing Controller Gate
 `create_and_configure_server()` runs in `spawn_blocking` while the Tokio runtime is active:
 
 1. Revalidate/prepare `DownstreamH2Policy` for programmatic callers and build `ServerConf`
-   (`threads`, `work_stealing`, grace periods, keepalive pool, error log).
+   (`threads`, `work_stealing`, grace periods, keepalive pool, error log, and `ca_file` = the
+   System CA bundle, rechecked with BoringSSL because Pingora unwraps its load).
 2. Create and bootstrap `pingora_core::Server`.
 3. Create `GatewayBase`, list Gateway resources, and configure startup listener sockets.
    Normal HTTP proxy services receive the prepared H2 options through

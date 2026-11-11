@@ -194,6 +194,8 @@ spec:
     maxInstancesPerKind: 200                # usize, max current registered instances per persistent provider kind
 
   # ─── Cluster-wide outbound TLS defaults for plugins and LinkSys ───
+  # `System` is the fixed OS CA bundle of the Gateway image, shared with backend
+  # TLS. caCertificateRefs replaces it for outbound clients only.
   outboundTls:
     verify: true
     validation:

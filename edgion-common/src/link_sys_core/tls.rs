@@ -16,6 +16,7 @@ use rustls::pki_types::{
     CertificateDer, PrivateKeyDer,
 };
 use rustls::{ClientConfig, RootCertStore};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 use edgion_resources::resources::common::TlsConfig;
@@ -28,8 +29,8 @@ pub(crate) fn build_effective_rustls_client_config(
 ) -> Result<Option<ClientConfig>> {
     resolved.reject_unsupported_identity_policy("LinkSys")?;
 
-    // Nothing to configure: system CA + no client identity → caller uses
-    // the library's default TLS connector.
+    // Nothing to validate: System CA + no client identity. The caller still
+    // supplies the System roots explicitly (see `RedisTlsMaterial::root_pem`).
     let has_custom_ca = matches!(resolved.ca, EffectiveCa::Custom(_));
     if !has_custom_ca && resolved.client_identity.is_none() {
         return Ok(None);
@@ -79,7 +80,7 @@ fn build_concrete_rustls_client_config(resolved: &outbound_tls::ResolvedOutbound
     complete_client_auth(builder, identity)
 }
 
-fn build_root_store(ca: &EffectiveCa) -> Result<RootCertStore> {
+fn build_root_store(ca: &EffectiveCa) -> Result<Arc<RootCertStore>> {
     let mut roots = RootCertStore::empty();
 
     match ca {
@@ -101,12 +102,10 @@ fn build_root_store(ca: &EffectiveCa) -> Result<RootCertStore> {
                 }
             }
         }
-        EffectiveCa::System => {
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        }
+        EffectiveCa::System => return Ok(crate::system_trust::system_trust().root_store()),
     }
 
-    Ok(roots)
+    Ok(Arc::new(roots))
 }
 
 type ClientIdentity = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
@@ -182,8 +181,8 @@ fn build_http_rustls_client_config(resolved: &outbound_tls::ResolvedOutboundTls)
     Ok(config)
 }
 
-/// The absent/inactive HTTP policy uses the same public roots as reqwest 0.12,
-/// without reading process-global outbound policy or installing a provider.
+/// The absent/inactive HTTP policy uses the process System roots, without
+/// reading process-global outbound policy or installing a provider.
 pub(crate) fn apply_default_http_tls(builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder> {
     let config = build_http_rustls_client_config(&outbound_tls::ResolvedOutboundTls {
         verify: true,
@@ -197,7 +196,7 @@ pub(crate) fn apply_default_http_tls(builder: reqwest::ClientBuilder) -> Result<
 /// Resolve `tls` through the shared outbound resolver and apply the result
 /// (verify flag, custom-CA REPLACE, mTLS identity) to a reqwest builder.
 /// Active local policy flows through the canonical snapshot resolver. The HTTP
-/// factory separately owns absent/inactive public-root defaults and complete
+/// factory separately owns absent/inactive System-root defaults and complete
 /// caller-prepared verifier configurations.
 /// `verify=false` is honored when the operator sets it explicitly (provider
 /// must support skip-verify); a WARN is emitted at configuration-load time.

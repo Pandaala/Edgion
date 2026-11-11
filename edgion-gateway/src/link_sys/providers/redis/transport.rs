@@ -69,7 +69,7 @@ impl Transport {
             connect_timeout: config.connect_timeout().map_err(anyhow::Error::msg)?,
             settings,
             tls: tls.map(|tls| redis::TlsCertificates {
-                root_cert: tls.root_pem,
+                root_cert: Some(tls.root_pem),
                 client_tls: tls.client_identity.map(|(client_cert, key)| redis::ClientTlsConfig {
                     client_cert,
                     client_key: key.to_vec(),

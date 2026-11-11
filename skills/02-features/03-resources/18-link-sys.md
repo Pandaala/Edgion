@@ -77,11 +77,11 @@ All application-layer key names use **camelCase**; TLS keys follow the K8s `kube
 tls:
   enabled: true
   verify: true                    # Verify peer certificate (default true). Redis/Etcd/Kafka always verify (rustls connector; verify: false is rejected at config load). Other connectors (Elasticsearch/Webhook) honor verify: false as operator responsibility (WARN logged at startup).
-  validation:                     # Optional; omit to use built-in webpki root CAs (same as wellKnownCACertificates: System).
+  validation:                     # Optional; omit to use System trust (same as wellKnownCACertificates: System).
     caCertificateRefs:            # List of CA certificate refs. For LinkSys (redis/etcd/es/kafka), only kind: Secret is supported in this release.
       - kind: Secret              # Secret must be kubernetes.io/tls or Opaque with a ca.crt key.
         name: my-ca-bundle        # Defaults to the same namespace as LinkSys when namespace is omitted.
-    wellKnownCACertificates: System   # Alternatively, explicitly use the built-in webpki root bundle.
+    wellKnownCACertificates: System   # Alternatively, explicitly use the process System CA bundle.
     # subjectAltNames (SAN pinning) is enforced for OIDC and LDAP; deferred for
     # LinkSys (redis/etcd/elasticsearch/kafka), ext_proc, and EGC defaults.
     # hostname (SNI override) is not implemented on any outbound provider yet.
@@ -94,7 +94,7 @@ tls:
 ```
 
 - The client identity (certificate + private key) **must** be provided via `clientCertificateRef`, pointing to a `kubernetes.io/tls` or `Opaque` Secret with `tls.crt` and `tls.key` keys.
-- CA trust anchors come from `validation.caCertificateRefs` (Secret refs; for LinkSys only `kind: Secret` is supported) or `validation.wellKnownCACertificates: System` (built-in webpki roots). A custom CA **replaces** the public roots. Inline CA (`caCert`) has been removed in this release; use a `kubernetes.io/tls` or `Opaque` Secret with a `ca.crt` key instead.
+- CA trust anchors come from `validation.caCertificateRefs` (Secret refs; for LinkSys only `kind: Secret` is supported) or `validation.wellKnownCACertificates: System` (the System CA bundle of the consuming process: the OS CA bundle at the first existing fixed path, `/etc/ssl/certs/ca-certificates.crt` in the shipped images; in the Gateway it is shared with backend TLS). A custom CA **replaces** the System roots. Inline CA (`caCert`) has been removed in this release; use a `kubernetes.io/tls` or `Opaque` Secret with a `ca.crt` key instead.
 - For providers whose URLs already imply TLS (`https://`, `rediss://`), `enabled: true` only additionally enables custom CA / client certificate handling; `tls` may be omitted when only system CAs are used.
 
 > **Phase 2 outbound TLS status:**
@@ -599,7 +599,7 @@ optional root slash; omitted ports mean 80/443, and collectors normally use :431
 IPv6 must be bracketed; userinfo, query, fragment, non-root path, escapes and
 whitespace are rejected without echoing input.
 
-HTTPS always uses the canonical outbound TLS resolver: public webpki roots or replacement custom
+HTTPS always uses the canonical outbound TLS resolver: System (OS bundle) roots or replacement custom
 CA, optional mTLS identity, original-host verification. Enabled verify=false,
 hostname and SAN overrides are rejected. Disabled local TLS is inert and does not
 disable HTTPS. HTTP cannot enable a local TLS policy. All credential/certificate
@@ -642,7 +642,7 @@ Cluster hash slot; cross-slot operations do not fan out.
 
 Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling
 and probe duration add latency; coverage may conservatively exclude unvisited
-primaries. System TLS trust uses compiled-in webpki roots. Configure explicit CA
+primaries. System TLS trust uses the process OS CA bundle. Configure explicit CA
 references for private CAs. Sentinel nodes share data-node credentials. Published
 Cluster recovery dials the current known primaries together with the configured
 seeds. A new generation must establish real connectivity before ordinary

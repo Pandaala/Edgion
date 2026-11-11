@@ -23,6 +23,10 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--help` | `-h` | 显示帮助信息 | - |
 | `--version` | `-V` | 显示版本信息 | - |
 
+`--server` 使用 `https://` 时，CLI 用本机固定路径的 OS CA 包验证服务器证书
+（按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件），不读取 `SSL_CERT_FILE` 和 macOS 钥匙串。主机上没有这样的 CA 包时，
+CLI 会打印警告，HTTPS 验证失败。
+
 `edgion-cli` 采用**纯 Token**方式：使用单个 Bearer Token（Istio 风格）向 Controller Admin API 认证。CLI 中不再有用户名/密码登录，也没有 OIDC。Token 可以是本地管理员 Token，也可以是以 `edg_` 为前缀的 `cli_tokens` Token。Token 优先级（从高到低）：
 
 1. `--token <TOKEN>` 标志（仅长选项，`-t` 已被 `--target` 占用）

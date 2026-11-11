@@ -121,8 +121,8 @@ Remove `clientCertificateRef` when the health server does not require mTLS.
 | TLS parameter | Type | Default | Description |
 |---------------|------|---------|-------------|
 | `validation.hostname` | String | required | DNS name for certificate verification and SNI; must match the health server certificate |
-| `validation.caCertificateRefs` | Array | none | Same-namespace Secret or ConfigMap references containing `ca.crt`; custom roots replace public roots |
-| `validation.wellKnownCACertificates` | Enum | `System` when no CA refs | Built-in public roots; cannot be combined with custom CA refs |
+| `validation.caCertificateRefs` | Array | none | Same-namespace Secret or ConfigMap references containing `ca.crt`; custom roots replace System roots |
+| `validation.wellKnownCACertificates` | Enum | `System` when no CA refs | The Gateway System CA bundle (the OS CA bundle at a fixed path, shared with backend TLS); cannot be combined with custom CA refs |
 | `validation.subjectAltNames` | Array | none | Additional SAN constraints after normal certificate verification |
 | `clientCertificateRef` | Object | none | Same-namespace client Secret containing `tls.crt` and `tls.key` |
 | `verify` | Boolean | `true` | Verification is mandatory; `false` is invalid |

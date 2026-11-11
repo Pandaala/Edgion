@@ -161,7 +161,7 @@ fn gen_ca_and_leaf() -> (String, String, String) {
 fn rustls_config_none_without_material() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
-    // No CA, no client identity → None (caller uses default connector)
+    // No CA, no client identity → None (the caller passes System roots explicitly)
     let tls = ResolvedOutboundTls {
         verify: true,
         ca: EffectiveCa::System,
@@ -306,9 +306,9 @@ fn resolved_outbound_tls_verify_false_is_honored() {
 fn rustls_config_system_roots_when_ca_absent() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
-    // No inline CA + a client cert pair → must use built-in webpki roots
-    // for the server chain. The webpki roots are always present (compiled in),
-    // so construction must always succeed.
+    // No inline CA + a client cert pair → uses the process System roots for
+    // the server chain. Construction succeeds even when the System set is
+    // empty; such a handshake then fails closed.
     let (_ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
     let tls = ResolvedOutboundTls {
         verify: true,
@@ -318,7 +318,7 @@ fn rustls_config_system_roots_when_ca_absent() {
     };
     assert!(
         build_effective_rustls_client_config(&tls).unwrap().is_some(),
-        "expected Ok(Some(_)) with built-in webpki roots"
+        "expected Ok(Some(_)) with System roots"
     );
 }
 
@@ -567,14 +567,14 @@ fn incapable_builders_reject_local_and_inherited_identity_policy() {
             assert!(redis_input(&tls).and_then(|input| input.redis_tls_material()).is_err());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_err());
             // A local empty validation block shadows inherited identity constraints.
-            // Enabled Redis TLS still emits default-trust material; root_pem None
-            // selects compiled webpki roots inside redis-rs.
+            // Enabled Redis TLS still emits default-trust material carrying the
+            // explicit process System bundle.
             tls.outbound.validation = Some(OutboundTlsValidation::default());
             let material = redis_input(&tls)
                 .and_then(|input| input.redis_tls_material())
                 .unwrap()
                 .expect("enabled Redis TLS emits material");
-            assert!(material.root_pem.is_none());
+            assert_eq!(material.root_pem.as_slice(), crate::system_trust::system_trust().pem());
             assert!(material.client_identity.is_none());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok());
         }
@@ -604,9 +604,9 @@ fn redis_input(tls: &TlsConfig) -> anyhow::Result<outbound_tls::PreparedRedisTls
 }
 
 #[test]
-fn verified_http_roots_are_the_compiled_webpki_set_and_alpn_is_explicit() {
+fn verified_http_roots_are_the_process_system_trust_and_alpn_is_explicit() {
     let roots = build_root_store(&EffectiveCa::System).unwrap();
-    assert_eq!(roots.roots.as_slice(), webpki_roots::TLS_SERVER_ROOTS);
+    assert!(Arc::ptr_eq(&roots, &crate::system_trust::system_trust().root_store()));
     let config = build_http_rustls_client_config(&ResolvedOutboundTls {
         verify: true,
         ca: EffectiveCa::System,

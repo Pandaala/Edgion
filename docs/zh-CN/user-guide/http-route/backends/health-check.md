@@ -119,8 +119,8 @@ spec:
 | TLS 参数 | 类型 | 默认值 | 说明 |
 |----------|------|--------|------|
 | `validation.hostname` | String | 必填 | 证书验证和 SNI 使用的 DNS 名称，必须与健康服务器证书匹配 |
-| `validation.caCertificateRefs` | Array | 无 | 同命名空间中包含 `ca.crt` 的 Secret 或 ConfigMap；自定义 CA 替换公共根证书 |
-| `validation.wellKnownCACertificates` | Enum | 无 CA 引用时为 `System` | 使用内置公共根证书，不能与自定义 CA 引用同时配置 |
+| `validation.caCertificateRefs` | Array | 无 | 同命名空间中包含 `ca.crt` 的 Secret 或 ConfigMap；自定义 CA 替换 System 根证书 |
+| `validation.wellKnownCACertificates` | Enum | 无 CA 引用时为 `System` | 使用 Gateway 的 System CA 包（固定路径的 OS CA 包，与后端 TLS 共用），不能与自定义 CA 引用同时配置 |
 | `validation.subjectAltNames` | Array | 无 | 正常证书验证后的附加 SAN 约束 |
 | `clientCertificateRef` | Object | 无 | 同命名空间中包含 `tls.crt` 和 `tls.key` 的客户端 Secret |
 | `verify` | Boolean | `true` | 必须验证证书；`false` 为无效配置 |

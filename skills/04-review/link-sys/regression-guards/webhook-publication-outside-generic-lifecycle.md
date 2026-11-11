@@ -14,7 +14,7 @@ replacement becomes visible in the unified LinkSys runtime table. WebhookCandida
 retains the actual LinkSys Arc, reference-only topology and one captured global
 TLS snapshot. Incoming source, full active local reference/material pairing and
 inherited authority precede both equal-fingerprint and same-RV reuse. Absence or
-disabled local TLS still proves the source, then keeps native system trust and no
+disabled local TLS still proves the source, then keeps System trust and no
 global client identity. Failed ordinary preparation preserves an
 existing same-type client. A forced rebuild after global outbound TLS changes
 retires the previous Webhook publication before readiness/preparation: preserving
