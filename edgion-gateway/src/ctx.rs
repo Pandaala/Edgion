@@ -2153,6 +2153,10 @@ pub struct EdgionHttpContext {
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
+    /// This request already waited for a `gateway`-mode DNS first answer; a
+    /// later selection (fallback or retry) does not wait again.
+    pub(crate) dns_first_answer_waited: bool,
+
     /// Number of proxy failures that arrived at `error_while_proxy` already
     /// carrying Pingora's own `RetryType::Decided(true)` (h2 GOAWAY,
     /// RST_STREAM(REFUSED_STREAM), HTTP/1.1-required downgrade, reused-connection
@@ -3320,6 +3324,7 @@ impl EdgionHttpContext {
             wasm: None,
             waf_selection_complete: false,
             try_cnt: 0,
+            dns_first_answer_waited: false,
             pingora_decided_retries: 0,
             retry_on_status: false,
             peer_timeout_source: None,

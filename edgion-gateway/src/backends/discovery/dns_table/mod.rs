@@ -151,6 +151,16 @@ impl DnsEndpointTable {
     /// then are released first-answer waiters woken, so a woken request sees
     /// the new endpoints and no stale pending entry.
     fn mutate(&self, apply: impl FnOnce(&mut TableState, &HttpDnsLookup, &dyn SlicePublisher, Instant)) {
+        self.mutate_and_wake(true, apply);
+    }
+
+    /// `mutate`; `wake_worker` is false only for the worker's own step, which
+    /// must not wake itself.
+    fn mutate_and_wake(
+        &self,
+        wake_worker: bool,
+        apply: impl FnOnce(&mut TableState, &HttpDnsLookup, &dyn SlicePublisher, Instant),
+    ) {
         let mut state = self.state.lock();
         let publisher = BatchingPublisher {
             sink: self.sink.as_ref(),
@@ -170,7 +180,9 @@ impl DnsEndpointTable {
         for notify in released {
             notify.notify_waiters();
         }
-        self.wake.notify_one();
+        if wake_worker {
+            self.wake.notify_one();
+        }
     }
 
     /// Full Service relist (mark-and-sweep).
@@ -205,6 +217,16 @@ impl DnsEndpointTable {
     /// A resolver source (httpdns LinkSys) changed: recompute every target.
     pub fn on_resolver_sources_changed(&self) {
         self.mutate(|state, lookup, publisher, now| state.recompute_all(lookup, publisher, now));
+    }
+
+    /// Wait, at most `FIRST_ANSWER_WAIT`, until no target awaits its first
+    /// answer. Startup only: lets quick first answers land before listeners
+    /// open; a slow resolver delays startup by at most the bound.
+    pub async fn wait_settled(&self) {
+        let deadline = Instant::now() + FIRST_ANSWER_WAIT;
+        while self.pending_entries.load(Ordering::Acquire) != 0 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// True while the Service's target has no first answer yet. Lock-free.
@@ -259,10 +281,11 @@ impl DnsEndpointTable {
     /// Apply every completed resolution in one mutation: one coordinator
     /// transaction for however many answers changed.
     fn apply_results(&self, done: Vec<(ResolveJob, Result<DnsAnswer, DnsError>)>) {
-        self.mutate(|state, _, publisher, now| {
+        self.mutate(|state, lookup, publisher, now| {
             for (job, result) in done {
                 state.apply_result(&job, result, now, rand::random(), publisher);
             }
+            state.retry_rejected_if_freed(lookup, publisher, now);
         });
     }
 
@@ -292,7 +315,14 @@ impl DnsEndpointTable {
         // Pick up anything bound before the worker started.
         self.on_settings_changed();
         loop {
-            let jobs = self.state.lock().take_due(Instant::now(), permits.available_permits());
+            // Withdraw answers past `maxStale` first (their deadlines are part
+            // of `next_due`), then start what is due.
+            let mut jobs = Vec::new();
+            self.mutate_and_wake(false, |state, lookup, publisher, now| {
+                state.expire_stale(now, publisher);
+                state.retry_rejected_if_freed(lookup, publisher, now);
+                jobs = state.take_due(now, permits.available_permits());
+            });
             for job in jobs {
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                     // Only this loop takes permits, so this cannot happen; never
@@ -328,9 +358,10 @@ impl DnsEndpointTable {
                 });
             }
             // With every permit busy, due targets cannot start; wait for a
-            // completion's wake instead of spinning on a past due instant.
+            // completion's wake (or a `maxStale` deadline) instead of spinning
+            // on a past due instant.
             let next_due = if permits.available_permits() == 0 {
-                None
+                self.state.lock().next_stale_deadline()
             } else {
                 self.state.lock().next_due()
             };

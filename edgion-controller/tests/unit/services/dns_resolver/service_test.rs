@@ -84,6 +84,16 @@ impl Harness {
         }
     }
 
+    fn with_refresh_interval(interval: &str) -> Self {
+        let mut h = Self::new();
+        let config = DnsResolverConfig {
+            refresh_interval: interval.to_string(),
+            ..Default::default()
+        };
+        h.state = ResolverState::new(&config, 0);
+        h
+    }
+
     fn plan(&mut self) -> (Vec<ResolveJob>, Vec<String>) {
         self.state
             .plan(self.targets.snapshot(), &self.runtime, &self.slices, self.now)
@@ -189,28 +199,35 @@ fn orphaned_slices_without_state_are_withdrawn() {
 
 #[test]
 fn edits_republish_last_good_at_once_and_requery() {
+    let all = [(DNS_LOOKUP_FAMILY, "all")];
     let mut h = Harness::new();
-    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.targets.sync_published(&service("svc", &all, &[80]));
+    // Queries apply the family themselves: an `all` answer carries both.
     h.apply_all(Ok(vec!["10.0.0.1", "2001:db8::1"]));
-    assert!(h.slices.get("app/svc-edgion-ctl-dns").is_some());
-    assert!(
-        h.slices.get("app/svc-edgion-ctl-dns-ipv6").is_none(),
-        "default family is ipv4Only"
-    );
-
-    h.targets
-        .sync_published(&service("svc", &[(DNS_LOOKUP_FAMILY, "all")], &[80]));
-    let (jobs, changed) = h.plan();
-    assert_eq!(jobs.len(), 1, "a revised target is queried at once");
-    assert_eq!(changed, vec!["app/svc-edgion-ctl-dns-ipv6".to_string()]);
     assert_eq!(h.addresses("svc-edgion-ctl-dns-ipv6"), vec!["2001:db8::1"]);
 
-    h.targets
-        .sync_published(&service("svc", &[(DNS_LOOKUP_FAMILY, "all")], &[8080]));
-    let (_, changed) = h.plan();
+    h.targets.sync_published(&service("svc", &all, &[8080]));
+    let (jobs, changed) = h.plan();
+    assert_eq!(jobs.len(), 1, "a revised target is queried at once");
     assert_eq!(changed.len(), 2, "port edit republishes both families");
     let slice = h.slices.get("app/svc-edgion-ctl-dns").unwrap();
     assert_eq!(slice.ports.unwrap()[0].port, Some(8080));
+    h.apply(&jobs[0], Ok(vec!["10.0.0.1", "2001:db8::1"]));
+
+    // Narrowing filters the last good answer at once.
+    h.targets
+        .sync_published(&service("svc", &[(DNS_LOOKUP_FAMILY, "ipv4Only")], &[8080]));
+    let (jobs, changed) = h.plan();
+    assert_eq!(changed, vec!["app/svc-edgion-ctl-dns-ipv6".to_string()]);
+    h.apply(&jobs[0], Ok(vec!["10.0.0.1"]));
+
+    // Widening cannot invent the other family: it arrives with the requery.
+    h.targets.sync_published(&service("svc", &all, &[8080]));
+    let (jobs, changed) = h.plan();
+    assert!(changed.is_empty());
+    assert!(h.slices.get("app/svc-edgion-ctl-dns-ipv6").is_none());
+    h.apply(&jobs[0], Ok(vec!["10.0.0.1", "2001:db8::1"]));
+    assert_eq!(h.addresses("svc-edgion-ctl-dns-ipv6"), vec!["2001:db8::1"]);
 }
 
 #[test]
@@ -548,6 +565,74 @@ fn transient_failures_keep_last_good_only_up_to_max_stale() {
     h.now += Duration::from_secs(200);
     h.apply_all(Err(DnsError::Io("nxdomain via system".into())));
     assert!(h.addresses("svc-edgion-ctl-dns").is_empty(), "past MAX_STALE");
+}
+
+#[test]
+fn a_queued_refresh_cannot_extend_max_stale() {
+    let mut h = Harness::new();
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    h.now += DEFAULT_REFRESH;
+    let (jobs, _) = h.plan();
+    assert_eq!(jobs.len(), 1);
+    // The refresh waits behind a saturated resolver past MAX_STALE.
+    h.now += Duration::from_secs(301);
+    let (_, changed) = h.plan();
+    assert_eq!(changed.len(), 1, "withdrawn while the refresh is still queued");
+    assert!(h.addresses("svc-edgion-ctl-dns").is_empty());
+    h.apply(&jobs[0], Ok(vec!["10.0.0.1"]));
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+}
+
+#[test]
+fn a_long_refresh_interval_never_withdraws_a_healthy_answer() {
+    let mut h = Harness::with_refresh_interval("10m");
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    // Another target's pass long after MAX_STALE, before this one is due.
+    h.now += Duration::from_secs(400);
+    let (jobs, changed) = h.plan();
+    assert!(jobs.is_empty() && changed.is_empty(), "not due, not stale");
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+    h.now += Duration::from_secs(201);
+    let (jobs, changed) = h.plan();
+    assert_eq!(jobs.len(), 1);
+    assert!(changed.is_empty(), "its own refresh does not withdraw first");
+    // A failed refresh keeps the answer up to one period plus one query.
+    assert!(h.apply(&jobs[0], Err(DnsError::Io("timeout".into()))).is_empty());
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+}
+
+#[test]
+fn a_kept_answer_wakes_the_resolver_at_its_stale_deadline() {
+    let mut h = Harness::with_refresh_interval("4m");
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    let answered_at = h.now;
+    h.now += Duration::from_secs(241);
+    assert!(h.apply_all(Err(DnsError::Io("timeout".into()))).is_empty());
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
+    // The next refresh is 4 minutes away; the stale deadline comes first.
+    assert_eq!(h.state.next_due(h.now), answered_at + MAX_STALE);
+    h.now = answered_at + MAX_STALE;
+    assert_eq!(h.plan().1.len(), 1, "withdrawn at the deadline");
+}
+
+#[test]
+fn a_restarted_task_republishes_the_adopted_answer_after_an_edit() {
+    let mut h = Harness::new();
+    h.targets.sync_published(&service("svc", &[], &[80]));
+    h.apply_all(Ok(vec!["10.0.0.1"]));
+    h.state = ResolverState::new(&DnsResolverConfig::default(), h.slices.epoch());
+    // The ports change while no task runs.
+    h.targets.sync_published(&service("svc", &[], &[8080]));
+    let (jobs, changed) = h.plan();
+    assert_eq!(changed, vec!["app/svc-edgion-ctl-dns".to_string()]);
+    let slice = h.slices.get("app/svc-edgion-ctl-dns").unwrap();
+    assert_eq!(slice.ports.unwrap()[0].port, Some(8080));
+    // A transient failure keeps the adopted answer under the new ports.
+    assert!(h.apply(&jobs[0], Err(DnsError::Io("down".into()))).is_empty());
+    assert_eq!(h.addresses("svc-edgion-ctl-dns"), vec!["10.0.0.1"]);
 }
 
 #[test]

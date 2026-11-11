@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-flap
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-lookup-family: all
+    edgion.io/dns-resolution-mode: gateway
+    edgion.io/dns-resolver-ref: edgion-default/dns-flap-local
+spec:
+  type: ExternalName
+  externalName: flapbackend.test
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

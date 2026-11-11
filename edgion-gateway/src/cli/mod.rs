@@ -216,9 +216,6 @@ impl EdgionGatewayCli {
             cleaner.stop().await;
         });
 
-        // DNS endpoint table worker for gateway-mode ExternalName Services.
-        tokio::spawn(crate::backends::dns_endpoint_table().run(shutdown_rx.clone()));
-
         // Initialize health check stores and manager (tasks start on resource updates).
         let _ = crate::backends::health::check::get_hc_config_store();
         let _ = crate::backends::health::check::get_health_check_manager();
@@ -744,6 +741,14 @@ impl EdgionGatewayCli {
 
         // 18. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
+
+        // DNS endpoint table worker for gateway-mode ExternalName Services.
+        // Started only after the initial sync, so no target is resolved under
+        // pre-configuration inputs (default resolver or family before the EGC
+        // or a LinkSys arrives). Entries bound earlier stay pending until now,
+        // so give their first answers a bounded head start before listeners open.
+        runtime.spawn(crate::backends::dns_endpoint_table().run(aux_shutdown_rx.clone()));
+        runtime.block_on(crate::backends::dns_endpoint_table().wait_settled());
 
         // 19. Initialize all loggers. Service selectors are compiled eagerly
         // with each joint Service/EndpointSlice generation, so no preload pass

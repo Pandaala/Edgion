@@ -247,7 +247,7 @@ impl EdgionTlsPassthroughProxy {
                 &unit,
                 ctx,
                 Some(selected.owner.gateway_key()),
-                gateway_config.allow_loopback_upstream,
+                gateway_config,
             )
             .await
             {

@@ -22,8 +22,10 @@ impl ConfHandler<Service> for ServiceHandler {
         // membership and runtime cells are owned by the coordinator. The DNS
         // endpoint table follows the same Services (mark-and-sweep on relist),
         // so a removed Service never leaves an entry or a local slice behind.
-        self.coordinator.replace_services(data);
+        // The table goes first, as in `partial_update`: a Service whose
+        // hostname or mode changed never joins its previous local slices.
         crate::backends::dns_endpoint_table().on_services_full(data);
+        self.coordinator.replace_services(data);
     }
 
     fn partial_update(

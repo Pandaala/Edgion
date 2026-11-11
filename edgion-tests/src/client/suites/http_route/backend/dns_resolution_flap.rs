@@ -292,3 +292,62 @@ impl TestSuite for DnsFlapFamilyTestSuite {
         )]
     }
 }
+
+/// `lookupFamily: all`: the whole answer (127.0.0.1 and ::1) becomes the
+/// Service's endpoint set, so ordinary load balancing reaches both listeners.
+/// Dialing only the first resolved address would never reach the second.
+pub struct DnsFlapDualStackTestSuite;
+
+#[async_trait]
+impl TestSuite for DnsFlapDualStackTestSuite {
+    fn name(&self) -> &str {
+        "DnsFlapDualStack"
+    }
+    fn port_key(&self) -> Option<&str> {
+        None
+    }
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![TestCase::new(
+            "every_answer_address_is_an_endpoint",
+            "with lookupFamily all, both answer addresses receive load-balanced requests",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    const BOTH: [&str; 2] = ["Server: 0.0.0.0:30001", "Server: [::1]:30001"];
+                    let mut seen = std::collections::BTreeSet::new();
+                    for _ in 0..20 {
+                        let response = match ctx
+                            .http_client
+                            .get(format!("http://{}:{FLAP_GATEWAY_PORT}/echo", ctx.target_host))
+                            .header("Host", FLAP_HOST)
+                            .timeout(Duration::from_secs(10))
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(e) => return TestResult::failed(start.elapsed(), e.to_string()),
+                        };
+                        if response.status().as_u16() != 200 {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("expected 200, got {}", response.status()),
+                            );
+                        }
+                        let body = match response.text().await {
+                            Ok(body) => body,
+                            Err(e) => return TestResult::failed(start.elapsed(), e.to_string()),
+                        };
+                        seen.extend(body.lines().filter(|line| BOTH.contains(line)).map(str::to_string));
+                        if seen.len() == BOTH.len() {
+                            return TestResult::passed_with_message(
+                                start.elapsed(),
+                                "both answer addresses served requests".to_string(),
+                            );
+                        }
+                    }
+                    TestResult::failed(start.elapsed(), format!("expected both listeners, saw {seen:?}"))
+                })
+            },
+        )]
+    }
+}

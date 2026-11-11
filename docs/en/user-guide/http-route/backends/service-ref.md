@@ -100,7 +100,7 @@ spec:
 
 | `edgion.io/dns-resolution-mode` | Behavior |
 |---|---|
-| `gateway` (default) | The Gateway resolves the hostname in the background and turns every returned address into an ordinary endpoint, so load balancing, health checks, outlier ejection and session persistence apply. Requests never wait for DNS except for at most 2 seconds right after the Service appears. |
+| `gateway` (default) | The Gateway resolves the hostname in the background and turns every returned address into an ordinary endpoint, so load balancing, health checks, outlier ejection and session persistence apply. Requests never wait for DNS except, once per request or connection, for at most 2 seconds while the hostname has no answer yet (the Service just appeared, its hostname or resolver changed, or the Gateway just started). |
 | `system` | The Gateway asks the operating-system resolver on every request (or connection / UDP session) and dials one address, rotating the start across the answer and preferring an address a retry has not tried. No load-balancing pool or health state. For UDP the lookup goes through a short-lived shared cache so the listener never waits more than 250 ms. |
 | `controller` | The Controller resolves the hostname on a fixed interval and publishes the endpoints; the Gateway uses only those. Works in Kubernetes, file-system and etcd deployments. The endpoints live in Controller memory, so after a Controller restart they return with the first answer. |
 
@@ -118,8 +118,10 @@ operating-system resolver cannot tell a missing name from an outage, so with it 
 removed name is kept for those 5 minutes too. Link-local and unspecified answers
 such as `169.254.169.254` or `0.0.0.0` are never used. The Gateway drops the
 endpoints of a deleted Service, or one whose hostname changed, immediately; a
-resolver or address-family change keeps serving the previous answer until the new
-resolver's first result (a failing new resolver then withdraws the endpoints).
+resolver or address-family change keeps serving the previous answer, restricted to
+the new family, until the new resolver's first result (a failing new resolver then
+withdraws the endpoints); when the previous answer has no address of the new family,
+requests wait for the first answer instead.
 
 The resolver is chosen by the Service annotations `edgion.io/dns-resolver` or
 `edgion.io/dns-resolver-ref`, then the EdgionGatewayConfig default (`gateway`

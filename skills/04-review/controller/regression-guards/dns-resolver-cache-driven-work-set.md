@@ -36,21 +36,34 @@ Scheduling (`service.rs`, `ResolverState`): each target has its own next-due ins
 a fixed `refresh_interval` (see
 [fixed-interval refresh](../intentional-design/dns-resolver-fixed-interval-refresh.md)).
 A revised target is handled on the next pass: its last good answer is republished at
-once with the new ports / filtered by the new family, then re-queried. Queries run
+once with the new ports or a narrowed family, then re-queried. The stored answer holds
+only the families its query asked for, so a widened family gains addresses only with
+the re-query, and a disjoint switch (`ipv4Only` to `ipv6Only`) withdraws until then. Queries run
 concurrently (`MAX_CONCURRENT_RESOLUTIONS`, `RESOLVE_DEADLINE`) and each answer is
 applied as it arrives; the next refresh counts from the answer, and a target with a
 query in flight never pulls the wake time into the past (no re-plan storm while a slow
 query runs). Passes are spaced by `MIN_REFRESH`, coalescing bursts. Success replaces
-the set, `NoAddresses` withdraws it, other failures keep the last good set for at most
-`MAX_STALE` after the last success; an invalid family annotation withdraws without
-querying. Removed targets, and synthetic slices whose Service is no longer a target,
+the set, `NoAddresses` withdraws it, other failures keep the last good set while it is
+younger than `stale_limit()`: `MAX_STALE`, or one `refresh_interval` plus
+`MIN_REFRESH` plus `RESOLVE_DEADLINE` when that is longer, so a healthy target with a
+long interval is never withdrawn before its next refresh can finish. Every pass also
+withdraws an answer older than that limit whose refresh is still queued for a permit
+or running, and `next_due` includes each kept answer's deadline, so the bound holds on
+time. An invalid family annotation withdraws without querying. A resolver-source
+change for the same hostname (annotation, LinkSys created, edited or deleted) is
+noticed when the target is next planned (a revision, or its next refresh: LinkSys
+events do not wake the resolver), then withdraws at once and republishes at the new
+source's first answer: accepted, unlike the Gateway table's make-before-break, to keep
+this path simple. Removed targets, and synthetic slices whose Service is no longer a target,
 are withdrawn on the next pass.
 
 Each published Service records its provenance (hostname + resolver fingerprint, answer
-time) in `DnsSyntheticSlices`. A fresh `ResolverState` (a restarted task) adopts
-existing slices only for the same source and keeps the original answer time, so a
-restart neither serves another hostname's answer nor extends `MAX_STALE`; otherwise it
-withdraws them.
+time and the answer itself) in `DnsSyntheticSlices`. A fresh `ResolverState` (a
+restarted task) adopts existing slices only for the same source and an answer still
+within the stale limit, keeps the original answer time, and takes the answer back
+(republishing it at once, so an edit made while no task ran applies); a restart
+therefore neither serves another hostname's answer nor extends the stale bound.
+Otherwise it withdraws them.
 
 Lifecycle: the task belongs to the runtime (`DnsResolverTask`). `ServiceHandler` starts
 it with the first target (`ensure_dns_resolver_running`), which also runs it while

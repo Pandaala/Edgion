@@ -591,7 +591,7 @@ spec:
 | `maxRefreshSeconds` | `300` | Longest refresh interval; up to 2147483647, the largest DNS TTL. |
 | `fallbackRefreshSeconds` | unset (5) | Refresh interval when the resolver reports no TTL (operating-system resolver, HTTP DNS without `ttlPath`). If set it must lie between min and max; unset means 5 moved into [min, max], so changing only one bound stays valid. |
 | `refreshIntervalSeconds` | unset | Fixed refresh interval; record TTLs and the min/max bounds are ignored (never below 2 s). |
-| `maxStaleSeconds` | `300` | How long the last good addresses are kept once the resolver starts failing. |
+| `maxStaleSeconds` | `300` | How long the last good addresses are kept once the resolver starts failing (`0`: withdrawn at the first failure). |
 | `maxEntries` | `4096` | Most distinct hostname / resolver / address-family targets; a Service needing a new target beyond it gets no endpoints. |
 
 The durations are integer seconds because the largest DNS TTL (2147483647 s,
@@ -608,22 +608,32 @@ reschedules existing entries, so a shorter interval applies at once.
 - Answers are sorted before comparison; an unchanged answer changes nothing, so
   health checks and outlier ejection keep their state across refreshes.
 - A failing resolver keeps the last good addresses for `maxStaleSeconds`, counted
-  from the first failed refresh. Retries start at `minRefreshSeconds` and double up
-  to 60 seconds (never beyond `maxRefreshSeconds`, never below `minRefreshSeconds`).
-  An authoritative empty answer withdraws the endpoints at once. The
+  from the first failed refresh. They are withdrawn at that deadline even when no
+  retry has finished, so queued retries or a lowered `maxStaleSeconds` never extend
+  it. Retries start at `minRefreshSeconds` and double up to 60 seconds (never beyond
+  `maxRefreshSeconds`, never below `minRefreshSeconds`). An authoritative empty
+  answer, or one holding only the addresses dropped below, withdraws the endpoints
+  at once. The
   operating-system resolver cannot tell NXDOMAIN from an outage, so a removed name
   stays until `maxStaleSeconds`.
 - Changing a Service's (or the default) resolver or address family keeps serving
   the previous answer, restricted to the new family, until the new resolver's first
-  result, so a working resolver change causes no gap in endpoints. If that first
+  result, so a working resolver change causes no gap in endpoints. A previous answer
+  with no address of the new family is not kept, and one that empties meanwhile
+  stops being served; requests then wait for the first answer instead. If that first
   result is a failure the endpoints are withdrawn: a broken new configuration takes
   effect instead of being masked, and the previous resolver is not queried again.
   A hostname change withdraws the old addresses at once.
 - A request or TCP/TLS connection for a target that has never been resolved waits
-  at most 2 seconds for the first answer. UDP never waits; a datagram that arrives
-  before the first answer is dropped and the client's retransmission succeeds.
+  at most 2 seconds for the first answer, once per request or connection (retries do
+  not wait again); a request whose timeout or gRPC deadline runs out meanwhile gets
+  504. UDP never waits; a datagram that arrives before the first answer is dropped
+  and the client's retransmission succeeds. At startup, resolution begins once the
+  initial configuration is in, and listeners open after the first answers, waiting
+  at most 2 seconds for them.
 - Link-local (169.254.0.0/16, fe80::/10) and unspecified (0.0.0.0, ::) answers are
-  dropped and never become endpoints or health-check targets.
+  dropped and never become endpoints or health-check targets. `system` mode never
+  dials an unspecified answer either.
 - Each refresh is jittered by ±10 %. A TTL-derived refresh stays within the min/max
   bounds; a fixed `refreshIntervalSeconds` only stays above 2 seconds.
 - `GET /api/v1/dns/endpoint-table` on the Gateway admin API lists the entries,
@@ -634,10 +644,14 @@ reschedules existing entries, so a shorter interval applies at once.
 AI provider hostnames and external destinations of the RegionRoute and
 DynamicExternalUpstream plugins are chosen per request, so they use a bounded
 answer cache instead of the endpoint table. New UDP sessions to a `system`-mode
-ExternalName Service also resolve through this cache (operating-system resolver,
-at most 250 ms per datagram), so a flood of new client addresses cannot multiply
-DNS queries; HTTP, gRPC, TCP and TLS `system`-mode traffic asks the operating
-system on every request or connection without it. They use this resolver and
+ExternalName Service also resolve through this cache (operating-system resolver),
+so a flood of new client addresses cannot multiply DNS queries. A new session waits
+at most 250 ms for an uncached answer, and while a lookup is known to take longer,
+further new sessions for that name are dropped at once instead of each waiting.
+HTTP, gRPC, TCP and TLS `system`-mode traffic asks the operating system on every
+request or connection without the cache. That lookup is bounded by the connect
+timeout (TCP, TLS; the connect then has its own timeout) or by the remaining
+request timeout and gRPC deadline (HTTP, gRPC; running out answers 504). They use this resolver and
 `lookupFamily` default (or the Gateway's override); IP-literal destinations are
 used as written. At most 256 addresses are kept per answer, keyed by resolver,
 hostname and address family, and every use still applies the upstream address

@@ -578,7 +578,9 @@ dns_resolver:
 其他 ExternalName Service 由 Gateway 解析；没有开关项。Controller 每隔 `refresh_interval`
 解析一次，把地址作为内存中的 EndpointSlice 经配置同步下发给 Gateway，不写入 Kubernetes
 API，因此文件系统和 etcd 配置中心同样可用。结果不变时不发布任何更新；解析失败时，上次的
-地址最多保留到最后一次成功解析后 5 分钟；权威空结果会立即撤下地址。操作系统解析器无法区分
+地址最多保留到最后一次成功解析后 5 分钟（`refresh_interval` 加 31 秒更长时取后者），到期即
+撤下，即使查询仍在排队或进行中；权威空结果会立即撤下地址。健康的解析结果不会仅因超过 5 分钟
+而被撤下。操作系统解析器无法区分
 NXDOMAIN 和故障，因此使用它时，已删除的域名最多会保留这 5 分钟。
 
 `lookup_family` 可选 `ipv4Only`（默认）、`ipv6Only`、`all`，修改后需要重启 Controller。

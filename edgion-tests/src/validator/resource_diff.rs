@@ -165,6 +165,8 @@ struct Metadata {
     namespace: Option<String>,
     #[serde(default)]
     labels: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    annotations: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl Resource {
@@ -178,6 +180,36 @@ impl Resource {
             .as_ref()
             .and_then(|labels| labels.get(ENDPOINT_ORIGIN))
             .is_some_and(|origin| origin == ORIGIN_CONTROLLER)
+    }
+
+    /// The Service a DNS slice belongs to (`kubernetes.io/service-name`).
+    fn owning_service(&self) -> Option<ResourceId> {
+        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+        let service = self.metadata.labels.as_ref()?.get(SERVICE_NAME)?;
+        Some(ResourceId::new(
+            "Service",
+            service.clone(),
+            self.metadata.namespace.clone(),
+        ))
+    }
+
+    /// A `controller`-mode ExternalName Service: the only Service whose
+    /// Controller-published DNS slices may legitimately exist.
+    fn is_controller_dns_owner(&self) -> bool {
+        use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
+        let external_name = self
+            .rest
+            .get("spec")
+            .and_then(|spec| spec.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("ExternalName");
+        external_name
+            && self
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(DNS_RESOLUTION_MODE))
+                .is_some_and(|mode| mode == "controller")
     }
 }
 
@@ -454,14 +486,24 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
 
 /// Compute the set difference between controller-side and gateway-side resources
 /// of a single kind. Returns a `ResourceDiff` (which may be empty). Pure: no I/O.
-fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resource]) -> ResourceDiff {
+///
+/// `dns_owners` are the Controller-side `controller`-mode ExternalName
+/// Services; a Controller DNS slice of any other Service is residue.
+fn compute_resource_diff(
+    kind: &str,
+    controller: &[Resource],
+    gateway: &[Resource],
+    dns_owners: &HashSet<ResourceId>,
+) -> ResourceDiff {
     let controller_ids: HashSet<ResourceId> = controller
         .iter()
         .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
         .collect();
     // Controller-published DNS slices are derived, never in the configuration
-    // source; skip them only when the Controller-side list lacks them, so a
-    // sourced slice that happens to carry the label is still compared.
+    // source; skip them only when the Controller-side list lacks them (a
+    // sourced slice that happens to carry the label is still compared) and
+    // their Service is a `controller`-mode ExternalName (a leftover slice of a
+    // deleted or switched Service is reported as extra).
     let gateway_ids: HashSet<ResourceId> = gateway
         .iter()
         .map(|r| {
@@ -470,7 +512,12 @@ fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resourc
                 ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()),
             )
         })
-        .filter(|(r, id)| !(kind == "EndpointSlice" && r.is_controller_dns_slice() && !controller_ids.contains(id)))
+        .filter(|(r, id)| {
+            !(kind == "EndpointSlice"
+                && r.is_controller_dns_slice()
+                && !controller_ids.contains(id)
+                && r.owning_service().is_some_and(|owner| dns_owners.contains(&owner)))
+        })
         .map(|(_, id)| id)
         .collect();
     let missing_in_gateway: Vec<String> = controller_ids.difference(&gateway_ids).map(|id| id.display()).collect();
@@ -480,6 +527,26 @@ fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resourc
         missing_in_gateway,
         extra_in_gateway,
     }
+}
+
+/// Controller-side `controller`-mode ExternalName Services: the only owners a
+/// Controller-published DNS slice may have.
+async fn controller_dns_owners(client: &AdminClient) -> Result<HashSet<ResourceId>, String> {
+    let services = client
+        .fetch_from_controller("/api/v1/namespaced/Service")
+        .await
+        .map_err(|error| format!("Failed to fetch Service from controller: {error}"))?;
+    Ok(services
+        .iter()
+        .filter(|service| service.is_controller_dns_owner())
+        .map(|service| {
+            ResourceId::new(
+                "Service",
+                service.metadata.name.clone(),
+                service.metadata.namespace.clone(),
+            )
+        })
+        .collect())
 }
 
 /// Note: Gateway and GatewayClass resources are Kubernetes-level resources managed by Controller only.
@@ -505,7 +572,14 @@ async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> Resul
             .await
             .map_err(|error| format!("Failed to fetch {kind} from gateway: {error}"))?;
 
-        let diff = compute_resource_diff(kind, &controller_resources, &gateway_resources);
+        // Fetched right before the slice comparison (and even when the
+        // Service kind itself is skipped), so the owner set matches the slices.
+        let dns_owners = if *kind == "EndpointSlice" {
+            controller_dns_owners(client).await?
+        } else {
+            HashSet::new()
+        };
+        let diff = compute_resource_diff(kind, &controller_resources, &gateway_resources, &dns_owners);
         if !diff.missing_in_gateway.is_empty() || !diff.extra_in_gateway.is_empty() {
             result.differences.push(diff);
         }
@@ -940,7 +1014,7 @@ mod tests {
     fn compute_resource_diff_identical_sets_empty() {
         let controller = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
         let gateway = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
-        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway, &HashSet::new());
         assert!(diff.missing_in_gateway.is_empty());
         assert!(diff.extra_in_gateway.is_empty());
     }
@@ -949,7 +1023,7 @@ mod tests {
     fn compute_resource_diff_missing_in_gateway() {
         let controller = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
         let gateway = vec![res("route-a", Some("ns"))];
-        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway, &HashSet::new());
         assert_eq!(diff.missing_in_gateway, vec!["ns/route-b"]);
         assert!(diff.extra_in_gateway.is_empty());
     }
@@ -958,7 +1032,7 @@ mod tests {
     fn compute_resource_diff_extra_in_gateway() {
         let controller = vec![res("route-a", Some("ns"))];
         let gateway = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
-        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway, &HashSet::new());
         assert!(diff.missing_in_gateway.is_empty());
         assert_eq!(diff.extra_in_gateway, vec!["ns/route-b"]);
     }
@@ -970,21 +1044,41 @@ mod tests {
         // from gateway and the gateway one is extra.
         let controller = vec![res("route", Some("ns-ctrl"))];
         let gateway = vec![res("route", Some("ns-gw"))];
-        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway, &HashSet::new());
         assert_eq!(diff.missing_in_gateway, vec!["ns-ctrl/route"]);
         assert_eq!(diff.extra_in_gateway, vec!["ns-gw/route"]);
     }
 
     #[test]
     fn controller_dns_slices_are_derived_not_extra() {
-        let derived: Resource = serde_json::from_value(serde_json::json!({"metadata": {
-            "name": "svc-edgion-ctl-dns", "namespace": "ns",
-            "labels": {"edgion.io/endpoint-origin": "controller-dns"}
-        }}))
+        let derived = || -> Resource {
+            serde_json::from_value(serde_json::json!({"metadata": {
+                "name": "svc-edgion-ctl-dns", "namespace": "ns",
+                "labels": {
+                    "edgion.io/endpoint-origin": "controller-dns",
+                    "kubernetes.io/service-name": "svc"
+                }
+            }}))
+            .unwrap()
+        };
+        let owner: Resource = serde_json::from_value(serde_json::json!({
+            "metadata": {
+                "name": "svc", "namespace": "ns",
+                "annotations": {"edgion.io/dns-resolution-mode": "controller"}
+            },
+            "spec": {"type": "ExternalName", "externalName": "backend.example.com"}
+        }))
         .unwrap();
+        assert!(owner.is_controller_dns_owner());
+        let owners = HashSet::from([ResourceId::new("Service", "svc".into(), Some("ns".into()))]);
         let sourced = res("svc-abc", Some("ns"));
-        let diff = compute_resource_diff("EndpointSlice", &[], &[derived, sourced]);
+        let diff = compute_resource_diff("EndpointSlice", &[], &[derived(), sourced], &owners);
         assert_eq!(diff.extra_in_gateway, vec!["ns/svc-abc"]);
+
+        // A leftover slice of a Service that is gone (or left controller mode)
+        // is residue.
+        let diff = compute_resource_diff("EndpointSlice", &[], &[derived()], &HashSet::new());
+        assert_eq!(diff.extra_in_gateway, vec!["ns/svc-edgion-ctl-dns"]);
 
         // A sourced slice carrying the label is still compared, not hidden.
         let labeled = || -> Resource {
@@ -994,13 +1088,13 @@ mod tests {
             }}))
             .unwrap()
         };
-        let diff = compute_resource_diff("EndpointSlice", &[labeled()], &[labeled()]);
+        let diff = compute_resource_diff("EndpointSlice", &[labeled()], &[labeled()], &HashSet::new());
         assert!(diff.missing_in_gateway.is_empty() && diff.extra_in_gateway.is_empty());
     }
 
     #[test]
     fn compute_resource_diff_kind_field_matches_input() {
-        let diff = compute_resource_diff("TCPRoute", &[], &[]);
+        let diff = compute_resource_diff("TCPRoute", &[], &[], &HashSet::new());
         assert_eq!(diff.kind, "TCPRoute");
     }
 
@@ -1147,7 +1241,7 @@ mod tests {
         let client = test_client(server.uri(), Some("correct-token".into()));
         let items = client.fetch_from_controller("/resources").await.unwrap();
         let gateway = (0..11).map(|i| res(&format!("r{i}"), None)).collect::<Vec<_>>();
-        let diff = compute_resource_diff("HTTPRoute", &items, &gateway);
+        let diff = compute_resource_diff("HTTPRoute", &items, &gateway, &HashSet::new());
         assert!(diff.missing_in_gateway.is_empty());
         assert!(diff.extra_in_gateway.is_empty());
         assert_eq!(items.len(), 11);

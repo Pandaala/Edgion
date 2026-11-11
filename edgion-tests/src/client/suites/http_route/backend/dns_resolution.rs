@@ -66,6 +66,33 @@ impl DnsResolutionTestSuite {
             .ok_or_else(|| format!("missing hits in {json}"))
     }
 
+    /// GET a Gateway Admin API path and return its `data` member.
+    async fn gateway_admin_data(ctx: &TestContext, path: &str) -> Result<serde_json::Value, String> {
+        let base = std::env::var("EDGION_TEST_GATEWAY_ADMIN_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| format!("http://{}:12001", ctx.target_host));
+        let url = format!("{}{path}", base.trim_end_matches('/'));
+        let mut request = ctx.http_client.get(&url).timeout(Duration::from_secs(5));
+        if let Some(token) = std::env::var("EDGION_GATEWAY_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| ctx.admin_token.clone())
+        {
+            request = request.bearer_auth(token);
+        }
+        let body: serde_json::Value = request
+            .send()
+            .await
+            .map_err(|e| format!("GET {url} failed: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("GET {url} returned invalid JSON: {e}"))?;
+        if body["success"] != true {
+            return Err(format!("GET {url} failed: {body}"));
+        }
+        Ok(body["data"].clone())
+    }
+
     /// Send one request to the gateway with the given Host and return the status.
     async fn get_status(ctx: &TestContext, host: &str) -> Result<u16, String> {
         let url = format!("{}/echo", ctx.http_url());
@@ -177,18 +204,39 @@ impl DnsResolutionTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
                     let grown = hits_after_follow_ups.saturating_sub(hits_after_first);
-                    if grown <= 1 {
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("{FOLLOW_UPS} requests triggered no per-request resolution (hits {hits_after_first} -> {hits_after_follow_ups})"),
-                        )
-                    } else {
-                        TestResult::failed(
+                    if grown > 1 {
+                        return TestResult::failed(
                             start.elapsed(),
                             format!(
                                 "expected no per-request resolution, hits went {hits_after_first} -> {hits_after_follow_ups} over {FOLLOW_UPS} requests"
                             ),
-                        )
+                        );
+                    }
+
+                    // Without any traffic the table still refreshes (TTL-less
+                    // httpdns: every ~5 s). A request-driven cache would not.
+                    let deadline = Instant::now() + Duration::from_secs(12);
+                    loop {
+                        match Self::dns_hits(&ctx.http_client, resolver_key).await {
+                            Ok(n) if n > hits_after_follow_ups => {
+                                return TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "{FOLLOW_UPS} requests triggered no per-request resolution and the table refreshed without traffic (hits {hits_after_first} -> {hits_after_follow_ups} -> {n})"
+                                    ),
+                                );
+                            }
+                            Ok(_) if Instant::now() < deadline => {
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                            }
+                            Ok(n) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("no background refresh without traffic (hits stayed {n})"),
+                                );
+                            }
+                            Err(e) => return TestResult::failed(start.elapsed(), e),
+                        }
                     }
                 })
             },
@@ -354,6 +402,71 @@ impl DnsResolutionTestSuite {
         )
     }
 
+    /// Every case above would also pass if a Service were served by the wrong
+    /// mode (all of them resolve to the same local backend), so check where
+    /// each Service's endpoints actually come from: the Gateway endpoint table
+    /// holds exactly the `gateway`-mode Services, and only `controller`-mode
+    /// Services have Controller-published slices.
+    fn test_modes_use_their_own_endpoint_source() -> TestCase {
+        TestCase::new(
+            "modes_use_their_own_endpoint_source",
+            "gateway mode is served by the endpoint table, controller mode by Controller slices, system mode by neither",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let result = async {
+                        const NS: &str = "edgion-default";
+                        let table = Self::gateway_admin_data(&ctx, "/api/v1/dns/endpoint-table").await?;
+                        let referrers: std::collections::BTreeSet<String> = table["entries"]
+                            .as_array()
+                            .ok_or_else(|| format!("no entries in {table}"))?
+                            .iter()
+                            .flat_map(|entry| entry["referrers"].as_array().cloned().unwrap_or_default())
+                            .filter_map(|referrer| referrer.as_str().map(str::to_string))
+                            .collect();
+                        for name in ["dns-gateway-cached", "dns-httpdns", "dns-httpdns-fallback", "dns-l4-gateway"] {
+                            if !referrers.contains(&format!("{NS}/{name}")) {
+                                return Err(format!("gateway-mode {name} is not in the endpoint table: {referrers:?}"));
+                            }
+                        }
+                        for name in ["dns-system", "dns-l4-system", "dns-controller", "dns-l4-controller"] {
+                            if referrers.contains(&format!("{NS}/{name}")) {
+                                return Err(format!("{name} must not use the endpoint table: {referrers:?}"));
+                            }
+                        }
+                        let slices = Self::gateway_admin_data(&ctx, "/configclient/endpointslice/list").await?;
+                        let names: std::collections::BTreeSet<String> = slices
+                            .as_array()
+                            .ok_or_else(|| format!("no slice list in {slices}"))?
+                            .iter()
+                            .filter(|slice| slice["metadata"]["namespace"] == NS)
+                            .filter_map(|slice| slice["metadata"]["name"].as_str().map(str::to_string))
+                            .collect();
+                        for name in ["dns-controller", "dns-l4-controller"] {
+                            if !names.contains(&format!("{name}-edgion-ctl-dns")) {
+                                return Err(format!("controller-mode {name} has no Controller-published slice"));
+                            }
+                        }
+                        for name in ["dns-system", "dns-l4-system", "dns-gateway-cached", "dns-l4-gateway"] {
+                            if names.contains(&format!("{name}-edgion-ctl-dns")) {
+                                return Err(format!("{name} must not have a Controller-published slice"));
+                            }
+                        }
+                        Ok::<(), String>(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "each mode is served by its own endpoint source".to_string(),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    }
+                })
+            },
+        )
+    }
+
     async fn expect_ok(ctx: &TestContext, host: &str) -> Result<(), String> {
         match Self::get_status(ctx, host).await? {
             200 => Ok(()),
@@ -383,6 +496,8 @@ impl TestSuite for DnsResolutionTestSuite {
             Self::test_tcp_system_mode_echo(),
             Self::test_tcp_controller_mode_echo(),
             Self::test_udp_system_mode_echo(),
+            // Last: every Service above has been used and resolved.
+            Self::test_modes_use_their_own_endpoint_source(),
         ]
     }
 }

@@ -616,8 +616,11 @@ such Service every `refresh_interval` and publishes the addresses as in-memory
 EndpointSlices that reach Gateways through config sync; nothing is written to the
 Kubernetes API, so it works the same with the file-system and etcd configuration
 centers. An unchanged answer publishes nothing. A failed lookup keeps the last
-good addresses for at most 5 minutes after the last successful answer; an
-authoritative empty answer removes them at once. The operating-system resolver
+good addresses for at most 5 minutes after the last successful answer (one
+`refresh_interval` plus 31 seconds when that is longer), and they are withdrawn at
+that deadline even while a lookup is still queued or running; an authoritative
+empty answer removes them at once. A healthy answer is never withdrawn just because
+it is older than 5 minutes. The operating-system resolver
 cannot tell NXDOMAIN from an outage, so with it a removed name stays for up to
 those 5 minutes.
 

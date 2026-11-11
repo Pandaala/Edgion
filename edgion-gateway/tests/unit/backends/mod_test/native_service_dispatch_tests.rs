@@ -765,6 +765,12 @@ async fn actual_dns_peer_stage_preserves_ssrf_tls_app_protocol_and_captured_abse
             Some(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
         ),
         (vec!["::ffff:169.254.169.254", "192.0.2.45"], None),
+        // Unspecified answers connect to the local host: never dialed.
+        (
+            vec!["0.0.0.0", "::ffff:0.0.0.0"],
+            Some(EdgionErrorCode::BackendDnsResolutionFailed),
+        ),
+        (vec!["::", "192.0.2.45"], None),
     ] {
         let calls = Cell::new(0);
         let result = build_system_external_name_peer(
@@ -925,6 +931,79 @@ fn address_rotation_spreads_the_first_address_and_tolerates_empty_sets() {
     assert!(empty.is_empty());
     let first = next_address_rotation();
     assert_ne!(next_address_rotation(), first, "each attempt advances the rotation");
+}
+
+#[tokio::test(start_paused = true)]
+async fn system_lookups_spend_the_caller_budget() {
+    let hung = std::future::pending::<Result<DnsAnswer, DnsError>>();
+    let started = tokio::time::Instant::now();
+    let result = within_budget(Some(std::time::Duration::from_secs(2)), hung).await;
+    assert!(result.is_none(), "a hung lookup ends at the budget");
+    assert_eq!(started.elapsed(), std::time::Duration::from_secs(2));
+    let answered = within_budget(None, std::future::ready(Ok(DnsAnswer::without_ttl(Vec::new())))).await;
+    assert!(
+        answered.is_some_and(|answer| answer.is_ok()),
+        "no budget: the resolver's own limit applies"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_system_lookup_outliving_the_deadline_is_a_timeout_not_a_dns_failure() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    publish(
+        &coordinator,
+        service(Some("ExternalName"), Some("slow.test"), Some("system"), 80),
+        None,
+    );
+    let chosen = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let captured = capture(&coordinator, &chosen);
+    let mut ctx = context("default/backend");
+    ctx.request_info
+        .set_grpc_client_deadline(std::time::Instant::now() + std::time::Duration::from_millis(100));
+    let result = build_system_external_name_peer(
+        &mut ctx,
+        &input(&chosen),
+        &captured,
+        None,
+        DnsLookupFamily::All,
+        vec_resolver(|_, _, _policy| std::future::pending::<Result<Vec<IpAddr>, DnsError>>()),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), EdgionErrorCode::GrpcClientDeadlineExceeded);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_datagram_lookup_is_waited_for_once() {
+    let key = || (Box::<str>::from("slow-datagram.test"), DnsLookupFamily::Ipv4Only);
+    let budget = std::time::Duration::from_millis(250);
+    let started = tokio::time::Instant::now();
+    // A cached answer is served at the first poll.
+    let cached = async { Ok(vec!["192.0.2.1".parse().unwrap()]) };
+    assert_eq!(
+        datagram_lookup(key(), cached, budget).await.map(|ips| ips.len()),
+        Some(1)
+    );
+    assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+    // A stalled lookup costs the first datagram the budget ...
+    let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+    let stalled = async move {
+        let _ = finished.await;
+        Err(DnsError::Io("late".into()))
+    };
+    assert!(datagram_lookup(key(), stalled, budget).await.is_none());
+    assert_eq!(started.elapsed(), budget);
+    // ... and later datagrams nothing while it still runs.
+    let queued = std::future::pending::<Result<Vec<IpAddr>, DnsError>>();
+    assert!(datagram_lookup(key(), queued, budget).await.is_none());
+    assert_eq!(started.elapsed(), budget, "dropped at once, not queued");
+    // Once it completes, a new lookup may use the budget again.
+    finish.send(()).unwrap();
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    let queued = std::future::pending::<Result<Vec<IpAddr>, DnsError>>();
+    assert!(datagram_lookup(key(), queued, budget).await.is_none());
+    assert_eq!(started.elapsed(), budget * 2);
 }
 
 #[test]

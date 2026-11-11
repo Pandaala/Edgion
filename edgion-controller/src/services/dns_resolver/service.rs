@@ -154,7 +154,9 @@ pub(crate) struct TargetState {
     next_due: Option<Instant>,
     /// A query for `revision` is running.
     in_flight: bool,
-    /// Last good normalized answer (before family filtering).
+    /// Last good normalized answer. The query already applied that pass's
+    /// family, so a narrowed family filters it at once while a widened one
+    /// gains addresses only with the next answer.
     addrs: Option<Arc<[IpAddr]>>,
     /// Hostname and resolver fingerprint that produced `addrs`; a different
     /// source never inherits them.
@@ -220,9 +222,10 @@ impl ResolverState {
         }
     }
 
-    /// Reconcile with the target table. Withdraws removed targets, republishes
-    /// changed targets from their last good answer (new ports, narrowed
-    /// family), and returns the due queries plus the slice keys to enqueue.
+    /// Reconcile with the target table. Withdraws removed targets and answers
+    /// older than `MAX_STALE`, republishes changed targets from their last
+    /// good answer (new ports, narrowed family), and returns the due queries
+    /// plus the slice keys to enqueue.
     pub(crate) fn plan(
         &mut self,
         targets: Vec<(String, DnsResolverTarget)>,
@@ -255,7 +258,19 @@ impl ResolverState {
         let mut jobs = Vec::new();
         for (key, target) in targets {
             let is_new = !self.targets.contains_key(&key);
+            let stale_limit = self.stale_limit();
             let state = self.targets.entry(key.clone()).or_default();
+            // The stale bound holds while a refresh still waits for a permit
+            // or runs: an answer that old is withdrawn at this pass (the wake
+            // time includes the deadline), not when the query completes.
+            if state
+                .last_success
+                .is_some_and(|last| now.saturating_duration_since(last) >= stale_limit)
+            {
+                state.addrs = None;
+                state.last_success = None;
+                changed_keys.extend(slices.replace_service(self.epoch, &key, Vec::new()));
+            }
             let revised = state.revision != Some(target.revision);
             if !revised && (state.in_flight || state.next_due.is_some_and(|due| due > horizon)) {
                 continue;
@@ -296,10 +311,25 @@ impl ResolverState {
                 } else if slices.has_service(&key) {
                     match slices.provenance(&key) {
                         // Adopt what an earlier task published for the same
-                        // source, keeping its answer time so MAX_STALE still
-                        // counts from the original answer.
-                        Some((published, answered_at)) if published == source => {
-                            state.last_success = Some(answered_at);
+                        // source, keeping its answer time so the stale bound
+                        // still counts from the original answer. An edit made
+                        // while no task ran (ports, family) applies now.
+                        Some(published)
+                            if published.source == source
+                                && now.saturating_duration_since(published.answered_at) < stale_limit =>
+                        {
+                            state.last_success = Some(published.answered_at);
+                            state.addrs = Some(published.addrs);
+                            state.source = Some(source.clone());
+                            changed_keys.extend(publish(
+                                slices,
+                                self.epoch,
+                                &key,
+                                &service,
+                                state.addrs.as_deref(),
+                                family,
+                                provenance(state),
+                            ));
                         }
                         // Published for another hostname or resolver (or of
                         // unknown origin): never served for this source.
@@ -333,7 +363,7 @@ impl ResolverState {
 
     /// Apply one answer. Success replaces the set, an authoritative empty
     /// answer withdraws it, any other failure keeps the last good set for at
-    /// most `MAX_STALE`. A result for a removed or since-revised target is
+    /// most `stale_limit` (normally `MAX_STALE`). A result for a removed or since-revised target is
     /// discarded.
     pub(crate) fn apply(
         &mut self,
@@ -342,6 +372,7 @@ impl ResolverState {
         slices: &DnsSyntheticSlices,
         now: Instant,
     ) -> Vec<String> {
+        let stale_limit = self.stale_limit();
         let Some(state) = self.targets.get_mut(&job.service_key) else {
             return Vec::new();
         };
@@ -362,7 +393,7 @@ impl ResolverState {
             Err(error) => {
                 let fresh = state
                     .last_success
-                    .is_some_and(|last| now.saturating_duration_since(last) <= MAX_STALE);
+                    .is_some_and(|last| now.saturating_duration_since(last) < stale_limit);
                 tracing::warn!(
                     component = "dns_resolver_service",
                     service = %job.service_key,
@@ -391,21 +422,41 @@ impl ResolverState {
         )
     }
 
-    /// Earliest due refresh. Targets with a query in flight are rescheduled
-    /// when it completes, so they never pull the wake time into the past.
+    /// How long a last good answer may go without a successful refresh:
+    /// `MAX_STALE`, or one refresh period plus one full query when that is
+    /// longer, so a healthy target with a long `refresh_interval` is never
+    /// withdrawn while its next refresh is simply not due yet.
+    fn stale_limit(&self) -> Duration {
+        MAX_STALE.max(self.period.saturating_add(MIN_REFRESH + RESOLVE_DEADLINE))
+    }
+
+    /// Earliest due refresh or stale deadline. Targets with a query in flight
+    /// are rescheduled when it completes, so their refresh never pulls the
+    /// wake time into the past; a stale deadline is cleared by the pass it
+    /// wakes.
     pub(crate) fn next_due(&self, now: Instant) -> Instant {
-        self.targets
+        let stale_limit = self.stale_limit();
+        let refreshes = self
+            .targets
             .values()
             .filter(|state| !state.in_flight)
-            .filter_map(|state| state.next_due)
-            .min()
-            .unwrap_or(now + self.period)
+            .filter_map(|state| state.next_due);
+        let deadlines = self
+            .targets
+            .values()
+            .filter(|state| state.addrs.is_some())
+            .filter_map(|state| state.last_success?.checked_add(stale_limit));
+        refreshes.chain(deadlines).min().unwrap_or(now + self.period)
     }
 }
 
 /// What produced a target's current answer, recorded with its slices.
 fn provenance(state: &TargetState) -> Option<Provenance> {
-    state.source.clone().zip(state.last_success)
+    Some(Provenance {
+        source: state.source.clone()?,
+        answered_at: state.last_success?,
+        addrs: state.addrs.clone()?,
+    })
 }
 
 fn external_name(service: &Service) -> Option<String> {

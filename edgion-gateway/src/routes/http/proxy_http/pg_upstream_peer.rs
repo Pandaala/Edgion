@@ -796,6 +796,11 @@ async fn get_peer_with_sp_fallback(
 
     match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
+        // A deadline that ran out during selection (DNS wait or lookup) is a
+        // timeout, never a reason to try another backend.
+        Err(status @ (EdgionErrorCode::RequestTimeoutExceeded | EdgionErrorCode::GrpcClientDeadlineExceeded)) => {
+            Err(crate::backends::deadline_exceeded(ctx, status))
+        }
         Err(
             status @ (EdgionErrorCode::BackendLocalhostNotAllowed
             | EdgionErrorCode::BackendAddrLinkLocalNotAllowed

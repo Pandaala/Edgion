@@ -24,9 +24,9 @@ pub use sse_streaming::SseStreamingTestSuite;
 // Export sub-module tests
 pub use backend::{
     BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DegradeThresholdTestSuite, DnsFlapBoundedTestSuite,
-    DnsFlapFailingTestSuite, DnsFlapFamilyTestSuite, DnsFlapWorkingTestSuite, DnsResolutionFailureTestSuite,
-    DnsResolutionTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, HealthCheckTestSuite,
-    HealthCheckTransitionTestSuite, InformationalRetryTestSuite, LBConsistentHashTestSuite,
+    DnsFlapDualStackTestSuite, DnsFlapFailingTestSuite, DnsFlapFamilyTestSuite, DnsFlapWorkingTestSuite,
+    DnsResolutionFailureTestSuite, DnsResolutionTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
+    HealthCheckTestSuite, HealthCheckTransitionTestSuite, InformationalRetryTestSuite, LBConsistentHashTestSuite,
     LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite,
     LBRoundRobinTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, RetryOnStatusTestSuite,
     SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite,

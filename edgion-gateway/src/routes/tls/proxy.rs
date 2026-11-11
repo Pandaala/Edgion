@@ -93,6 +93,10 @@ pub struct TlsContext {
     /// TLS the same way they match TCP `status`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<&'static str>,
+    /// An attempt of this connection already waited for a `gateway`-mode DNS
+    /// first answer; later attempts do not wait again.
+    #[serde(skip)]
+    pub(crate) dns_first_answer_waited: bool,
 }
 
 impl TlsContext {
@@ -123,6 +127,7 @@ impl TlsContext {
             log: None,
             err_log: None,
             status: None,
+            dns_first_answer_waited: false,
         }
     }
 
@@ -326,7 +331,7 @@ impl EdgionTlsTcpProxy {
                 &unit,
                 ctx,
                 Some(selected.owner.gateway_key()),
-                gateway_config.allow_loopback_upstream,
+                gateway_config,
             )
             .await
             {

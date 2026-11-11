@@ -57,18 +57,25 @@ Service / EGC / LinkSys events, never by requests, and an entry is deleted with
 its last referring Service. A Service relist is a mark-and-sweep, and a periodic
 pass withdraws any Gateway-local slice the table does not own. `maxEntries`
 (default 4096) bounds the table; new targets beyond it fail closed and live ones
-are never evicted. Answers are normalized (IPv4-mapped folded, link-local
-dropped, deduplicated, IPv4 then IPv6 ascending); an unchanged answer touches
-nothing, so health and outlier state survive refreshes. Refresh is
+are never evicted. Answers are normalized (IPv4-mapped folded, link-local and
+unspecified dropped, deduplicated, IPv4 then IPv6 ascending; nothing left counts as
+an empty answer); an unchanged answer touches nothing, so health and outlier state
+survive refreshes. Refresh is
 `clamp(ttl * ttlFactor, minRefreshSeconds, maxRefreshSeconds)` (TTL capped at the
 RFC 2181 maximum first), `fallbackRefreshSeconds` without a TTL, or a fixed
 `refreshIntervalSeconds` (exempt from the bounds, 2 s floor), each jittered ±10 %
 and re-clamped. A transient failure keeps the last good set up to
-`maxStaleSeconds`; an authoritative empty answer withdraws at once. All
+`maxStaleSeconds` from the first failure, enforced on time even while a retry is
+queued (`0` keeps nothing); an authoritative empty answer withdraws at once. A
+resolver or family switch keeps serving the previous answer (new family only) until
+the new target's first result, unless no address of the new family remains. All
 publications of one table mutation reach the coordinator in one transaction.
-HTTP attempts and TCP/TLS connections wait at most 2 s for a pending target's
-first answer (lock-free pending map; admission is checked before an L4 wait),
-then select from whatever exists (none: 503); the UDP datagram path never waits. Resolver precedence is Service annotation -> EGC default ->
+HTTP requests and TCP/TLS connections wait at most 2 s, once each, for a pending
+target's first answer (lock-free pending map; admission is checked before an L4
+wait), then select from whatever exists (none: 503; an expired request deadline:
+504); the UDP datagram path never waits. `system` mode drops unspecified answers
+and bounds its lookup by the L4 connect timeout or the remaining request / gRPC
+deadline. Resolver precedence is Service annotation -> EGC default ->
 OS resolver; family precedence is Service annotation -> EGC -> `ipv4Only`. The
 Gateway resource annotations do not apply to `ExternalName`. Admin view:
 `GET /api/v1/dns/endpoint-table`; counts also appear in `store-stats`.

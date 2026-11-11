@@ -211,7 +211,7 @@ impl EdgionTcpProxy {
         let prep = crate::backends::prepare_l4_service(
             selected,
             Some(owner.gateway_key()),
-            gateway_config.allow_loopback_upstream,
+            gateway_config,
             crate::backends::L4Transport::Connection,
             &[],
         )

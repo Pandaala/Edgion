@@ -103,7 +103,7 @@ requests capture the added policy, and old retries do not fund its budget.
 **4. Captured Service overrides and live runtime have different boundaries**
 
 `backends::try_get_peer` passes the captured degrade policy to the shared
-ordinary Service/controller-resolved ExternalName selector. Native pseudo-kind
+ordinary Service/DNS-slice-backed (`gateway` or `controller` mode) ExternalName selector. Native pseudo-kind
 ServiceEndpointSlice dispatch is no longer present.
 `CapturedOverride(Some(0))` disables degrade even if a newer Service or global
 threshold enables it. `CapturedOverride(None)` uses the current process-global

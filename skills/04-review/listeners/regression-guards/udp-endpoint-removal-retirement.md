@@ -55,7 +55,9 @@ anyway. Full sets replace Services and EndpointSlices without a clear-then-fill
 step, and partial events are batched by `BATCH_DEBOUNCE` (100 ms), so a slice
 delete-and-create spread over more than that window can also retire sessions.
 
-ExternalName Services reach UDP through Controller-published DNS slices. A DNS
+ExternalName Services reach UDP through DNS slices: Gateway-local ones by default,
+Controller-published ones in `controller` mode (`system` mode pins a direct backend
+per session instead). A DNS
 answer set that rotates subsets drops still-valid addresses from the section,
 and their sessions are retired; the client loses source-port continuity toward
 the backend. This is accepted as equivalent to endpoint removal.

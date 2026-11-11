@@ -13,11 +13,18 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
 use tokio::time::Instant;
 
-/// What produced one Service's published slices: the (hostname, resolver
-/// fingerprint) source and the time of the answer. A restarted resolver task
+/// What produced one Service's published slices. A restarted resolver task
 /// adopts the slices only for the same source and keeps the original answer
-/// time, so a restart never extends how long a stale answer is served.
-pub(crate) type Provenance = ((String, String), Instant);
+/// time, so a restart never extends how long a stale answer is served; it
+/// also takes back the answer, so a later edit (ports, family) republishes it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Provenance {
+    /// Hostname and resolver fingerprint.
+    pub(crate) source: (String, String),
+    pub(crate) answered_at: Instant,
+    /// The normalized answer, before the Service's family filter.
+    pub(crate) addrs: Arc<[std::net::IpAddr]>,
+}
 
 #[derive(Default)]
 struct Inner {

@@ -140,3 +140,67 @@ fn batched_publications_merge_per_service() {
     assert_eq!(batch[0].0, "ns/a");
     assert_eq!(batch[0].1.len(), 1, "the last publication wins");
 }
+
+fn external_service(name: &str, hostname: &str, annotations: &[(&str, &str)]) -> (String, Arc<Service>) {
+    let annotations = annotations
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    (
+        format!("ns/{name}"),
+        Arc::new(Service {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some("ns".to_string()),
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some("ExternalName".to_string()),
+                external_name: Some(hostname.to_string()),
+                ports: Some(vec![ServicePort {
+                    port: 80,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+}
+
+#[test]
+fn a_switch_finishing_in_a_result_batch_rebinds_refused_services() {
+    use edgion_resources::constants::annotations::edgion::DNS_RESOLVER;
+    use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig;
+
+    let table = table();
+    let inputs = TableInputs {
+        policy: DnsRefreshPolicy::from_config(&DnsResolverConfig {
+            max_entries: 2,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    table.mutate(|state, lookup, publisher, now| state.set_inputs(inputs, lookup, publisher, now));
+    let answered = || Ok(DnsAnswer::without_ttl(vec!["10.0.0.1".parse().unwrap()]));
+    let upsert = |service: (String, Arc<Service>)| {
+        table.on_services_partial(&HashMap::from([service]), &HashMap::new(), &HashSet::new());
+    };
+
+    upsert(external_service("a", "a.example.com", &[]));
+    let job = table.state.lock().take_due(Instant::now(), 1).remove(0);
+    table.apply_results(vec![(job, answered())]);
+    // A resolver switch bridges on the old entry, filling the table.
+    upsert(external_service("a", "a.example.com", &[(DNS_RESOLVER, "192.0.2.53")]));
+    upsert(external_service("c", "c.example.com", &[]));
+    assert_eq!(table.stats().rejected_services, 1);
+    let job = table.state.lock().take_due(Instant::now(), 1).remove(0);
+    table.apply_results(vec![(job, answered())]);
+    assert_eq!(
+        table.stats().rejected_services,
+        0,
+        "the slot the bridge freed is offered"
+    );
+    assert_eq!(table.stats().entries, 2);
+}

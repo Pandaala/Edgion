@@ -159,6 +159,8 @@ impl Harness {
             self.state
                 .apply_result(job, outcome.clone(), self.now, 0.5, &self.recorder);
         }
+        // As the worker does after every batch of results.
+        self.state.retry_rejected_if_freed(lookup(), &self.recorder, self.now);
         jobs.len()
     }
 }
@@ -391,20 +393,73 @@ fn transient_failure_keeps_last_good_until_max_stale() {
         5,
         "first back-off is minRefresh"
     );
-    h.advance(300);
+    h.advance(290);
     h.resolve_due(Err(DnsError::Io("timeout".to_string())));
     assert_eq!(
         h.recorder.addresses(&key("a")),
         vec!["10.0.0.1"],
         "maxStale counts from the first failure"
     );
-    // The next retry (after the doubled back-off) lands past maxStale.
+    // The next retry (after the doubled back-off) lands at maxStale.
     h.advance(10);
     assert_eq!(h.resolve_due(Err(DnsError::Io("timeout".to_string()))), 1);
     assert!(
         h.recorder.addresses(&key("a")).is_empty(),
-        "withdrawn once past maxStale"
+        "withdrawn once maxStale has passed"
     );
+}
+
+#[test]
+fn a_kept_answer_expires_at_max_stale_without_a_retry() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.advance(5);
+    h.resolve_due(Err(DnsError::Io("timeout".to_string())));
+    let failed_at = h.now;
+    assert_eq!(
+        h.state.next_stale_deadline(),
+        Some(failed_at + Duration::from_secs(300))
+    );
+    // The retry never completes (queued behind busy permits, or in flight).
+    h.state.take_due(h.now + Duration::from_secs(5), usize::MAX);
+    h.advance(299);
+    h.state.expire_stale(h.now, &h.recorder);
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"]);
+    h.advance(1);
+    h.state.expire_stale(h.now, &h.recorder);
+    assert!(h.recorder.addresses(&key("a")).is_empty(), "withdrawn at the deadline");
+    assert_eq!(h.state.next_stale_deadline(), None, "nothing left to expire");
+}
+
+#[test]
+fn lowering_max_stale_expires_kept_answers() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.advance(5);
+    h.resolve_due(Err(DnsError::Io("timeout".to_string())));
+    h.state.set_inputs(
+        inputs_with(DnsResolverConfig {
+            max_stale_seconds: 0,
+            ..Default::default()
+        }),
+        lookup(),
+        &h.recorder,
+        h.now,
+    );
+    assert_eq!(h.state.next_due(), Some(h.now), "the lowered bound is due at once");
+    h.state.expire_stale(h.now, &h.recorder);
+    assert!(h.recorder.addresses(&key("a")).is_empty());
+}
+
+#[test]
+fn an_answer_of_only_unusable_addresses_is_gone() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["0.0.0.0", "169.254.169.254"], None));
+    assert_eq!(h.state.entries_view(h.now, 10)[0].status, EntryStatus::Gone);
+    assert!(h.recorder.addresses(&key("a")).is_empty());
 }
 
 #[test]
@@ -475,6 +530,78 @@ fn the_bridged_entry_is_not_refreshed_through_the_replaced_resolver() {
     let jobs = h.state.take_due(h.now, usize::MAX);
     assert_eq!(jobs.len(), 1, "only the new target is queried");
     assert_ne!(jobs[0].target.resolver, "system");
+    assert!(
+        h.state.next_due().is_none(),
+        "the overdue bridged entry never schedules a wake-up (the worker would spin)"
+    );
+}
+
+#[test]
+fn switching_again_at_the_cap_keeps_the_bridge() {
+    let mut h = Harness::with_inputs(inputs_with(DnsResolverConfig {
+        max_entries: 2,
+        ..Default::default()
+    }));
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    assert_eq!(h.state.stats().entries, 2, "the bridge fills the table");
+    // The pending target goes away with this switch, so the bridge fits.
+    h.upsert("a", with_resolver("a", "192.0.2.54"));
+    assert_eq!(h.recorder.addresses(&key("a")), vec!["10.0.0.1"]);
+    assert_eq!(h.state.stats().entries, 2);
+}
+
+#[test]
+fn a_bridge_whose_answer_empties_ends_and_the_service_waits() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.upsert("b", external_name("b", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    // Only the shared entry is refreshed (through `b`); the new target's
+    // lookup stays in flight.
+    h.state.take_due(h.now, usize::MAX);
+    h.advance(60);
+    let jobs = h.state.take_due(h.now, usize::MAX);
+    assert_eq!(jobs.len(), 1);
+    h.state
+        .apply_result(&jobs[0], Err(DnsError::NoAddresses), h.now, 0.5, &h.recorder);
+    assert!(h.recorder.addresses(&key("a")).is_empty());
+    assert!(
+        h.state.pending_waiters().contains_key(&key("a")),
+        "an emptied bridge ends: requests wait for the new answer"
+    );
+}
+
+#[test]
+fn a_finished_switch_frees_its_slot_for_a_refused_service() {
+    let mut h = Harness::with_inputs(inputs_with(DnsResolverConfig {
+        max_entries: 2,
+        ..Default::default()
+    }));
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert("a", with_resolver("a", "192.0.2.53"));
+    h.upsert("b", external_name("b", "b.example.com", &[], &[80]));
+    assert_eq!(h.state.stats().rejected_services, 1, "the bridge holds the second slot");
+    h.resolve_due(answer(&["10.0.0.2"], None));
+    assert_eq!(h.state.stats().rejected_services, 0);
+    assert_eq!(h.state.stats().entries, 2);
+    assert!(h.state.pending_waiters().contains_key(&key("b")));
+}
+
+#[test]
+fn zero_max_stale_withdraws_at_the_first_failure() {
+    let mut h = Harness::with_inputs(inputs_with(DnsResolverConfig {
+        max_stale_seconds: 0,
+        ..Default::default()
+    }));
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.advance(5);
+    assert_eq!(h.resolve_due(Err(DnsError::Io("timeout".to_string()))), 1);
+    assert!(h.recorder.addresses(&key("a")).is_empty());
 }
 
 #[test]
@@ -502,6 +629,26 @@ fn a_family_switch_serves_only_the_new_family_meanwhile() {
         external_name("a", "a.example.com", &[(DNS_LOOKUP_FAMILY, "ipv6Only")], &[80]),
     );
     assert_eq!(h.recorder.addresses(&key("a")), vec!["2001:db8::1"]);
+}
+
+#[test]
+fn a_family_switch_without_a_matching_address_waits_for_the_new_answer() {
+    let mut h = Harness::new();
+    h.upsert(
+        "a",
+        external_name("a", "a.example.com", &[(DNS_LOOKUP_FAMILY, "ipv4Only")], &[80]),
+    );
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.upsert(
+        "a",
+        external_name("a", "a.example.com", &[(DNS_LOOKUP_FAMILY, "ipv6Only")], &[80]),
+    );
+    assert!(h.recorder.addresses(&key("a")).is_empty());
+    assert_eq!(h.state.stats().entries, 1, "no bridge: the IPv4 entry is released");
+    assert!(
+        h.state.pending_waiters().contains_key(&key("a")),
+        "requests wait for the first IPv6 answer instead of failing at once"
+    );
 }
 
 #[test]
@@ -558,6 +705,17 @@ fn in_flight_targets_are_not_taken_twice_and_cancel_returns_them() {
     assert!(h.state.next_due().is_none());
     h.state.cancel_job(&jobs[0]);
     assert_eq!(h.state.take_due(h.now, usize::MAX).len(), 1);
+}
+
+#[test]
+fn first_answers_go_before_overdue_refreshes() {
+    let mut h = Harness::new();
+    h.upsert("a", external_name("a", "a.example.com", &[], &[80]));
+    h.resolve_due(answer(&["10.0.0.1"], None));
+    h.advance(600);
+    h.upsert("b", external_name("b", "b.example.com", &[], &[80]));
+    let jobs = h.state.take_due(h.now, 1);
+    assert_eq!(jobs[0].target.hostname, "b.example.com");
 }
 
 #[test]

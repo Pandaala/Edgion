@@ -34,6 +34,44 @@ fn family_v4() -> Box<dyn TestSuite> {
 fn family_v6() -> Box<dyn TestSuite> {
     Box::new(suites::DnsFlapFamilyTestSuite(true))
 }
+fn family_all() -> Box<dyn TestSuite> {
+    Box::new(suites::DnsFlapDualStackTestSuite)
+}
+
+/// Wait until the Gateway itself holds the flap Gateway's family annotation:
+/// a phase that checks the annotation has no effect would otherwise pass on
+/// the previous state before the change arrived.
+async fn wait_gateway_family_annotation(ctx: &ScenarioCtx, value: &str) -> Result<()> {
+    let token = std::env::var("EDGION_GATEWAY_ADMIN_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty());
+    let url = format!(
+        "{}/configclient/gateway?name=dns-flap-gateway&namespace=edgion-test",
+        ctx.gateway_url.trim_end_matches('/')
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut request = ctx.test_ctx.http_client.get(&url).timeout(Duration::from_secs(2));
+        if let Some(token) = &token {
+            request = request.bearer_auth(token);
+        }
+        if let Ok(response) = request.send().await {
+            if let Ok(body) = response.json::<serde_json::Value>().await {
+                let observed = body
+                    .pointer("/data/metadata/annotations/edgion.io~1dns-lookup-family")
+                    .and_then(serde_json::Value::as_str);
+                if observed == Some(value) {
+                    return Ok(());
+                }
+            }
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the Gateway never observed dns-lookup-family={value}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
 
 static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
@@ -43,6 +81,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "family-v6",
         factory: family_v6,
+    },
+    PhaseSuite {
+        name: "family-all",
+        factory: family_all,
     },
     PhaseSuite {
         name: "failing",
@@ -89,6 +131,8 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
                 for (update, phase) in [
                     ("family_default", "family-v4"),
                     ("family_service_v6", "family-v6"),
+                    // Every answer address (IPv4 and IPv6) is a load-balanced endpoint.
+                    ("family_service_all", "family-all"),
                     // Observe inherited IPv4 before checking the Gateway annotation;
                     // an old Service IPv6 snapshot cannot satisfy the next phase.
                     ("family_default", "family-v4"),
@@ -102,6 +146,9 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
                     ("family_restore", "family-v4"),
                 ] {
                     ctx.apply_dir(&format!("updates/{update}")).await?;
+                    if update == "family_gateway_v6" {
+                        wait_gateway_family_annotation(&ctx, "ipv6Only").await?;
+                    }
                     ctx.wait_phase(scenario, phase, Duration::from_secs(15)).await?;
                 }
             } else {

@@ -180,9 +180,17 @@ where
         return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
     }
     // A gateway-mode ExternalName target may still await its first answer
-    // (Service just appeared or the Gateway just started). Bounded; one atomic
+    // (Service just appeared or the Gateway just started). Bounded, at most
+    // once per request (a fallback selection never waits again); one atomic
     // load in the steady state.
-    dns_endpoint_table().wait_first_answer(input.service.key()).await;
+    if !ctx.dns_first_answer_waited && dns_endpoint_table().is_pending(input.service.key()) {
+        ctx.dns_first_answer_waited = true;
+        dns_endpoint_table().wait_first_answer(input.service.key()).await;
+        // The wait may have used up the request's deadline.
+        if let Some(expired) = expired_deadline(ctx) {
+            return Err(expired);
+        }
+    }
     let captured = capture(input.service)?;
     if ctx.response_cache.is_some() {
         crate::response_cache::record_discovery(ctx, captured.response_cache_stamp(input.service));
@@ -312,6 +320,40 @@ fn prefer_undialed(ips: &mut [std::net::IpAddr], dialed: &[std::net::IpAddr]) {
 /// EGC names for the endpoint table.
 static SYSTEM_RESOLVER: ResolverSpec = ResolverSpec::System;
 
+/// Drop unspecified answers (0.0.0.0, ::): a connect turns them into the local
+/// host, and the address-safety check does not classify them as loopback. The
+/// endpoint table's normalizer drops them the same way.
+fn drop_unspecified(ips: &mut Vec<std::net::IpAddr>) {
+    ips.retain(|ip| !ip.to_canonical().is_unspecified());
+}
+
+/// Run a `system`-mode lookup within the caller's connect or end-to-end
+/// budget, like a dialer whose timeout bounds name resolution; the OS
+/// resolver's own limit applies only when there is no budget. `None` when the
+/// budget ran out first (a deadline, not a DNS failure).
+async fn within_budget<F>(budget: Option<std::time::Duration>, lookup: F) -> Option<Result<DnsAnswer, DnsError>>
+where
+    F: Future<Output = Result<DnsAnswer, DnsError>>,
+{
+    match budget {
+        Some(budget) => tokio::time::timeout(budget, lookup).await.ok(),
+        None => Some(lookup.await),
+    }
+}
+
+/// The request's end-to-end deadline that has passed, if any: the same checks
+/// `upstream_peer` runs before selection, for the awaits inside selection.
+fn expired_deadline(ctx: &EdgionHttpContext) -> Option<EdgionErrorCode> {
+    let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
+    if ctx.request_timeout().is_some_and(|timeout| elapsed >= timeout) {
+        Some(EdgionErrorCode::RequestTimeoutExceeded)
+    } else if ctx.grpc_deadline_exceeded() {
+        Some(EdgionErrorCode::GrpcClientDeadlineExceeded)
+    } else {
+        None
+    }
+}
+
 async fn build_system_external_name_peer<'a, R, Fut>(
     ctx: &mut EdgionHttpContext,
     input: &ServicePeerInput<'_>,
@@ -327,17 +369,45 @@ where
     let hostname = external_name(captured)?;
     let port = captured.section().identity.number.get();
     let backend_app_protocol = captured.section().prepared_app_protocol;
+    // The lookup spends the request's end-to-end budget (route request
+    // timeout, gRPC deadline) like the connect that follows it; running out
+    // of it is that deadline's error (504), not a DNS failure.
+    let now = std::time::Instant::now();
+    let request_left = ctx
+        .request_timeout()
+        .map(|timeout| timeout.saturating_sub(now.saturating_duration_since(ctx.start_time)));
+    let grpc_left = ctx
+        .request_info
+        .grpc_client_deadline()
+        .map(|deadline| deadline.saturating_duration_since(now));
+    let (budget, expired) = match (request_left, grpc_left) {
+        (Some(request), Some(grpc)) if grpc < request => (Some(grpc), EdgionErrorCode::GrpcClientDeadlineExceeded),
+        (None, Some(grpc)) => (Some(grpc), EdgionErrorCode::GrpcClientDeadlineExceeded),
+        (request, _) => (request, EdgionErrorCode::RequestTimeoutExceeded),
+    };
     // IP literals short-circuit inside the resolver, under the family policy.
-    let mut ips = resolver(&SYSTEM_RESOLVER, hostname, DnsQueryPolicy::Family(family))
-        .await
-        .map(|answer| answer.addrs)
-        .map_err(|error| {
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.port = Some(port);
-                upstream.err.push(format!("dns resolution failed: {error}").into());
-            }
-            EdgionErrorCode::BackendDnsResolutionFailed
-        })?;
+    let lookup = resolver(&SYSTEM_RESOLVER, hostname, DnsQueryPolicy::Family(family));
+    let Some(answer) = within_budget(budget, lookup).await else {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.port = Some(port);
+        }
+        return Err(expired);
+    };
+    let mut ips = answer.map(|answer| answer.addrs).map_err(|error| {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.port = Some(port);
+            upstream.err.push(format!("dns resolution failed: {error}").into());
+        }
+        EdgionErrorCode::BackendDnsResolutionFailed
+    })?;
+    drop_unspecified(&mut ips);
+    if ips.is_empty() {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.port = Some(port);
+            upstream.err.push("dns answer had no usable address".into());
+        }
+        return Err(EdgionErrorCode::BackendDnsResolutionFailed);
+    }
     // Keep the OS order but rotate the start, so traffic spreads over every
     // address; a retry prefers an address no earlier attempt dialed.
     rotate_addresses(&mut ips, next_address_rotation());
@@ -379,12 +449,65 @@ pub(crate) enum L4ServicePrep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum L4Transport {
     Connection,
+    /// A connection that already waited for a first answer (an earlier
+    /// attempt did): resolves like `Connection` but never waits again.
+    ConnectionRetry,
     Datagram,
 }
 
 /// Longest a UDP datagram waits for a `system`-mode lookup; the lookup keeps
 /// running in the background and fills the shared answer cache.
 const DATAGRAM_DNS_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Datagram lookups that outlived the budget and still run, per hostname and
+/// family. An entry dies with its lookup task.
+type SlowLookups = parking_lot::Mutex<std::collections::HashMap<(Box<str>, DnsLookupFamily), std::sync::Weak<()>>>;
+static SLOW_DATAGRAM_LOOKUPS: std::sync::LazyLock<SlowLookups> = std::sync::LazyLock::new(Default::default);
+
+/// One new UDP session's `system`-mode lookup, on the listener's receive
+/// loop. A cached answer (fresh, stale or negative) is served at the first
+/// poll. Otherwise the datagram waits at most `budget`, and only while no
+/// earlier lookup of the same name is known to be slow; then it is dropped at
+/// once (the client retransmits), so a stalled resolver costs the loop one
+/// budget per lookup instead of one per new source.
+async fn datagram_lookup<F>(
+    key: (Box<str>, DnsLookupFamily),
+    lookup: F,
+    budget: std::time::Duration,
+) -> Option<Vec<std::net::IpAddr>>
+where
+    F: Future<Output = Result<Vec<std::net::IpAddr>, DnsError>> + Send + 'static,
+{
+    let mut lookup = Box::pin(lookup);
+    let first = std::future::poll_fn(|cx| std::task::Poll::Ready(lookup.as_mut().poll(cx))).await;
+    if let std::task::Poll::Ready(result) = first {
+        return result.ok();
+    }
+    let slow = SLOW_DATAGRAM_LOOKUPS
+        .lock()
+        .get(&key)
+        .is_some_and(|alive| alive.strong_count() > 0);
+    if slow {
+        // Dropping the lookup only leaves the flight it queued on.
+        return None;
+    }
+    let alive = Arc::new(());
+    let watch = Arc::downgrade(&alive);
+    let task = tokio::spawn(async move {
+        let _alive = alive;
+        lookup.await
+    });
+    match tokio::time::timeout(budget, task).await {
+        Ok(Ok(result)) => result.ok(),
+        Ok(Err(_)) => None,
+        Err(_) => {
+            let mut slow = SLOW_DATAGRAM_LOOKUPS.lock();
+            slow.retain(|_, alive| alive.strong_count() > 0);
+            slow.insert(key, watch);
+            None
+        }
+    }
+}
 
 impl L4ServicePrep {
     /// The hostname a per-connection (`system`-mode) address was resolved from.
@@ -451,7 +574,7 @@ pub(crate) fn system_mode_hostname(available: &AvailableServiceProjection) -> Op
 pub(crate) async fn prepare_l4_service(
     selected: SelectedL4Backend<'_>,
     gateway_key: Option<&str>,
-    allow_loopback: bool,
+    gateway_config: &crate::config::ResolvedGatewayConfig,
     transport: L4Transport,
     dialed: &[std::net::IpAddr],
 ) -> L4ServicePrep {
@@ -502,37 +625,43 @@ pub(crate) async fn prepare_l4_service(
     let port = section.identity.number.get();
     let query = DnsQueryPolicy::Family(family);
     let ips = match transport {
-        L4Transport::Connection => match resolve_answer(&SYSTEM_RESOLVER, &hostname, query).await {
-            Ok(answer) => answer.addrs,
-            Err(_) => return L4ServicePrep::Failed,
-        },
+        L4Transport::Connection | L4Transport::ConnectionRetry => {
+            // The connect timeout bounds the lookup too.
+            let lookup = resolve_answer(&SYSTEM_RESOLVER, &hostname, query);
+            match within_budget(gateway_config.l4_timeouts.connect_timeout, lookup).await {
+                Some(Ok(answer)) => answer.addrs,
+                Some(Err(_)) | None => return L4ServicePrep::Failed,
+            }
+        }
         L4Transport::Datagram => {
             // Hostname-keyed and single-flight: a flood of new (spoofable)
             // sources cannot multiply queries, and the receive loop waits at
-            // most the budget while the lookup completes in the background.
+            // most the budget once per slow lookup while it completes in the
+            // background.
             let cache_policy = egc
                 .as_ref()
                 .map(|resolved| resolved.cache_policy())
                 .unwrap_or(DnsCachePolicy::new(DEFAULT_DNS_CACHE_TTL));
             let name = hostname.clone();
-            let lookup = tokio::spawn(async move {
+            let lookup = async move {
                 upstream_dns_cache()
                     .lookup(&SYSTEM_RESOLVER, &name, query, &cache_policy)
                     .await
-            });
-            match tokio::time::timeout(DATAGRAM_DNS_BUDGET, lookup).await {
-                Ok(Ok(Ok(addrs))) => addrs,
-                _ => return L4ServicePrep::Failed,
+            };
+            match datagram_lookup((hostname.clone(), family), lookup, DATAGRAM_DNS_BUDGET).await {
+                Some(addrs) => addrs,
+                None => return L4ServicePrep::Failed,
             }
         }
     };
     let mut ips = ips;
+    drop_unspecified(&mut ips);
     rotate_addresses(&mut ips, next_address_rotation());
     // A retry of the same connection tries addresses it has not dialed yet.
     prefer_undialed(&mut ips, dialed);
     // An unsafe-only answer still yields an address so the caller's own
     // address-safety check rejects it with its usual status.
-    let addr = match first_safe_inet_addr(&ips, port, allow_loopback) {
+    let addr = match first_safe_inet_addr(&ips, port, gateway_config.allow_loopback_upstream) {
         Ok(addr) => addr,
         Err(_) => match ips.first() {
             Some(ip) => SocketAddr::Inet(std::net::SocketAddr::new(*ip, port)),
@@ -737,6 +866,19 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
     }
 }
 
+/// A deadline that ran out during peer selection: 504 (gRPC: DEADLINE_EXCEEDED),
+/// exactly like `upstream_peer`'s own pre-selection checks.
+pub(crate) fn deadline_exceeded(ctx: &mut EdgionHttpContext, status: EdgionErrorCode) -> Box<PingoraError> {
+    ctx.record_error(status);
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.status = Some(504);
+    }
+    PingoraError::explain(
+        ErrorType::HTTPStatus(504),
+        "deadline exceeded during upstream selection",
+    )
+}
+
 /// Get HTTP peer from service and endpoint slice stores using load balancing
 ///
 /// On error, sets error status to ctx and sends an error response:
@@ -758,6 +900,9 @@ pub async fn get_peer(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     match try_get_peer(ctx, session, is_grpc, selected_http).await {
         Ok(peer) => Ok(peer),
+        Err(status @ (EdgionErrorCode::RequestTimeoutExceeded | EdgionErrorCode::GrpcClientDeadlineExceeded)) => {
+            Err(deadline_exceeded(ctx, status))
+        }
         Err(status) => {
             ctx.record_error(status);
             match status {

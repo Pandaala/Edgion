@@ -95,7 +95,7 @@ pub(super) async fn resolve_tls_service_attempt<'a>(
     unit: &'a TlsRouteUnit,
     ctx: &mut TlsContext,
     gateway_key: Option<&str>,
-    allow_loopback: bool,
+    gateway_config: &crate::config::ResolvedGatewayConfig,
 ) -> TlsBackendAttempt<'a, Arc<crate::lb::LbBackend>> {
     let Some(selected) = select_tls_backend(unit, ctx) else {
         return TlsBackendAttempt::Terminal;
@@ -107,14 +107,17 @@ pub(super) async fn resolve_tls_service_attempt<'a>(
         .iter()
         .filter_map(|info| info.addr.as_deref()?.parse().ok())
         .collect();
-    let prep = crate::backends::prepare_l4_service(
-        selected,
-        gateway_key,
-        allow_loopback,
-        crate::backends::L4Transport::Connection,
-        &dialed,
-    )
-    .await;
+    // One first-answer wait per connection, on whichever attempt first meets
+    // a pending target, so the wait stays bounded per connection.
+    let transport = if ctx.dns_first_answer_waited {
+        crate::backends::L4Transport::ConnectionRetry
+    } else {
+        ctx.dns_first_answer_waited = selected
+            .service()
+            .is_ok_and(|target| crate::backends::dns_endpoint_table().is_pending(target.key()));
+        crate::backends::L4Transport::Connection
+    };
+    let prep = crate::backends::prepare_l4_service(selected, gateway_key, gateway_config, transport, &dialed).await;
     if prep.is_failed() {
         // A DNS failure is not retried with the same lookup: end the connection.
         ctx.err_log = Some(crate::routes::common::L4_DNS_RESOLUTION_FAILED_LOG.to_owned());

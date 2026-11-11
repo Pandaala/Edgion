@@ -63,7 +63,8 @@ run_all_serve_lifecycle()
 ```
 
 All replicas independently run K8s watchers and can publish a ConfigSyncServer. The Leader additionally
-writes status, runs ACME, rotates the conf-sync CA, runs the DNS resolver, and performs a full requeue on acquisition.
+writes status, runs ACME, rotates the conf-sync CA, and performs a full requeue on acquisition. The DNS
+resolver runs in every replica that runs the resource pipeline (see [01-ha-mode.md](01-ha-mode.md)).
 For a detailed comparison see [01-ha-mode.md](01-ha-mode.md).
 
 ## Source snapshots and initial readiness
