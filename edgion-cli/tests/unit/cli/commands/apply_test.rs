@@ -91,7 +91,13 @@ fn cli_apply_without_file_flag_fails() {
 
 #[tokio::test]
 async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() {
-    let client = EdgionClient::new(crate::cli::TargetType::Center, None, None).unwrap();
+    let client = EdgionClient::new(
+        crate::cli::TargetType::Center,
+        None,
+        None,
+        &crate::cli::client::ServerTrust::System,
+    )
+    .unwrap();
     for (valid, invalid) in [(0, 0), (2, 0), (0, 2), (1, 1)] {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ignored.txt"), "not yaml").unwrap();
@@ -119,7 +125,13 @@ async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() 
 
 #[tokio::test]
 async fn batch_dry_run_propagates_directory_and_single_file_failures() {
-    let client = EdgionClient::new(crate::cli::TargetType::Center, None, None).unwrap();
+    let client = EdgionClient::new(
+        crate::cli::TargetType::Center,
+        None,
+        None,
+        &crate::cli::client::ServerTrust::System,
+    )
+    .unwrap();
     let root = tempfile::tempdir().unwrap();
     let failed_dir = root.path().join("failed");
     std::fs::create_dir(&failed_dir).unwrap();
@@ -172,7 +184,13 @@ async fn create_conflict_falls_back_to_update() {
         "apiVersion: v1\nkind: Secret\nmetadata:\n  name: race\n  namespace: edgion-test\n",
     )
     .unwrap();
-    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let client = EdgionClient::new(
+        crate::cli::TargetType::Center,
+        Some(server.uri()),
+        None,
+        &crate::cli::client::ServerTrust::System,
+    )
+    .unwrap();
     let result = apply(&client, file.to_str().unwrap(), false).await;
     let _ = std::fs::remove_file(&file);
     assert!(result.is_ok(), "{result:?}");
@@ -205,7 +223,13 @@ async fn create_validation_error_is_not_retried_as_update() {
         "apiVersion: v1\nkind: Secret\nmetadata:\n  name: bad\n  namespace: edgion-test\n",
     )
     .unwrap();
-    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let client = EdgionClient::new(
+        crate::cli::TargetType::Center,
+        Some(server.uri()),
+        None,
+        &crate::cli::client::ServerTrust::System,
+    )
+    .unwrap();
     let result = apply(&client, file.to_str().unwrap(), false).await;
     let _ = std::fs::remove_file(&file);
     assert!(result.is_err());
@@ -242,7 +266,13 @@ async fn not_leader_conflict_is_reported_and_not_retried_as_update() {
         "apiVersion: v1\nkind: Secret\nmetadata:\n  name: standby\n  namespace: edgion-test\n",
     )
     .unwrap();
-    let client = EdgionClient::new(crate::cli::TargetType::Center, Some(server.uri()), None).unwrap();
+    let client = EdgionClient::new(
+        crate::cli::TargetType::Center,
+        Some(server.uri()),
+        None,
+        &crate::cli::client::ServerTrust::System,
+    )
+    .unwrap();
     let result = apply(&client, file.to_str().unwrap(), false).await;
     let _ = std::fs::remove_file(&file);
     let error = format!("{:#}", result.unwrap_err());

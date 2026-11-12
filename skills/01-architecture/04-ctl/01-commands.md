@@ -274,7 +274,7 @@ Authentication is **token-only** (Istio-style pre-shared bearer token). `login` 
 edgion-cli login --token <edg_…>
 ```
 
-`--token` is required (omitting it is a parse error). The token is saved to `~/.edgion/token`; the command optionally probes `/api/v1/auth/status` for a friendly warning but persists the token either way. To mint a token, use `edgion-cli gen-token`.
+`--token` is required (omitting it is a parse error). The token is saved to `~/.edgion/token`; the command optionally probes `/api/v1/auth/status` for a friendly warning but persists the token either way. The probe uses `--ca-cert` when given; an unusable CA file skips the probe with a warning instead of failing the command. To mint a token, use `edgion-cli gen-token`.
 
 ### Module location
 

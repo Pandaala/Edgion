@@ -1,8 +1,8 @@
 // Apply / delete helpers for dynamic integration scenarios.
 //
 // API reference (cross-checked with edgion-cli src/cli/{client,commands}.rs):
-//   EdgionClient::new(target: TargetType, server: Option<String>, socket: Option<PathBuf>)
-//                     -> Result<Self>
+//   EdgionClient::new(target: TargetType, server: Option<String>, socket: Option<PathBuf>,
+//                     trust: &ServerTrust) -> Result<Self>
 //   delete(client, kind: Option<&str>, name: Option<&str>, namespace: Option<&str>,
 //          file: Option<&str>) -> Result<()>
 //
@@ -15,7 +15,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use edgion_cli::cli::client::{handle_response, EdgionClient};
+use edgion_cli::cli::client::{handle_response, EdgionClient, ServerTrust};
 use edgion_cli::cli::commands::delete::delete;
 use edgion_cli::cli::TargetType;
 use edgion_resources::resource::meta::extract_resource_metadata;
@@ -29,11 +29,17 @@ pub fn build_client(controller_url: &str) -> Result<EdgionClient> {
             TargetType::Center,
             Some(controller_url.to_string()),
             None,
+            &ServerTrust::System,
             token.as_str(),
         )
         .context("Failed to build EdgionClient (bearer) for scenario"),
-        None => EdgionClient::new(TargetType::Center, Some(controller_url.to_string()), None)
-            .context("Failed to build EdgionClient for scenario"),
+        None => EdgionClient::new(
+            TargetType::Center,
+            Some(controller_url.to_string()),
+            None,
+            &ServerTrust::System,
+        )
+        .context("Failed to build EdgionClient for scenario"),
     }
 }
 
@@ -189,7 +195,7 @@ pub async fn delete_list(client: &EdgionClient, list_file: &Path) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::{apply_yaml_documents, split_yaml_docs};
-    use edgion_cli::cli::client::EdgionClient;
+    use edgion_cli::cli::client::{EdgionClient, ServerTrust};
     use edgion_cli::cli::TargetType;
     use std::path::Path;
     use wiremock::matchers::{method, path, path_regex};
@@ -234,7 +240,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = EdgionClient::new(TargetType::Center, Some(server.uri()), None).unwrap();
+        let client = EdgionClient::new(TargetType::Center, Some(server.uri()), None, &ServerTrust::System).unwrap();
         let source = Path::new("rendered-consumers.yaml");
         let yaml = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: first, namespace: test}\ndata: {token: secret-first}\n---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: second, namespace: test}\n---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: third, namespace: test}\n";
         let error = apply_yaml_documents(&client, source, yaml)

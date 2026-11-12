@@ -82,7 +82,7 @@ fn non_regular_bundle_is_rejected() {
 
 #[test]
 fn oversized_bundle_is_rejected() {
-    let file = write_temp(&vec![b'\n'; MAX_BUNDLE_BYTES as usize + 1]);
+    let file = write_temp(&vec![b'\n'; MAX_CA_FILE_BYTES as usize + 1]);
     let error = SystemTrust::load(file.path()).err().unwrap();
     assert!(format!("{error:#}").contains("exceeds"));
 }

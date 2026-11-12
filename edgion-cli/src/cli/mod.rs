@@ -5,10 +5,11 @@ pub mod output;
 pub mod token;
 
 use anyhow::Result;
+use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use client::EdgionClient;
+use client::{EdgionClient, ServerTrust};
 use output::OutputFormat;
 
 /// Target type for edgion-cli commands
@@ -65,6 +66,18 @@ pub struct Cli {
     /// NOTE: `-t` is taken by `--target`; this flag is long-only.
     #[arg(long, value_name = "TOKEN")]
     pub token: Option<String>,
+
+    /// PEM file of CA certificates that verify an `https://` server (and an
+    /// `https://` proxy). It replaces the OS CA bundle (use it for a private CA).
+    /// An empty value means unset. Commands that do not contact the Edgion server
+    /// never read it.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "EDGION_CA_CERT",
+        value_parser = OsStringValueParser::new().map(PathBuf::from)
+    )]
+    pub ca_cert: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -186,7 +199,7 @@ impl Cli {
                     }
                 )
             });
-            return commands::login::login(&base_url, token).await;
+            return commands::login::login(&base_url, token, self.ca_cert.as_deref()).await;
         }
 
         // GenToken does not contact the controller at all — short-circuit before auth
@@ -226,12 +239,14 @@ impl Cli {
         // ensure_auth entirely. Lazy validation: the first real request returns
         // 401 (unknown token) or 403 (denied).
         let cli_token = auto_auth::resolve_token(self.token.as_deref());
+        let trust = ServerTrust::from_ca_cert(self.ca_cert.as_deref())?;
 
         if let Some(bearer) = cli_token {
             let client = EdgionClient::with_static_bearer(
                 self.target,
                 self.server.clone(),
                 self.socket.clone(),
+                &trust,
                 bearer.as_str(),
             )?;
             return self.dispatch(client).await;
@@ -239,7 +254,7 @@ impl Cli {
 
         // No token anywhere: create a token-less client and run the friendly
         // pre-flight check (prints an actionable message if a token is required).
-        let mut client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone())?;
+        let mut client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone(), &trust)?;
 
         client.ensure_auth().await?;
 

@@ -12,7 +12,7 @@ impl EdgionClient {
 /// Build an `EdgionClient` pointed at `base_url` with no cached token.
 fn make_client(base_url: String) -> EdgionClient {
     // Use the production transport so no process-wide rustls provider is needed.
-    let client = build_cli_client().expect("cli client");
+    let client = build_cli_client(&ServerTrust::System).expect("cli client");
     EdgionClient {
         client,
         base_url,
@@ -171,8 +171,14 @@ async fn ensure_auth_bails_on_unreachable() {
 /// file-cached token.
 #[test]
 fn with_static_bearer_sets_token() {
-    let c = EdgionClient::with_static_bearer(crate::cli::TargetType::Center, None, None, "edg_testtoken")
-        .expect("constructor");
+    let c = EdgionClient::with_static_bearer(
+        crate::cli::TargetType::Center,
+        None,
+        None,
+        &ServerTrust::System,
+        "edg_testtoken",
+    )
+    .expect("constructor");
     // The stored token must be the supplied bearer, not None
     assert_eq!(c.token_for_test(), Some("edg_testtoken"));
     let request = c
@@ -192,6 +198,7 @@ fn with_static_bearer_uses_supplied_url() {
         crate::cli::TargetType::Center,
         Some("http://localhost:9999".to_string()),
         None,
+        &ServerTrust::System,
         "edg_abc",
     )
     .expect("constructor");
@@ -226,7 +233,7 @@ fn diagnostic_origin_excludes_request_data() {
 
 #[test]
 fn request_diagnostics_remove_explicit_and_sdk_urls() {
-    let client = build_cli_client().expect("cli client");
+    let client = build_cli_client(&ServerTrust::System).expect("cli client");
     for target in [TargetType::Center, TargetType::Server, TargetType::Client] {
         let error = client.get("http://[").build().unwrap_err().with_url(
             reqwest::Url::parse("https://sdk-user:sdk-secret@example.org/sdk-path?token=sdk-query#sdk-fragment")

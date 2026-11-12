@@ -20,12 +20,27 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--server` | - | 服务器地址 | 根据 target 自动选择 |
 | `--socket` | - | Unix socket 路径 | - |
 | `--token` | - | 静态 CLI Token（长选项，`-t` 已被 `--target` 占用） | - |
+| `--ca-cert` | - | 验证 `https://` 服务器的 CA 证书 PEM 文件，替换 OS CA 包；也可用 `EDGION_CA_CERT` 设置（见下文） | - |
 | `--help` | `-h` | 显示帮助信息 | - |
 | `--version` | `-V` | 显示版本信息 | - |
 
-`--server` 使用 `https://` 时，CLI 用本机固定路径的 OS CA 包验证服务器证书
+`--server` 使用 `https://` 且未指定 `--ca-cert` 时，CLI 用本机固定路径的 OS CA 包验证服务器证书
 （按顺序取 `/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件），不读取 `SSL_CERT_FILE` 和 macOS 钥匙串。主机上没有这样的 CA 包时，
 CLI 会打印警告，HTTPS 验证失败。
+
+服务器证书由私有 CA 签发时，用 `--ca-cert <PATH>` 指定该 CA（也可以设置 `EDGION_CA_CERT`；命令行参数优先，空值视为未设置）：
+
+- 只信任该文件中的证书，不会再叠加 OS CA 包。这同样适用于 `HTTPS_PROXY` 指定的 `https://` 代理：需要把代理的 CA 也放进这个文件。
+- 文件可以包含多张证书，证书之间可以有说明文字（注释、`openssl x509 -text` 的输出）。重复的证书会被忽略；去重后最多 1024 张证书（PEM 形式不超过 1 MiB）。
+  不支持 `TRUSTED CERTIFICATE` 块，请先用 `openssl storeutl -certs <file>`（OpenSSL 3）转换整个文件。
+- 可以是管道，例如取 Kubernetes Secret 中保存的 CA：
+  `--ca-cert <(kubectl -n <namespace> get secret <name> -o jsonpath='{.data.ca\.crt}' | base64 -d)`。
+- 所有连接 Edgion 服务器的命令都会读取它（即使服务器是 `http://`），文件不存在、无法读取或格式无效时命令直接失败。
+  `login` 例外：它会打印警告并跳过服务器探测，Token 仍然会保存。不连接 Edgion 服务器的命令（`gen-certs`、`gen-token`、`wasm`、`waf`）不会读取它。
+
+```bash
+edgion-cli --server https://edgion-controller.example.com:12101 --ca-cert ./corp-ca.pem get httproute
+```
 
 `edgion-cli` 采用**纯 Token**方式：使用单个 Bearer Token（Istio 风格）向 Controller Admin API 认证。CLI 中不再有用户名/密码登录，也没有 OIDC。Token 可以是本地管理员 Token，也可以是以 `edg_` 为前缀的 `cli_tokens` Token。Token 优先级（从高到低）：
 

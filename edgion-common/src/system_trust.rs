@@ -32,8 +32,10 @@ pub const SYSTEM_CA_FILES: [&str; 3] = [
     "/etc/ssl/cert.pem",
 ];
 
-/// Upper bound for a CA bundle file. Distribution bundles are well below 1 MiB.
-const MAX_BUNDLE_BYTES: u64 = 8 * 1024 * 1024;
+/// Upper bound for reading a CA bundle file: the OS bundle, or a local CA file
+/// such as `edgion-cli --ca-cert`. Distribution bundles are well below 1 MiB;
+/// text between certificate blocks can make a file larger.
+pub const MAX_CA_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// PEM labels that carry a certificate rustls does not load. BoringSSL loads
 /// them, so they are reported as skipped.
@@ -208,17 +210,17 @@ fn load_bundle(path: &Path) -> Result<ParsedBundle> {
     parse_bundle(&bytes).with_context(|| format!("failed to parse CA file {}", path.display()))
 }
 
-/// Read at most [`MAX_BUNDLE_BYTES`] from a regular file. The type check runs
+/// Read at most [`MAX_CA_FILE_BYTES`] from a regular file. The type check runs
 /// before `open` so a FIFO cannot block startup, and again on the handle.
 fn read_bundle(path: &Path) -> Result<Vec<u8>> {
     anyhow::ensure!(std::fs::metadata(path)?.is_file(), "not a regular file");
     let file = std::fs::File::open(path)?;
     anyhow::ensure!(file.metadata()?.is_file(), "not a regular file");
     let mut bytes = Vec::new();
-    file.take(MAX_BUNDLE_BYTES + 1).read_to_end(&mut bytes)?;
+    file.take(MAX_CA_FILE_BYTES + 1).read_to_end(&mut bytes)?;
     anyhow::ensure!(
-        bytes.len() as u64 <= MAX_BUNDLE_BYTES,
-        "file exceeds {MAX_BUNDLE_BYTES} bytes"
+        bytes.len() as u64 <= MAX_CA_FILE_BYTES,
+        "file exceeds {MAX_CA_FILE_BYTES} bytes"
     );
     Ok(bytes)
 }
@@ -240,6 +242,17 @@ fn parse_bundle(bytes: &[u8]) -> Result<ParsedBundle> {
     Ok(bundle)
 }
 
+/// Whether a line of `bytes` begins a certificate block that rustls cannot load
+/// (`TRUSTED CERTIFICATE`, `X509 CERTIFICATE`). Like the PEM parser, only a label
+/// at the start of a line counts, so a comment that mentions one does not.
+pub(crate) fn has_unsupported_certificate_labels(bytes: &[u8]) -> bool {
+    bytes.split(|byte| *byte == b'\n').any(|line| {
+        UNSUPPORTED_CERTIFICATE_LABELS
+            .iter()
+            .any(|label| line.starts_with(label))
+    })
+}
+
 fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
         .windows(needle.len())
@@ -247,7 +260,8 @@ fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
         .count()
 }
 
-fn encode_pem(certificates: &[CertificateDer<'static>]) -> Vec<u8> {
+/// Re-encode certificates as plain PEM (64-character lines, no other text).
+pub(crate) fn encode_pem(certificates: &[CertificateDer<'static>]) -> Vec<u8> {
     let engine = base64::engine::general_purpose::STANDARD;
     let mut pem = Vec::new();
     for cert in certificates {

@@ -131,6 +131,15 @@ policy. TLS/client construction failure must never select an unconfigured client
   `with_native_roots`, `rustls-native-certs`); see
   `skills/04-review/tls/regression-guards/system-ca-single-trust-store.md` for
   the exempt non-`System` clients (ACME, kube-client).
+- **Local CA file (CLI only)**: `link_sys_core::tls::build_custom_ca_http_rustls_config`
+  builds verified HTTP TLS from a local CA file without the resolver. Its sole
+  sanctioned consumer is `edgion-cli --ca-cert`, which has no resource or
+  EdgionGatewayConfig to resolve; the file replaces System like
+  `caCertificateRefs`. Parsing tolerates text between PEM blocks and then applies
+  the canonical CA-bundle checks, so the same bytes can pass here and fail as a
+  Kubernetes Secret. Gateway and Controller trust must not use it (that would
+  reintroduce the rejected `system_ca_file`-style setting); re-evaluate if a
+  non-CLI caller appears.
 - Backend policy consumers use its pure `resolve_outbound_tls_with_defaults`
   entry with explicit defaults, so LinkSys global trust or client credentials
   cannot override backend identity. Configuration audit logging remains in

@@ -115,8 +115,10 @@ errors remove reqwest's attached URL before rendering, including nested error
 chains. Get hints and best-effort login warnings use the same projection; actual
 request URLs, bearer authentication and token persistence are unchanged.
 
-EdgionClient provides detailed network-error diagnostics:
+EdgionClient provides detailed network-error diagnostics. `Details` renders the
+whole cause chain (`cli::client::error_chain`), and the hints match against it:
 - Connection refused → suggests the corresponding component (controller/gateway) may not be running
+- Invalid peer certificate → suggests passing a private CA with `--ca-cert` (token path only; the token-less `ensure_auth` path shows the cause chain without the hint)
 - DNS resolution failed → suggests checking the hostname
 - Timeout → suggests the service may be overloaded
 - Generic connection error → suggests checking the server address
@@ -169,6 +171,7 @@ edgion-cli -t client get httproute -o json | jq length
 | `--server` | | Server address (e.g., `http://10.0.0.1:12101`) |
 | `--socket` | | Reserved; currently ignored |
 | `--token` | | Bearer token; overrides the environment and token file |
+| `--ca-cert` | | CA PEM file for `https://` servers and proxies (env `EDGION_CA_CERT`; empty means unset); replaces the OS CA bundle. Loaded by `cli::client::ServerTrust` only for commands that contact the Edgion server; an unusable file fails them, while `login` warns and skips its probe |
 | `--namespace` | `-n` | `get` / `delete` namespace filter |
 | `--output` | `-o` | `get` format: table, json, yaml, wide |
 | `--file` | `-f` | `apply` / `delete` file or directory path |

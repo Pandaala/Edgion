@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
-use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+use edgion_common::link_sys_core::http_client::{OutboundClientConfig, OutboundRedirect};
+use std::path::Path;
 use std::time::Duration;
 
-use crate::cli::client::diagnostic_origin;
+use crate::cli::client::{diagnostic_origin, error_chain, login_probe_trust, ServerTrust};
 use crate::cli::token::save_token;
 
 /// Execute the `login` command.
@@ -16,13 +17,17 @@ use crate::cli::token::save_token;
 /// when the controller is unreachable or its auth subsystem is not ready. The
 /// probe never blocks persisting: the token is saved regardless, since the token
 /// is validated lazily by the first real API call (401 = unknown, 403 = denied).
-pub async fn login(base_url: &str, token: &str) -> Result<()> {
+/// The probe uses `ca_cert` (`--ca-cert`); an unusable file skips the probe with a
+/// warning.
+pub async fn login(base_url: &str, token: &str, ca_cert: Option<&Path>) -> Result<()> {
     if token.is_empty() {
         anyhow::bail!("Token cannot be empty");
     }
 
     // Optional reachability/readiness probe — best-effort, never fatal.
-    probe_status(base_url).await;
+    if let Some(trust) = login_probe_trust(ca_cert) {
+        probe_status(base_url, &trust).await;
+    }
 
     // Persist the token to ~/.edgion/token (0600).
     save_token(token).context("Failed to save token")?;
@@ -34,12 +39,12 @@ pub async fn login(base_url: &str, token: &str) -> Result<()> {
 /// Best-effort `GET /api/v1/auth/status` probe. Prints a friendly hint when the
 /// controller is unreachable or its auth subsystem is not ready, but never fails
 /// the command — the token is persisted either way.
-async fn probe_status(base_url: &str) {
+async fn probe_status(base_url: &str, trust: &ServerTrust) {
     let url = format!("{}/api/v1/auth/status", base_url);
     // Built through the canonical factory (design rule D.1). `disable_proxy` is
     // left false on purpose: this is an operator-run CLI that must be able to
     // reach a controller through a corporate `HTTP(S)_PROXY`.
-    let Ok(client) = build_outbound_client(OutboundClientConfig {
+    let Ok(client) = trust.build_client(OutboundClientConfig {
         total_timeout: Some(Duration::from_secs(5)),
         redirect: OutboundRedirect::Deny,
         disable_proxy: false,
@@ -58,8 +63,12 @@ async fn probe_status(base_url: &str) {
                 resp.status()
             );
         }
-        Err(_) => {
-            eprintln!("warning: could not reach {} (token saved anyway).", origin);
+        Err(error) => {
+            eprintln!(
+                "warning: could not reach {}: {} (token saved anyway).",
+                origin,
+                error_chain(&error.without_url())
+            );
         }
     }
 }

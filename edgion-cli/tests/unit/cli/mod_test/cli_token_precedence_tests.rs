@@ -7,8 +7,14 @@ use super::TargetType;
 #[test]
 fn flag_token_injected_as_static_bearer() {
     let bearer = "edg_flagtoken";
-    let c = EdgionClient::with_static_bearer(TargetType::Center, None, None, bearer)
-        .expect("with_static_bearer must succeed");
+    let c = EdgionClient::with_static_bearer(
+        TargetType::Center,
+        None,
+        None,
+        &crate::cli::client::ServerTrust::System,
+        bearer,
+    )
+    .expect("with_static_bearer must succeed");
     // The stored token must be the exact flag value (use the test accessor)
     assert_eq!(c.token_for_test(), Some(bearer));
 }

@@ -2,6 +2,7 @@
 #[path = "support/reqwest_tls_peer.rs"]
 mod peer;
 use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
+use edgion_common::link_sys_core::tls::build_custom_ca_http_rustls_config;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
 use edgion_resources::resources::common::{CustomCACertificateRef, SecretObjectReference, TlsConfig};
 use k8s_openapi::{api::core::v1::Secret, ByteString};
@@ -109,4 +110,34 @@ async fn canonical_tls_preserves_trust_mtls_alpn_and_insecure_identity_omission(
     success(&insecure, &a).await;
     drop(insecure);
     assert_eq!(a.finish().await.unwrap().client_certificates, 0);
+}
+/// The local CA file path (edgion-cli `--ca-cert`) trusts its CA and rejects another
+/// private CA. Replacing System roots is structural: the custom root store starts empty.
+#[tokio::test]
+async fn local_ca_file_config_trusts_its_ca_and_rejects_others() {
+    let first = Material::new();
+    let second = Material::new();
+    let file_client = |ca: &str| {
+        build_outbound_client(OutboundClientConfig {
+            preconfigured_tls: Some(build_custom_ca_http_rustls_config(ca.as_bytes()).unwrap()),
+            disable_proxy: true,
+            connect_timeout: Some(Duration::from_secs(2)),
+            total_timeout: Some(Duration::from_secs(3)),
+            ..Default::default()
+        })
+        .unwrap()
+    };
+    let a = Peer::start(&first, None).await;
+    // Text between blocks is ignored, as OpenSSL ignores it in a CA file.
+    let trusted = file_client(&format!("# comment\n{}\nCertificate: text dump\n", first.ca));
+    success(&trusted, &a).await;
+    drop(trusted);
+    assert_eq!(a.finish().await.unwrap().alpn, b"h2");
+    let a = Peer::start(&first, None).await;
+    let untrusted = file_client(&second.ca);
+    assert!(untrusted.get(a.url()).send().await.is_err());
+    drop(untrusted);
+    assert!(a.finish().await.is_err());
+    assert!(build_custom_ca_http_rustls_config(b"").is_err());
+    assert!(build_custom_ca_http_rustls_config(b"not a certificate").is_err());
 }

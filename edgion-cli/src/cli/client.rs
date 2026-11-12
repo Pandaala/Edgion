@@ -1,8 +1,10 @@
 use anyhow::{bail, Context, Result};
 use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+use edgion_common::link_sys_core::tls::build_custom_ca_http_rustls_config;
 use reqwest::{Client, Response};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use zeroize::Zeroizing;
 
@@ -35,6 +37,96 @@ fn build_list_url_with_pagination(base: &str, limit: Option<u32>, continue_token
     Ok(url.to_string())
 }
 
+/// Which CA certificates verify an `https://` server, and an `https://` proxy
+/// (reqwest uses the same TLS configuration for both).
+#[derive(Clone, Default)]
+pub enum ServerTrust {
+    /// The OS CA bundle (`edgion_common::system_trust`).
+    #[default]
+    System,
+    /// Only the certificates in `--ca-cert` / `EDGION_CA_CERT`; replaces System.
+    CaFile {
+        path: PathBuf,
+        tls: Box<rustls::ClientConfig>,
+    },
+}
+
+impl std::fmt::Debug for ServerTrust {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::System => f.write_str("System"),
+            Self::CaFile { path, .. } => f.debug_struct("CaFile").field("path", path).finish_non_exhaustive(),
+        }
+    }
+}
+
+impl ServerTrust {
+    /// Load `--ca-cert` (or `EDGION_CA_CERT`) when given; an empty path means
+    /// unset. The file is read with a bound and validated up front, so a bad file
+    /// fails the command instead of surfacing later as an opaque handshake error.
+    /// It is read even for an `http://` server, so a stale setting is reported.
+    /// Pipes are accepted, so `--ca-cert <(...)` works; as with curl, a FIFO
+    /// with no writer blocks.
+    pub fn from_ca_cert(path: Option<&Path>) -> Result<Self> {
+        let Some(path) = path.filter(|path| !path.as_os_str().is_empty()) else {
+            return Ok(Self::System);
+        };
+        let limit = edgion_common::system_trust::MAX_CA_FILE_BYTES;
+        let mut pem = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit + 1).read_to_end(&mut pem))
+            .with_context(|| format!("failed to read CA certificate file {}", path.display()))?;
+        if pem.len() as u64 > limit {
+            bail!("CA certificate file {} exceeds {} bytes", path.display(), limit);
+        }
+        let tls = build_custom_ca_http_rustls_config(&pem)
+            .with_context(|| format!("invalid CA certificate file {}", path.display()))?;
+        Ok(Self::CaFile {
+            path: path.to_path_buf(),
+            tls: Box::new(tls),
+        })
+    }
+
+    /// Build a CLI HTTP client from `cfg` with this trust applied. `System`
+    /// keeps the factory's System-root default.
+    pub(crate) fn build_client(&self, cfg: OutboundClientConfig) -> Result<Client> {
+        let preconfigured_tls = match self {
+            Self::System => None,
+            Self::CaFile { tls, .. } => Some(rustls::ClientConfig::clone(tls)),
+        };
+        build_outbound_client(OutboundClientConfig {
+            preconfigured_tls,
+            ..cfg
+        })
+    }
+}
+
+/// `login` uses the trust only for its best-effort probe, which never blocks
+/// saving the token: an unusable CA file skips the probe with a warning.
+pub(crate) fn login_probe_trust(path: Option<&Path>) -> Option<ServerTrust> {
+    match ServerTrust::from_ca_cert(path) {
+        Ok(trust) => Some(trust),
+        Err(error) => {
+            eprintln!("warning: {error:#}; skipping the server probe (the token is still saved).");
+            None
+        }
+    }
+}
+
+/// Render an error with its cause chain. reqwest's own message ("error sending
+/// request") hides the cause, such as a TLS verification failure. Callers pass
+/// an error whose URL was already removed with `without_url`.
+pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut rendered = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    rendered
+}
+
 /// Default server ports for different targets
 const DEFAULT_PORT_CENTER: u16 = 12101; // Controller ConfCenter CRUD API
 const DEFAULT_PORT_SERVER: u16 = 12101; // Controller ConfigServer cache
@@ -54,24 +146,26 @@ const DEFAULT_PORT_CLIENT: u16 = 12001; // Gateway admin
 ///   PUT/POST per document) would otherwise pay a fresh TCP (and TLS) handshake
 ///   per request. A CLI process talks to exactly one host, so a small bound is
 ///   enough to keep the connection warm across a serial command.
-fn build_cli_client() -> Result<Client> {
-    build_outbound_client(OutboundClientConfig {
-        total_timeout: Some(Duration::from_secs(10)),
-        connect_timeout: Some(Duration::from_secs(5)),
-        pool_max_idle_per_host: Some(2),
-        // The admin API never redirects; following one would silently carry the
-        // bearer token across an https -> http downgrade on the same host.
-        redirect: OutboundRedirect::Deny,
-        disable_proxy: false,
-        ..Default::default()
-    })
-    .context("Failed to create HTTP client")
+fn build_cli_client(trust: &ServerTrust) -> Result<Client> {
+    trust
+        .build_client(OutboundClientConfig {
+            total_timeout: Some(Duration::from_secs(10)),
+            connect_timeout: Some(Duration::from_secs(5)),
+            pool_max_idle_per_host: Some(2),
+            // The admin API never redirects; following one would silently carry the
+            // bearer token across an https -> http downgrade on the same host.
+            redirect: OutboundRedirect::Deny,
+            disable_proxy: false,
+            ..Default::default()
+        })
+        .context("Failed to create HTTP client")
 }
 
-/// An `https://` server is verified against the OS CA bundle. Without one,
-/// every handshake fails with an opaque `UnknownIssuer`, so say why up front.
-fn warn_if_system_trust_unavailable(base_url: &str) {
-    if !base_url.to_ascii_lowercase().starts_with("https://") {
+/// Without `--ca-cert`, an `https://` server is verified against the OS CA
+/// bundle. Without one, every handshake fails with an opaque `UnknownIssuer`,
+/// so say why up front.
+fn warn_if_system_trust_unavailable(base_url: &str, trust: &ServerTrust) {
+    if !matches!(trust, ServerTrust::System) || !base_url.to_ascii_lowercase().starts_with("https://") {
         return;
     }
     if let edgion_common::system_trust::SystemTrustSource::Unavailable(reason) =
@@ -96,8 +190,13 @@ impl EdgionClient {
     /// `EDGION_TOKEN`, or `~/.edgion/token`), this token-less client is created so
     /// `ensure_auth` can print a friendly "no token configured" message. With a
     /// resolved token the caller uses `with_static_bearer` instead.
-    pub fn new(target: TargetType, server: Option<String>, _socket: Option<PathBuf>) -> Result<Self> {
-        let client = build_cli_client()?;
+    pub fn new(
+        target: TargetType,
+        server: Option<String>,
+        _socket: Option<PathBuf>,
+        trust: &ServerTrust,
+    ) -> Result<Self> {
+        let client = build_cli_client(trust)?;
 
         let base_url = server.unwrap_or_else(|| {
             let port = match target {
@@ -107,7 +206,7 @@ impl EdgionClient {
             };
             format!("http://localhost:{}", port)
         });
-        warn_if_system_trust_unavailable(&base_url);
+        warn_if_system_trust_unavailable(&base_url, trust);
 
         Ok(Self {
             client,
@@ -125,9 +224,10 @@ impl EdgionClient {
         target: TargetType,
         server: Option<String>,
         _socket: Option<PathBuf>,
+        trust: &ServerTrust,
         bearer: &str,
     ) -> Result<Self> {
-        let client = build_cli_client()?;
+        let client = build_cli_client(trust)?;
 
         let base_url = server.unwrap_or_else(|| {
             let port = match target {
@@ -137,7 +237,7 @@ impl EdgionClient {
             };
             format!("http://localhost:{}", port)
         });
-        warn_if_system_trust_unavailable(&base_url);
+        warn_if_system_trust_unavailable(&base_url, trust);
 
         Ok(Self {
             client,
@@ -400,10 +500,11 @@ pub(crate) fn diagnostic_origin(raw: &str) -> String {
 fn format_request_error(url: &str, error: reqwest::Error, target: TargetType) -> String {
     let url = diagnostic_origin(url);
     let error = error.without_url();
+    let details = error_chain(&error);
     let mut msg = format!("Request to {} failed\n", url);
 
     // Determine error type and provide specific hints
-    let error_string = error.to_string().to_lowercase();
+    let error_string = details.to_lowercase();
     let hint = if error_string.contains("connection refused") {
         let component = match target {
             TargetType::Center | TargetType::Server => "controller",
@@ -415,6 +516,12 @@ fn format_request_error(url: &str, error: reqwest::Error, target: TargetType) ->
         ))
     } else if error.is_timeout() {
         Some("Request timed out - server may be overloaded or unresponsive".to_string())
+    } else if error_string.contains("invalid peer certificate") {
+        Some(
+            "The server's (or https:// proxy's) TLS certificate could not be verified - if a private CA \
+             issued it, pass that CA with --ca-cert"
+                .to_string(),
+        )
     } else if error.is_connect() {
         if error_string.contains("dns") || error_string.contains("resolve") {
             Some("DNS resolution failed - check if the hostname is correct".to_string())
@@ -439,7 +546,7 @@ fn format_request_error(url: &str, error: reqwest::Error, target: TargetType) ->
     msg.push_str("  - Check if the server address is correct\n");
     msg.push_str(&format!("  - Try: curl -v {}\n", url));
 
-    msg.push_str(&format!("\nDetails: {}\n", error));
+    msg.push_str(&format!("\nDetails: {}\n", details));
 
     if let Some(h) = hint {
         msg.push_str(&format!("\nHint: {}", h));
@@ -496,3 +603,7 @@ mod ensure_auth_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/cli/client_test/source_paging_tests.rs"]
 mod source_paging_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/cli/client_test/server_trust_tests.rs"]
+mod server_trust_tests;

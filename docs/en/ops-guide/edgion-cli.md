@@ -20,12 +20,34 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--server` | - | Server address | Auto-selected based on target |
 | `--socket` | - | Unix socket path | - |
 | `--token` | - | Static CLI token (long-only; `-t` is taken by `--target`) | - |
+| `--ca-cert` | - | PEM file of CA certificates for an `https://` server; replaces the OS CA bundle. Also `EDGION_CA_CERT` (see below) | - |
 | `--help` | `-h` | Show help information | - |
 | `--version` | `-V` | Show version information | - |
 
-An `https://` `--server` is verified against the host's OS CA bundle at a fixed path
+Without `--ca-cert`, an `https://` `--server` is verified against the host's OS CA bundle at a fixed path
 (the first existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt` and `/etc/ssl/cert.pem`); `SSL_CERT_FILE` and the macOS Keychain are not consulted. On a host
 without such a bundle the CLI prints a warning and HTTPS verification fails.
+
+For a server certificate issued by a private CA, pass that CA with `--ca-cert <PATH>`
+(or set `EDGION_CA_CERT`; the flag wins, and an empty value means unset):
+
+- Only the certificates in that file are trusted; the OS bundle is not added. This
+  also applies to an `https://` proxy from `HTTPS_PROXY`: add the proxy's CA to the
+  file.
+- The file may contain several certificates and text between them (comments,
+  `openssl x509 -text` output). Duplicates are ignored; at most 1024 distinct
+  certificates (1 MiB as PEM) are accepted. `TRUSTED CERTIFICATE` blocks are not
+  supported; convert the whole file with `openssl storeutl -certs <file>` (OpenSSL 3).
+- It can be a pipe, for example a CA stored in a Kubernetes Secret:
+  `--ca-cert <(kubectl -n <namespace> get secret <name> -o jsonpath='{.data.ca\.crt}' | base64 -d)`.
+- Every command that contacts the Edgion server reads it, even for an `http://`
+  server, and fails if it is missing, unreadable or invalid. `login` instead warns
+  and skips its server probe; the token is still saved. Commands that do not contact
+  the Edgion server (`gen-certs`, `gen-token`, `wasm`, `waf`) never read it.
+
+```bash
+edgion-cli --server https://edgion-controller.example.com:12101 --ca-cert ./corp-ca.pem get httproute
+```
 
 `edgion-cli` is **token-only**: it authenticates to the Controller Admin API with a
 single Bearer token (Istio-style). There is no username/password login and no OIDC

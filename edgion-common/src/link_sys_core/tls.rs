@@ -5,6 +5,8 @@
 //! - `apply_resolved_outbound_tls` — reqwest path (ES, webhook)
 //! - `build_effective_rustls_client_config` — validates prepared Redis PEM material
 //! - `build_kafka_rustls_client_config` — actual-owner Kafka/rskafka path
+//! - `build_custom_ca_http_rustls_config` — reqwest path for a local CA file
+//!   (edgion-cli `--ca-cert`), with the same custom-CA REPLACE semantics
 //!
 //! The resolver handles global-default inheritance and CA material resolution.
 //! `verify=false` is honored when the provider supports it (operator responsibility)
@@ -191,6 +193,71 @@ pub(crate) fn apply_default_http_tls(builder: reqwest::ClientBuilder) -> Result<
         san: None,
     })?;
     Ok(builder.tls_backend_preconfigured(config))
+}
+
+/// Verified HTTP rustls configuration that trusts only the certificates in a
+/// local CA file. Like `caCertificateRefs`, the file replaces the System roots.
+///
+/// Sole sanctioned consumer: `edgion-cli --ca-cert`. The CLI has no resource or
+/// EdgionGatewayConfig, so the outbound TLS resolver has nothing to resolve;
+/// Gateway and Controller custom trust stays `caCertificateRefs` through the
+/// resolver and must not use this entry.
+///
+/// Local files carry comments, so parsing is more forgiving than for a
+/// Kubernetes CA Secret: text between PEM blocks is ignored, and well-formed
+/// blocks of other kinds (keys, CRLs) are ignored. Any malformed PEM block is an
+/// error. `TRUSTED CERTIFICATE` and `X509 CERTIFICATE` blocks are rejected
+/// because rustls cannot use them. Duplicates are removed, then the
+/// certificates pass the canonical CA-bundle checks (at most
+/// [`crate::tls_validation::MAX_CA_CERTIFICATES_PER_REF`] certificates and
+/// [`crate::tls_validation::MAX_CA_BUNDLE_BYTES_PER_REF`] bytes as PEM).
+pub fn build_custom_ca_http_rustls_config(ca_file: &[u8]) -> Result<ClientConfig> {
+    anyhow::ensure!(
+        !crate::system_trust::has_unsupported_certificate_labels(ca_file),
+        "TLS: TRUSTED CERTIFICATE and X509 CERTIFICATE PEM blocks are not supported; \
+         convert them to CERTIFICATE blocks (OpenSSL 3: openssl storeutl -certs <file>)"
+    );
+    let mut certificates = CertificateDer::pem_slice_iter(ca_file)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| anyhow::anyhow!("TLS: malformed PEM in the CA file: {}", describe_pem_error(&error)))?;
+    certificates.sort_by(|left, right| left.as_ref().cmp(right.as_ref()));
+    certificates.dedup_by(|left, right| left.as_ref() == right.as_ref());
+    let pem = crate::system_trust::encode_pem(&certificates);
+    crate::tls_validation::parse_canonical_ca_bundle(&pem)
+        .map_err(|error| anyhow::anyhow!("TLS: {}", describe_ca_bundle_error(&error)))?;
+    build_http_rustls_client_config(&outbound_tls::ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![pem]),
+        client_identity: None,
+        san: None,
+    })
+}
+
+/// Readable text for a PEM framing error (rustls-pki-types prints raw byte
+/// arrays for some variants).
+fn describe_pem_error(error: &rustls::pki_types::pem::Error) -> String {
+    use rustls::pki_types::pem::Error;
+    match error {
+        Error::MissingSectionEnd { .. } => "a PEM block has no END line".to_string(),
+        Error::IllegalSectionStart { .. } => "a PEM BEGIN line is malformed".to_string(),
+        Error::Base64Decode(detail) => format!("a PEM block has invalid base64 ({detail})"),
+        other => other.to_string(),
+    }
+}
+
+fn describe_ca_bundle_error(error: &crate::tls_validation::CaBundleError) -> String {
+    use crate::tls_validation::{CaBundleError, MAX_CA_BUNDLE_BYTES_PER_REF, MAX_CA_CERTIFICATES_PER_REF};
+    match error {
+        CaBundleError::Empty => "the CA file contains no CERTIFICATE block".to_string(),
+        CaBundleError::TooManyCertificates => {
+            format!("the CA file contains more than {MAX_CA_CERTIFICATES_PER_REF} distinct certificates")
+        }
+        CaBundleError::TooLarge => {
+            format!("the CA file's certificates exceed {MAX_CA_BUNDLE_BYTES_PER_REF} bytes as PEM")
+        }
+        CaBundleError::InvalidCertificate => "a CERTIFICATE block is not a valid X.509 certificate".to_string(),
+        other => format!("invalid CA certificate PEM bundle ({other:?})"),
+    }
 }
 
 /// Resolve `tls` through the shared outbound resolver and apply the result

@@ -46,13 +46,31 @@ file still yields the same certificates, because Pingora loads it again while
 building listener connectors and unwraps that load. The Controller loads at
 startup step 1c and logs INFO, or WARN when unusable; its System consumers (etcd
 conf-center TLS without `ca_cert_file`, the OAuth2 credential source, the HTTPDNS
-background resolver) then fail closed. `edgion-cli` loads it with its first client
-and prints a warning for an `https://` server when it is unavailable.
+background resolver) then fail closed. `edgion-cli` without `--ca-cert` loads it
+with its first client and prints a warning for an `https://` server when it is
+unavailable.
 
-Loading rules: regular files only (checked before open, so a FIFO cannot block),
-reads bounded to 8 MiB, any malformed PEM section rejects the file, CERTIFICATE
-entries rustls rejects and `TRUSTED CERTIFICATE`/`X509 CERTIFICATE` sections are
-skipped and counted, and a file with no usable certificate is rejected.
+OS bundle loading rules: regular files only (checked before open, so a FIFO cannot
+block), reads bounded to 8 MiB (`MAX_CA_FILE_BYTES`), any malformed PEM section
+rejects the file, CERTIFICATE entries rustls rejects and `TRUSTED CERTIFICATE`/
+`X509 CERTIFICATE` sections are skipped and counted, and a file with no usable
+certificate is rejected.
+
+CLI local CA file (`--ca-cert` / `EDGION_CA_CERT`, `cli::client::ServerTrust`): the
+CLI has no Kubernetes reference, so its custom trust is a file that replaces
+`System` for the Edgion server and any `https://` proxy (reqwest shares the TLS
+configuration). It goes through
+`link_sys_core::tls::build_custom_ca_http_rustls_config`, whose sole sanctioned
+consumer is the CLI (see the outbound TLS entry in
+`skills/01-architecture/00-common/05-unification-points.md`). Its rules differ from
+the OS bundle on purpose: pipes are accepted (so `<(...)` works; a FIFO without a
+writer blocks, as with curl), text between PEM blocks is ignored, any malformed PEM
+block or certificate rustls rejects fails the whole file, `TRUSTED CERTIFICATE`/
+`X509 CERTIFICATE` blocks are rejected with a conversion hint, duplicates are
+removed, and the canonical CA-bundle caps apply (1024 certificates, 1 MiB as PEM)
+after the 8 MiB read bound. An empty value means unset. Server-contacting commands
+fail on an unusable file even for an `http://` server; `login` warns, skips its
+probe and still saves the token.
 
 ## Rationale and evidence
 
@@ -83,21 +101,24 @@ TCP/TLS-route connectors (`TransportConnector::new(None)`) only dial plain TCP.
   `ca_file`. Backend trust is therefore the bundle plus BoringSSL's default file
   and hash directory: `SSL_CERT_FILE`/`SSL_CERT_DIR` when set (they replace, not
   extend, the defaults), otherwise `/etc/ssl/cert.pem` and `/etc/ssl/certs`; the
-  directory is consulted on every verification. Pingora's
+  directory is consulted whenever an issuer is not already cached in the store, so
+  a new issuer dropped there takes effect without a restart. Pingora's
   `TransportConnector::new(None)` (TCP, TLS-terminate and passthrough listeners)
-  runs openssl-probe's `init_ssl_cert_env_vars`, which may set those variables
-  inside the process, so the result can depend on listener construction order.
-  Accepted: in the shipped Debian images the probe, the hash directory and the
+  builds `tls::Connector::new(None)`, whose private `init_ssl_cert_env_vars`
+  wrapper calls openssl-probe and may set those variables inside the process, so
+  the result can depend on listener construction order.
+  Accepted until the tracked fork fix lands: in the shipped Debian images the probe, the hash directory and the
   bundle come from the same `update-ca-certificates` set; on RHEL-family hosts
   `/etc/ssl/cert.pem` and `/etc/ssl/certs` link into `/etc/pki/tls`, which
   `update-ca-trust` fills from the same extracted set as the bundle. Divergence needs
   certificates dropped into the hash directory without regenerating the bundle, a
-  different OS layout, or an operator-set `SSL_CERT_*`. Rejected for now: a
-  Pingora-fork change giving `Connector::new` an empty store when `ca_file` is set
-  (needs a fork release), and per-peer `peer.options.ca` for System peers
-  (rebuilds a ~140-certificate store per new upstream connection). Revisit if a
-  `System` override is ever added, a non-Debian image is shipped, or images stop
-  keeping the hash directory and bundle in sync.
+  different OS layout, or an operator-set `SSL_CERT_*`. Raise the fix's priority
+  if a non-Debian image is shipped or images stop keeping the hash directory and
+  bundle in sync. The fix, a Pingora-fork change that makes a configured `ca_file`
+  replace the default store in `Connector::new` (needs a fork release), is tracked
+  in [backend-tls-system-trust-exact-bundle](../../../../tasks/todo/backend-tls-system-trust-exact-bundle.md).
+- **Rejected: per-peer `peer.options.ca` for `System` peers.** It would rebuild a
+  ~140-certificate store per new upstream connection.
 - **Rejected: a `system_ca_file` setting and environment-driven probing
   (`SSL_CERT_FILE`, openssl-probe).** Kubernetes CA references already express
   custom trust; a fixed list keeps trust predictable and free of environment
@@ -157,6 +178,15 @@ TCP/TLS-route connectors (`TransportConnector::new(None)`) only dial plain TCP.
   BoringSSL precheck). SAN-verifier, LDAP and OIDC tests use generated CAs.
   `all_endpoint_status/transport_test.rs::gateway_client_pairing_and_probe_capture_share_checked_publication`
   still uses `System` and needs a host CA bundle (CI and development hosts have one).
+  CLI local CA file: `edgion-cli/tests/unit/cli/client_test/server_trust_tests.rs`
+  (empty value, comments and duplicates, rejected and malformed inputs, local-only
+  commands, login fallback, and `ca_cert_is_used_for_https_requests`, a TLS
+  handshake through `Cli::run` that fails if the wiring passes `System`);
+  `tls_test.rs::local_ca_file_parsing_and_limits`;
+  `reqwest_tls_transport.rs::local_ca_file_config_trusts_its_ca_and_rejects_others`.
+  The 2026-11-10/11 runs above predate the CLI option; it was verified on
+  2026-11-11 with those tests and an end-to-end run of the binary against local
+  HTTPS servers and proxies.
 - Accepted gaps, not tracked as tasks: no integration scenario exercises backend
   and outbound `System` together; the Gateway startup refusal and the
   `create_server_conf` changed-file refusal are inline and not unit-tested; the

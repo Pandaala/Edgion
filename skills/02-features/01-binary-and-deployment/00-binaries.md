@@ -126,6 +126,8 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--target` | `-t` | `center\|server\|client` | `center` | Target API |
 | `--server` | — | `String` | — | Service address (e.g., `http://localhost:12101`) |
 | `--socket` | — | `PathBuf` | — | Unix socket path |
+| `--token` | — | `String` | — | Bearer token; overrides `EDGION_TOKEN` and `~/.edgion/token` |
+| `--ca-cert` | — | `PathBuf` | — | CA PEM file for `https://` servers (env `EDGION_CA_CERT`); replaces the OS CA bundle |
 
 ### Target Modes
 

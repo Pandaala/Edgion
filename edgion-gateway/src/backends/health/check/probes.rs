@@ -73,7 +73,7 @@ pub fn build_http_probe_client(timeout: Duration) -> Result<reqwest::Client, req
             ..Default::default()
         },
     )
-    .expect("probe client config has no TLS; apply_outbound_policy is infallible here")
+    .expect("probe client config sets no TLS policy, so only the infallible System-root default applies")
     .build()
 }
 

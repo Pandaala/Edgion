@@ -14,7 +14,8 @@ OS CA bundle at a fixed path, the first existing of:
 3. `/etc/ssl/cert.pem` (macOS)
 
 There is no setting for it, and `SSL_CERT_FILE` does not select it. Custom trust is a
-Kubernetes CA reference (`caCertificateRefs`), which replaces `System`. Backend
+Kubernetes CA reference (`caCertificateRefs`), which replaces `System`; `edgion-cli`
+takes a local CA file with `--ca-cert` instead. Backend
 verification also consults BoringSSL's default certificate locations; see
 [Backend TLS](../user-guide/http-route/backends/backend-tls.md).
 
@@ -36,7 +37,8 @@ verification also consults BoringSSL's default certificate locations; see
   8 MiB, has malformed PEM, contains no usable certificate, or cannot be loaded by BoringSSL.
 - The Controller loads the bundle at startup and logs it; without one it logs a WARN and its
   `System`-trust connections fail.
-- `edgion-cli` verifies `https://` servers against the bundle and warns when none exists.
+- `edgion-cli` verifies `https://` servers against the bundle and warns when none exists;
+  `--ca-cert` (or `EDGION_CA_CERT`) replaces the bundle with a local CA file.
 - Outbound trust follows the OS distribution's root program instead of the compiled Mozilla
   list. Roots the distribution still ships are trusted; Mozilla's external name constraints
   are not applied.
@@ -47,9 +49,11 @@ verification also consults BoringSSL's default certificate locations; see
 - Custom images must install `ca-certificates` (or provide a PEM bundle at one of the paths).
 - To trust a private CA, reference it with `caCertificateRefs` on the `BackendTLSPolicy`, on
   the resource, or in `EdgionGatewayConfig.spec.outboundTls.validation`.
+  For `edgion-cli`, pass it with `--ca-cert`.
 
 ## Related documentation
 
 - [Backend TLS](../user-guide/http-route/backends/backend-tls.md)
 - [Gateway configuration: System CA bundle](../ops-guide/configuration/gateway-config.md)
 - [Connectors (LinkSys)](../ops-guide/infrastructure/connectors.md)
+- [edgion-cli](../ops-guide/edgion-cli.md)

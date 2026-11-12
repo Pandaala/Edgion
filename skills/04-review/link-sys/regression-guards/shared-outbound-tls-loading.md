@@ -80,7 +80,9 @@ consumers migrated. Managed construction requires an actual bound owner and its
 proved TLS selection. The obsolete global-loading resolver convenience wrapper
 is also removed; snapshot, audited, actual-owner and effective conversion cores
 remain canonical. Generic HTTP construction, preconfigured TLS, process bootstrap,
-and `apply_resolved_outbound_tls` remain live supported boundaries. Unit tests use
+`apply_resolved_outbound_tls`, and the CLI-only local CA-file entry
+`build_custom_ca_http_rustls_config` (edgion-cli `--ca-cert`; see the unification
+registry's outbound TLS entry) remain live supported boundaries. Unit tests use
 actual Webhook/ForwardAuth/Redis owners or the existing private effective crypto
 converter, preserving certificate parsing and policy failures without a raw API shim.
 

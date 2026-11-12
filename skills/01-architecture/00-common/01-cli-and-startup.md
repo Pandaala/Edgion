@@ -58,6 +58,7 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 | `--server` | — | Server address (HTTP) |
 | `--socket` | — | Reserved argument; currently parsed but ignored, so use HTTP `--server` |
 | `--token` | — | Bearer token; overrides `EDGION_TOKEN` and `~/.edgion/token` |
+| `--ca-cert` | — | CA PEM file for `https://` servers (env `EDGION_CA_CERT`); replaces the OS CA bundle (`cli::client::ServerTrust`) |
 | `-f, --file` | — | File/directory path (apply/delete) |
 | `-n, --namespace` | — | Namespace filter |
 | `-o, --output` | `table` | Output format (table/json/yaml/wide) |

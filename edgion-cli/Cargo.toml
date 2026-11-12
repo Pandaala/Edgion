@@ -46,6 +46,8 @@ kube = { workspace = true, features = ["client", "rustls-tls", "ring"] }
 k8s-openapi.workspace = true
 
 reqwest.workspace = true
+# CLI --ca-cert keeps its prepared rustls client configuration.
+rustls.workspace = true
 
 base64.workspace = true
 hex.workspace = true
@@ -61,5 +63,6 @@ tempfile.workspace = true
 
 [dev-dependencies]
 parking_lot.workspace = true
+tokio-rustls.workspace = true
 wiremock.workspace = true
 wat.workspace = true

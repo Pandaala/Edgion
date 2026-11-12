@@ -649,3 +649,24 @@ fn build_validated_rustls_client_config(
         .map_err(|error| anyhow::anyhow!("{provider} TLS configuration error: {error:?}"))?;
     build_effective_rustls_client_config(&resolved)
 }
+
+/// The local CA-file entry (edgion-cli `--ca-cert`): comments and duplicates are
+/// tolerated, unsupported or malformed blocks and the canonical limits are
+/// rejected with a readable reason.
+#[test]
+fn local_ca_file_parsing_and_limits() {
+    let (ca, _cert, _key) = gen_ca_and_leaf();
+    let commented = format!("# comment\n{ca}\nCertificate: text dump\n{}", ca.repeat(1100));
+    build_custom_ca_http_rustls_config(commented.as_bytes()).expect("comments and duplicates are accepted");
+
+    let reason = |input: &[u8]| format!("{:#}", build_custom_ca_http_rustls_config(input).unwrap_err());
+    let trusted = ca.replace("CERTIFICATE-----", "TRUSTED CERTIFICATE-----");
+    assert!(reason(format!("{ca}{trusted}").as_bytes()).contains("TRUSTED CERTIFICATE"));
+    assert!(reason(b"no certificate here").contains("no CERTIFICATE block"));
+    assert!(reason(b"-----BEGIN CERTIFICATE-----\nAAAA\n").contains("no END line"));
+
+    let distinct: String = (0..=crate::tls_validation::MAX_CA_CERTIFICATES_PER_REF)
+        .map(|_| gen_ca_and_leaf().0)
+        .collect();
+    assert!(reason(distinct.as_bytes()).contains("distinct certificates"));
+}
