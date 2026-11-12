@@ -129,6 +129,8 @@ Re-evaluate validation reuse if map ownership, exchange capabilities or request
 classification mutability changes.
 This is not an allocation-free trailer callback claim.
 Existing asynchronous tests retain atomic rejection and failure-policy coverage.
+Candidate-map capacity is covered in
+[trailer mutation HeaderMap capacity](trailer-mutation-header-map-capacity.md).
 
 ## Direct response projection verification
 

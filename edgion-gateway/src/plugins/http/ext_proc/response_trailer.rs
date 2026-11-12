@@ -305,18 +305,21 @@ fn apply_mutation(
         if !exists && !session.downstream_response_trailer_name_allowed(&name) {
             return Err(());
         }
+        // The field cap is checked only after the whole mutation, so processor
+        // input can reach HeaderMap's MAX_SIZE first; the panicking
+        // `append`/`insert` would unwind the response task.
         match action {
             HeaderAppendAction::AppendIfExistsOrAdd => {
-                candidate.append(name, value);
+                candidate.try_append(name, value).map_err(|_| ())?;
             }
             HeaderAppendAction::OverwriteIfExistsOrAdd => {
-                candidate.insert(name, value);
+                candidate.try_insert(name, value).map_err(|_| ())?;
             }
             HeaderAppendAction::AddIfAbsent if !exists => {
-                candidate.insert(name, value);
+                candidate.try_insert(name, value).map_err(|_| ())?;
             }
             HeaderAppendAction::OverwriteIfExists if exists => {
-                candidate.insert(name, value);
+                candidate.try_insert(name, value).map_err(|_| ())?;
             }
             HeaderAppendAction::AddIfAbsent | HeaderAppendAction::OverwriteIfExists => {}
         }

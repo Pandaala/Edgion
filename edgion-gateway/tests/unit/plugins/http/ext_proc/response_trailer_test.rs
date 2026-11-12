@@ -791,3 +791,68 @@ fn repeated_sets_admit_a_new_name_only_once() {
     let values: Vec<_> = candidate.get_all("x-new").iter().map(HeaderValue::as_bytes).collect();
     assert_eq!(values, vec![b"first".as_slice(), b"second".as_slice()]);
 }
+
+/// More distinct names than `http::HeaderMap` can hold (24,576 usable slots at
+/// its 32,768 raw MAX_SIZE); the panicking `append`/`insert` would unwind here.
+const BEYOND_HEADER_MAP_MAX_NAMES: usize = 25_000;
+
+fn distinct_name_flood(action: HeaderAppendAction) -> HeaderMutation {
+    HeaderMutation {
+        set_headers: (0..BEYOND_HEADER_MAP_MAX_NAMES)
+            .map(|index| option(&format!("t{index}"), b"1", action))
+            .collect(),
+        remove_headers: Vec::new(),
+    }
+}
+
+#[test]
+fn distinct_name_flood_beyond_header_map_max_size_is_rejected_without_panic() {
+    for action in [
+        HeaderAppendAction::AppendIfExistsOrAdd,
+        HeaderAppendAction::OverwriteIfExistsOrAdd,
+        HeaderAppendAction::AddIfAbsent,
+    ] {
+        let mut candidate = HeaderMap::new();
+        candidate.insert("grpc-status", HeaderValue::from_static("0"));
+        let mut admitted = MockPluginSession::new();
+        admitted
+            .expect_downstream_response_trailer_name_allowed()
+            .return_const(true);
+        assert!(apply_mutation(&mut candidate, &distinct_name_flood(action), &admitted).is_err());
+    }
+}
+
+#[tokio::test]
+async fn distinct_name_flood_follows_bad_verdict_failure_policy() {
+    for fail_open in [false, true] {
+        let (mut processor, owner) = processor(
+            Ok(response(Some(distinct_name_flood(
+                HeaderAppendAction::AppendIfExistsOrAdd,
+            )))),
+            fail_open,
+            false,
+        );
+        let mut trailers = HeaderMap::new();
+        trailers.insert("grpc-status", HeaderValue::from_static("0"));
+        let expected = trailers.clone();
+        let mut session = session(true, true, true);
+        session.expect_record_outcome().times(0).return_const(());
+        let result = processor
+            .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut PluginLog::new("ExtProc"))
+            .await;
+        assert_eq!(trailers, expected);
+        assert_eq!(
+            result,
+            if fail_open {
+                UpstreamTrailerResult::Continue
+            } else {
+                UpstreamTrailerResult::FailClose
+            }
+        );
+        assert_eq!(
+            *owner.terminal.lock(),
+            Some((if fail_open { "fail-open" } else { "fail-close" }, "bad-verdict"))
+        );
+        assert!(processor.done);
+    }
+}
