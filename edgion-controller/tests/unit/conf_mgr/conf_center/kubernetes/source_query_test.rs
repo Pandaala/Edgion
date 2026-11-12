@@ -391,3 +391,22 @@ async fn source_cas_uses_one_bounded_get_and_native_versioned_replace() {
         assert_eq!(writes.load(Ordering::Relaxed), 1);
     }
 }
+
+#[test]
+fn an_empty_metadata_only_page_decodes_as_no_items() {
+    // The apiserver answers an empty PartialObjectMetadataList with `"items": null`.
+    let empty: NativeList = serde_json::from_value(serde_json::json!({
+        "kind": "PartialObjectMetadataList",
+        "apiVersion": "meta.k8s.io/v1",
+        "metadata": {"resourceVersion": "1"},
+        "items": null
+    }))
+    .unwrap();
+    assert!(empty.items.is_empty());
+    let one: NativeList = serde_json::from_value(serde_json::json!({
+        "metadata": {},
+        "items": [{"metadata": {"name": "a", "namespace": "apps"}}]
+    }))
+    .unwrap();
+    assert_eq!(one.items.len(), 1);
+}

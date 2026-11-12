@@ -15,7 +15,14 @@ struct Position {
 #[derive(Deserialize)]
 struct NativeList {
     metadata: kube::core::ListMeta,
+    /// The apiserver renders an empty metadata-only page
+    /// (`PartialObjectMetadataList`) as `"items": null`, unlike full lists.
+    #[serde(default, deserialize_with = "null_as_empty")]
     items: Vec<Value>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Value>, D::Error> {
+    Ok(Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default())
 }
 struct Scopes {
     resource: ApiResource,

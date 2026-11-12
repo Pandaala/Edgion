@@ -215,6 +215,11 @@ async fn health_check_loop(service_key: String, policy: Arc<super::config_store:
         ticker.tick().await;
 
         let backends = get_service_backends(&service_key);
+        // An ExternalName Service's endpoints are DNS answers, which never pass
+        // the apiserver's EndpointSlice validation (no loopback or link-local,
+        // CVE-2021-25737): an unsafe answer is never probed, in plaintext
+        // either, the way encrypted probes already refuse one.
+        let dns_derived = is_external_name(&service_key);
 
         // Best-effort: rebuild the shared HTTP client once per cycle if it could
         // not be built earlier. Hoisting the retry here (instead of doing it
@@ -262,8 +267,12 @@ async fn health_check_loop(service_key: String, policy: Arc<super::config_store:
             let config_store = get_hc_config_store();
             let captured_service_key = &service_key;
             let captured_policy_identity = &policy_identity;
+            let refused = dns_derived && refuses_dns_endpoint(addr);
             probes.push(async move {
                 let probe = async {
+                    if refused {
+                        return Err(ProbeError::UnsafeEndpoint);
+                    }
                     let permit = semaphore.acquire().await.expect("probe semaphore closed");
                     let result = probe_backend(&params, client.as_ref(), addr).await;
                     drop(permit);
@@ -409,6 +418,33 @@ fn derive_startup_jitter(service_key: &str, max_jitter: Duration) -> Duration {
 /// Returns the set of backends for a service, sourced exclusively from the
 /// EndpointSlice discovery store. The store already deduplicates and orders
 /// its result, so no further dedup is needed here.
+/// The Service is an `ExternalName` one, whose endpoints come only from DNS
+/// answers (Gateway endpoint table or Controller resolver).
+fn is_external_name(service_key: &str) -> bool {
+    get_service_discovery_coordinator()
+        .load_generation()
+        .available(service_key)
+        .is_some_and(|available| {
+            available
+                .raw
+                .service
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.type_.as_deref())
+                == Some("ExternalName")
+        })
+}
+
+/// A DNS-derived endpoint no probe may dial: loopback (outside integration
+/// testing) or link-local, the same rule encrypted probes apply.
+fn refuses_dns_endpoint(addr: std::net::SocketAddr) -> bool {
+    crate::backends::peer_builder::validate_endpoint_backend_addr(
+        &pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
+        false,
+    )
+    .is_err()
+}
+
 fn get_service_backends(service_key: &str) -> Vec<Arc<LbBackend>> {
     get_roundrobin_store()
         .get_backends_for_service(service_key)

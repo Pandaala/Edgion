@@ -33,6 +33,10 @@ if [ "${FAKE_UNEXPECTED_FIXTURE:-}" = "${fixture}" ]; then
   echo "connection refused" >&2
   exit 1
 fi
+if [ "${FAKE_REQUIRED_TYPE_FIXTURE:-}" = "${fixture}" ]; then
+  echo "spec.requestPlugins[0].conditions.run.allOf[0].type: Required value" >&2
+  exit 1
+fi
 echo "strict decoding error: unknown field" >&2
 exit 1
 EOF
@@ -71,6 +75,11 @@ export FAKE_ACCEPT_FIXTURE="anyof_to_anyof.yaml"
 run_case 1 "Kubernetes admission unexpectedly accepted"
 
 unset FAKE_ACCEPT_FIXTURE
+# An operator nested in allOf is rejected because allOf entries require a type.
+export FAKE_REQUIRED_TYPE_FIXTURE="allof_to_anyof.yaml"
+run_case 0 "PluginValidationStatus admission preflight passed"
+
+unset FAKE_REQUIRED_TYPE_FIXTURE
 export FAKE_UNEXPECTED_FIXTURE="both_operators.yaml"
 run_case 1 "Kubernetes admission failed for an unexpected reason"
 

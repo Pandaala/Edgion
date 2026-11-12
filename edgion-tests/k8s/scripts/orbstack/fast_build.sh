@@ -221,6 +221,17 @@ cross_compile() {
     "${builder_tag}" \
     bash -c "${cmd}"
 
+  # The test-server image also carries the Go ext_proc external processor,
+  # built the same way as cicd/build-image.sh does.
+  if [[ " ${BUILD_EXAMPLES[*]} " == *" test_server "* ]]; then
+    docker run --rm \
+      --platform "${PLATFORM}" \
+      -v "${PROJECT_ROOT}":/project \
+      -w /project/edgion-tests/integration/fixtures/ext_proc_external \
+      "${builder_tag}" \
+      go build -mod=readonly -trimpath -o "/project/target/${TARGET}/release/ext_proc_external_processor" .
+  fi
+
   local elapsed=$(( SECONDS - start_time ))
   log_ok "Compilation done in ${elapsed}s"
 }
@@ -385,11 +396,15 @@ build_images() {
     local auxiliary_binaries=""
     if [[ "${e}" == "test_client" ]]; then
       auxiliary_binaries="cache_residue"
-      if [[ ! -f "${PROJECT_ROOT}/${BIN_PATH}/cache_residue" ]]; then
-        log_error "Test-client auxiliary binary not found: ${PROJECT_ROOT}/${BIN_PATH}/cache_residue"
+    elif [[ "${e}" == "test_server" ]]; then
+      auxiliary_binaries="ext_proc_external_processor"
+    fi
+    for auxiliary in ${auxiliary_binaries}; do
+      if [[ ! -f "${PROJECT_ROOT}/${BIN_PATH}/${auxiliary}" ]]; then
+        log_error "${e} auxiliary binary not found: ${PROJECT_ROOT}/${BIN_PATH}/${auxiliary}"
         exit 1
       fi
-    fi
+    done
     build_one_image "${e}" "example" "${image_tag}" "${runtime_base}" "${extra}" "${auxiliary_binaries}"
   done
 

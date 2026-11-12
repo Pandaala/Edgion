@@ -80,6 +80,11 @@ static PHASES: &[PhaseSuite] = &[
     },
 ];
 
+/// `base` owns the global RealIp proxies; this copy only restores them after
+/// the scenario's mutations (kept outside `initial/`, so every object has one
+/// initial fixture owner).
+const GLOBAL_REALIP_RESTORE: &str = "updates/restore/00_EdgionConfigData_global-realip-proxies.yaml";
+
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let result = async {
@@ -118,16 +123,14 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 ctx.apply_dir(mutation).await?;
                 ctx.wait_phase(scenario, "realip-global-fallback", Duration::from_secs(15))
                     .await?;
-                ctx.apply_dir("initial/00_EdgionConfigData_global-realip-proxies.yaml")
-                    .await?;
+                ctx.apply_dir(GLOBAL_REALIP_RESTORE).await?;
                 ctx.wait_phase(scenario, "realip-trusted", Duration::from_secs(15))
                     .await?;
             }
             ctx.delete_resources("delete/global-realip.txt").await?;
             ctx.wait_phase(scenario, "realip-global-fallback", Duration::from_secs(15))
                 .await?;
-            ctx.apply_dir("initial/00_EdgionConfigData_global-realip-proxies.yaml")
-                .await?;
+            ctx.apply_dir(GLOBAL_REALIP_RESTORE).await?;
             ctx.wait_phase(scenario, "realip-trusted", Duration::from_secs(15))
                 .await?;
 
@@ -144,7 +147,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let mut errors = Vec::new();
         let mut restored_files = [false; 5];
         for (index, fixture) in [
-            "initial/00_EdgionConfigData_global-realip-proxies.yaml",
+            GLOBAL_REALIP_RESTORE,
             "initial/00_EdgionConfigData_realip-primary.yaml",
             "initial/00_EdgionConfigData_realip-secondary.yaml",
             "initial/00_EdgionConfigData_condition-refs-live-ips.yaml",

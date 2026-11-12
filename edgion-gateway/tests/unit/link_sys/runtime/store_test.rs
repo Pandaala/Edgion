@@ -837,6 +837,8 @@ async fn httpdns_same_rv_actual_owner_failure_replaces_ready_reuses_failed_and_r
 
 #[tokio::test(flavor = "current_thread")]
 async fn httpdns_same_rv_active_reference_or_material_failure_cannot_reuse_ready_client() {
+    // Builds TLS-capable HTTP clients; a filtered run has no other test to install it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let registry = RuntimeRegistry::new();
     let mut resource = httpdns_resource(100);
     let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
@@ -962,6 +964,8 @@ async fn httpdns_delete_kind_change_and_full_omission_have_one_current_owner() {
 #[tokio::test(flavor = "current_thread")]
 async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_identity() {
     use k8s_openapi::{api::core::v1::Secret, ByteString};
+    // Builds TLS-capable HTTP clients; a filtered run has no other test to install it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let registry = RuntimeRegistry::new();
     let mut resource = httpdns_resource(100);
     let SystemConfig::HttpDns(config) = &mut resource.spec.config else {

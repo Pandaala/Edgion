@@ -633,7 +633,8 @@ reschedules existing entries, so a shorter interval applies at once.
   at most 2 seconds for them.
 - Link-local (169.254.0.0/16, fe80::/10) and unspecified (0.0.0.0, ::) answers are
   dropped and never become endpoints or health-check targets. `system` mode never
-  dials an unspecified answer either.
+  dials an unspecified answer either. A loopback answer is used only by Gateways
+  that set `allowLoopbackUpstream`, and is never probed by an active health check.
 - Each refresh is jittered by ±10 %. A TTL-derived refresh stays within the min/max
   bounds; a fixed `refreshIntervalSeconds` only stays above 2 seconds.
 - `GET /api/v1/dns/endpoint-table` on the Gateway admin API lists the entries,

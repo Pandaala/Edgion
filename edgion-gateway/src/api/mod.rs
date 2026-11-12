@@ -978,9 +978,8 @@ async fn redis_ping(
     };
     if query.all_members {
         let start = std::time::Instant::now();
-        let checked_members = match client.ping_all_members().await {
-            Ok(count) => count,
-            Err(_) => return Json(ApiResponse::err_body("Redis pool PING failed".to_string())),
+        let Ok(checked_members) = client.ping_all_members().await else {
+            return Json(ApiResponse::err_body("Redis pool PING failed".to_string()));
         };
         return Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": start.elapsed().as_millis() as u64,

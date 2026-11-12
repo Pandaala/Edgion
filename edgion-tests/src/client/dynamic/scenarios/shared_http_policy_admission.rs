@@ -190,7 +190,9 @@ static PHASES: &[PhaseSuite] = &[
     },
 ];
 async fn restore(ctx: &ScenarioCtx) -> Result<()> {
-    ctx.apply_dir("initial").await?;
+    // `bootstrap` owns Gateways A and B; this copy only restores them (kept
+    // outside the initial fixtures, so every object has one initial owner).
+    ctx.apply_dir("updates/restore").await?;
     ctx.wait_phase(SCENARIO, "compatible", CONVERGENCE).await
 }
 async fn recover_initially_missing_certificate(ctx: &ScenarioCtx) -> Result<()> {

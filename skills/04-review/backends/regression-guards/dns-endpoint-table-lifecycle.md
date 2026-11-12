@@ -131,7 +131,11 @@ cached answer and dialed one address, with no pool, health state or L4 support.
 - Normalization drops link-local (169.254.0.0/16, fe80::/10) and unspecified (0.0.0.0,
   ::) answers so metadata addresses and "this host" never become LB or health-probe
   targets; loopback is kept and gated per Gateway by `allowLoopbackUpstream` at
-  selection time. `system` mode drops unspecified answers before selection on every
+  selection time, and active health checks of an `ExternalName` Service never dial it
+  (`health::check::manager::refuses_dns_endpoint`, every probe type; outside
+  integration testing): DNS answers bypass the apiserver's EndpointSlice validation
+  (CVE-2021-25737), which ordinary Services rely on. Envoy itself has no such check;
+  Envoy Gateway rejects loopback Backend addresses at configuration time. `system` mode drops unspecified answers before selection on every
   protocol (`backends::drop_unspecified`), because the backend address check does not
   classify them.
 - Accepted: settings are process-wide (the smallest-named EGC defining `dnsResolver`);

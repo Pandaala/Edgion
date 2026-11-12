@@ -23,8 +23,10 @@ while IFS= read -r invalid_fixture; do
     echo "Kubernetes admission unexpectedly accepted ${invalid_fixture}" >&2
     exit 1
   fi
+  # Schema-shape rejections only: strict decoding, the operator oneOf, or a
+  # nested operator inside allOf, whose entries must be typed atomic conditions.
   if ! printf '%s\n' "${output}" \
-    | grep -qE 'strict decoding error|must validate one and only one schema'; then
+    | grep -qE 'strict decoding error|must validate one and only one schema|conditions\.(run|skip)\.allOf\[[0-9]+\]\.type: Required value'; then
     echo "Kubernetes admission failed for an unexpected reason: ${invalid_fixture}" >&2
     printf '%s\n' "${output}" >&2
     exit 1

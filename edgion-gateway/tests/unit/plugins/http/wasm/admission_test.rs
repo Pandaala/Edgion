@@ -2,6 +2,17 @@ use super::*;
 use crate::plugins::http::wasm::host_abi::HostState;
 use wasmtime::{Engine, Instance, Module, ResourceLimiter, Store};
 
+/// Process defaults for the lib test harness, which runs many independent
+/// loads in one process: the production preparation bound (4, non-waiting)
+/// would make them reject each other. Tests that exercise exhaustion read
+/// `limits()` instead of assuming 4.
+pub(super) fn default_process_limits() -> WasmLimits {
+    WasmLimits {
+        max_preparations: 32,
+        ..WasmLimits::default()
+    }
+}
+
 impl GuestMemory {
     fn for_test(budget: Arc<GuestBudget>) -> Arc<Self> {
         Arc::new(Self {

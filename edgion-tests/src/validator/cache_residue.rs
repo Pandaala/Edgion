@@ -589,15 +589,38 @@ async fn fetch_samples(
     None
 }
 
+/// Every page of a Controller resource list (the Admin API pages its lists).
+/// `None` when a page has no data array or the list exceeds the page budget,
+/// so nothing is treated as verified.
 async fn fetch_controller_resources(client: &Client, args: &Args, kind: &str) -> reqwest::Result<Option<Vec<Value>>> {
     let url = format!("{}/api/v1/namespaced/{}", args.controller_addr, kind);
-    let body: Value = with_bearer(client.get(&url), args.controller_token.as_deref())
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(body.pointer("/data").and_then(Value::as_array).cloned())
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..STAGED_MAX_PAGES {
+        let mut request = client.get(&url).query(&[("limit", STAGED_PAGE_SIZE.to_string())]);
+        if let Some(cursor) = &cursor {
+            request = request.query(&[("continue", cursor)]);
+        }
+        let body: Value = with_bearer(request, args.controller_token.as_deref())
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let Some(page) = body.pointer("/data").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        items.extend(page.iter().cloned());
+        cursor = body
+            .get("continue_token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
+        if cursor.is_none() {
+            return Ok(Some(items));
+        }
+    }
+    Ok(None)
 }
 
 fn resource_key(item: &Value) -> Option<String> {
@@ -1299,6 +1322,54 @@ mod e2e_tests {
     }
 
     #[tokio::test]
+    async fn controller_lists_are_read_across_every_page() {
+        let ctrl = MockServer::start().await;
+        let item = |name: &str| json!({ "metadata": { "namespace": "app", "name": name } });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/ConfigMap"))
+            .and(wiremock::matchers::query_param("continue", "next"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "success": true, "data": [item("second")] })),
+            )
+            .with_priority(1)
+            .mount(&ctrl)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/ConfigMap"))
+            .and(wiremock::matchers::query_param("limit", STAGED_PAGE_SIZE.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "data": [item("first")],
+                "continue_token": "next"
+            })))
+            .mount(&ctrl)
+            .await;
+        let args = Args {
+            controller_addr: ctrl.uri(),
+            gateway_addr: String::new(),
+            controller_token: None,
+            gateway_token: None,
+            no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
+            timeout_secs: 1,
+            poll_interval_ms: 100,
+            mode: "warn".to_string(),
+            skip: Some("gateway".to_string()),
+            ignore_controller_configmap: Vec::new(),
+            ignore_controller_conf_sync_secret: Vec::new(),
+        };
+        let items = fetch_controller_resources(&test_client_builder().build().unwrap(), &args, "ConfigMap")
+            .await
+            .unwrap()
+            .expect("both pages");
+        let names: Vec<_> = items.iter().filter_map(resource_key).collect();
+        assert_eq!(names, vec!["app/first".to_string(), "app/second".to_string()]);
+    }
+
+    #[tokio::test]
     async fn collect_revalidates_conf_sync_secrets_and_preserves_other_residue() {
         let ctrl = MockServer::start().await;
 
@@ -1844,7 +1915,9 @@ mod walk_tests {
 }
 
 const STAGED_BODY_CAP: usize = 8 * 1024 * 1024;
-const STAGED_PAGE_SIZE: usize = 500;
+// The Controller Admin API rejects a page above its `MAX_PAGE_SIZE` (100)
+// with 400, so the staged cleanup lists metadata keys at exactly that size.
+const STAGED_PAGE_SIZE: usize = 100;
 const STAGED_MAX_PAGES: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2530,7 +2603,7 @@ mod staged_cleanup_tests {
             first["continue_token"] = json!("next");
             Mock::given(method("GET"))
                 .and(path("/api/v1/keys/namespaced/Service"))
-                .and(query_param("limit", "500"))
+                .and(query_param("limit", "100"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(first))
                 .mount(&server)
                 .await;
@@ -2566,7 +2639,7 @@ mod staged_cleanup_tests {
         let counter = requests.clone();
         Mock::given(method("GET"))
             .and(path("/api/v1/keys/namespaced/Service"))
-            .and(query_param("limit", "500"))
+            .and(query_param("limit", "100"))
             .respond_with(move |request: &Request| {
                 let index = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let continued = request

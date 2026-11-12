@@ -284,3 +284,17 @@ fn test_owner(config: ActiveHealthCheckConfig) -> Arc<edgion_resources::EdgionBa
         Some(edgion_resources::resources::health_check::ServiceHealthCheck { active: Some(config) });
     Arc::new(owner)
 }
+
+#[test]
+fn dns_derived_unsafe_endpoints_are_never_probed() {
+    for unsafe_addr in [
+        "127.0.0.1:80",
+        "[::1]:80",
+        "[::ffff:127.0.0.1]:80",
+        "169.254.169.254:80",
+    ] {
+        assert!(refuses_dns_endpoint(unsafe_addr.parse().unwrap()), "{unsafe_addr}");
+    }
+    assert!(!refuses_dns_endpoint("10.0.0.1:80".parse().unwrap()));
+    assert!(!refuses_dns_endpoint("[2001:db8::1]:80".parse().unwrap()));
+}
