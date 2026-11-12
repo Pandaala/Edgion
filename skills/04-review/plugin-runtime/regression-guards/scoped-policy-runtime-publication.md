@@ -1,6 +1,6 @@
 ---
 name: scoped-policy-runtime-publication
-description: Review GatewayClass policy publication, retained DSL/WAF candidates, shared entry ownership, captured HTTP/stream admission scopes, and fail-closed handling of missing Gateway-level/EGC-global plugin references.
+description: Review GatewayClass policy publication, retained DSL/WAF candidates, shared entry ownership, captured HTTP/stream admission scopes, and fail-closed handling of missing or malformed Gateway-level/EGC-global plugin references.
 knowledge_type: regression-guards
 ---
 
@@ -205,7 +205,7 @@ Adaptive delta notifications use semantic target keys; inventories remain raw.
 
 ### Actual HTTP attachment field binding (C1)
 
-HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are removed before canonical PluginTarget classification, and invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. A Missing target contributes no class-scope compiled entry; how a miss is enforced depends on the attachment point (see the gw-core-02 section below). Slots removed as invalid before classification never become keys and are outside that rule; that remaining fail-open is tracked in `tasks/todo/gw-core-02b-malformed-plugin-attachment-refs-fail-open.md`. Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection.
+HTTP attachment cold consumers now share actual EGC/Gateway field validation. Invalid slots are replaced by the empty sentinel before canonical PluginTarget classification (`http_attachment_keys`; see gw-core-02b below), so invalid owners cannot borrow a same-name live plugin. Valid sibling order and existing captured scope ownership remain. A Missing target contributes no class-scope compiled entry; how a miss is enforced depends on the attachment point (see the gw-core-02 section below). Valid default/bare ambiguity remains a distinct sealed denial, independent of Bypass and without LKG resurrection.
 
 ### Missing Gateway-level and EGC-global HTTP targets fail closed (gw-core-02)
 
@@ -241,7 +241,7 @@ single-Gateway listener the early preflight gate denies before route matching,
 including ACME HTTP-01 challenges on that listener (the same reach as the
 ambiguous/invalid-config gates). On shared listeners the scope is captured only
 after route matching, so unmatched requests still get 404. Malformed reference
-slots remain fail-open (gw-core-02b, tracked above).
+slots are denied the same way (gw-core-02b below).
 
 Verification: unit tests
 `prepared_global_slice_matches_reference_order_and_tracks_publication`,
@@ -261,14 +261,83 @@ equivalent case. A Gateway without listeners also gets a slice (placeholders for
 keys outside the class signature); it serves no traffic, and the slice stays a
 pure function of (scope, keys), so reuse remains correct when listeners appear. The shared `example-gateway` EGC (local overlay,
 `edgion-tests/k8s/conf/base/EdgionGatewayConfig.yaml`, and the BodyDynamic/DslBody
-K8s dynamic-update copies) must never carry a dangling global reference, because
-it would deny every suite on that class; the former intentional `ghost` reference
+K8s dynamic-update copies) must never carry a dangling or malformed global
+reference, because it would deny every suite on that class; the former intentional `ghost` reference
 was removed from all of them.
 
 Re-evaluate if attachment references gain an explicit optional/required contract,
 or if Controller admission starts withholding Gateways with unresolved plugin refs.
 Related: ctrl-proc2-02 (fixed) reports missing global targets as the consuming
 GatewayClass `ResolvedRefs=False`; see [shared config status](../../status/regression-guards/shared-config-status-deployment-independence.md).
+
+### Malformed Gateway-level and EGC-global references fail closed (gw-core-02b)
+
+Trigger: a Gateway `edgion.io/edgion-plugins` token or an EGC `globalPluginsRef`
+entry that is not a valid reference at all (uppercase or `_` in the name, invalid
+namespace, extra `/`, empty segment), or an attachment owner whose own identity is
+invalid (every slot of its list is then an `Err`). The invalid-owner case cannot
+arise in Kubernetes mode (EGC is cluster-scoped; Gateway names are API-validated);
+whether file or etcd mode can deliver such an owner is unverified, so that case
+has unit evidence only. Neither path is schema-validated
+against object-name syntax: the annotation is free-form and the EGC CRD gives
+`globalPluginsRef[].name` only `minLength: 1`, so Kubernetes accepts such typos.
+
+Root cause: `HttpPluginAttachments::entries()` returns one
+`Result<PluginAttachmentKey, ReferenceError>` per slot, but the Gateway publication
+consumers (`GatewayInput::from_gateway` and the EGC globals in
+`Inputs::scope_plan`, `publication/publisher.rs`) projected them with `.flatten()`. An `Err` slot
+vanished before resolution, received no gw-core-02 placeholder, and requests were
+proxied without the intended plugin list. The Controller only reported it
+(Gateway `ResolvedRefs=False/InvalidPluginsRef`; EGC `Accepted=False` and the
+consuming GatewayClass `Accepted=False/InvalidParameters`) and still published
+the resource.
+
+Correct behavior: the single projection `http_attachment_keys`
+(`edgion-gateway/src/runtime/store/listener_gateway_info.rs`, beside the canonical
+`gateway_listener_entries` projection) maps every `Err` slot to the
+empty string, keeping order. `scope_plan` removes `""` from compile demand, and
+`classify("")` cannot succeed (`MissingNamespace`), so the sentinel is never a
+`PluginScope::http` key and can never borrow a live plugin. `resolve_http_runtimes`
+therefore substitutes the shared gw-core-02 `missing_reference()` runtime: 500
+before upstream, `MissingEdgionPlugins` in the plugin log, the same early-gate
+reach and limits as a missing target. `GatewayInfo.plugin_store_keys` uses the
+same projection so its parity with publication keys is preserved;
+`http_log_fields("")` stays empty.
+
+Decision on the open admission question: the Controller keeps reporting status
+and does not withhold or reject the Gateway/EGC. Authority: the 🔴 lenient
+admission rule (`skills/00-design-rules.md` section N) makes status-plus-downstream
+enforcement the default; hard rejection would remove the operator's signal. Denying in the data plane per
+Gateway (annotation) or per class (globals) matches the gw-core-02 missing-target
+contract, while admission rejection would be a separate cross-layer change. The
+plugin-log token deliberately reuses `MissingEdgionPlugins`; the status message
+names the malformed field. Controller `plugin_ref_mgr` registration still skips
+invalid slots, which is correct because no source can ever match them.
+
+Verification (2026-11-12): unit tests
+`prepared_slices_keep_malformed_slots_in_order_and_recover_when_corrected`
+(including a raw source stored under the empty key, which is never borrowed),
+`actual_global_fields_preserve_siblings_and_keep_invalid_slots_fail_closed`,
+`actual_gateway_owner_cannot_borrow_same_name_plugin_from_live_inventory`
+(`edgion-gateway/tests/unit/plugins/publication/mod_test.rs`),
+`actual_gateway_attachment_projection_keeps_invalid_slots_and_owner_as_sentinels`
+(`inputs_test.rs`) and the listener-info parity tests
+(`tests/unit/runtime/store/listener_gateway_info_test.rs`); the full
+`edgion-gateway` lib suite passed (6843 passed, 0 failed, 19 ignored).
+Integration: `global_plugins_snapshot_malformed_gateway_ref_fails_closed`
+(EdgionPlugins/GlobalPluginsSnapshot, private Gateway on port 32008, local mode
+only) asserts the 500, zero upstream attempts and `MissingEdgionPlugins`.
+The targeted local suite run passed on 2026-11-12 (three cases, including the
+existing gw-core-02 missing-target case; cache-residue and requeue checks
+passed). That run skipped two unrelated environment pre-flights (macOS loopback
+aliases unused by this suite; an existing broken agent-doc link elsewhere); it
+is not a full integration run.
+As with gw-core-02, the EGC-global path has unit coverage only and the K8s
+fixtures have no equivalent case.
+
+Re-evaluate if the Controller starts rejecting or withholding resources with
+malformed plugin references, if attachment fields gain schema-level name
+validation, or if a distinct invalid-reference diagnostic token is required.
 
 ## Actual stream attachment owner boundary (C2)
 

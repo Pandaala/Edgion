@@ -213,8 +213,9 @@ deployments' observations.
   unset `parametersRef` is valid and falls back to defaults.
 - `EdgionGatewayConfig` is cluster-scoped, so `parametersRef` carries no `namespace`.
 - Shared `EdgionGatewayConfig.status` reports intrinsic configuration validity.
-  If a visible `globalPluginsRef` has an invalid early RequestId source or condition,
-  the consuming GatewayClass reports `Accepted=False/InvalidParameters`. Check the class
+  If a visible `globalPluginsRef` entry is malformed (not a valid object name or
+  namespace) or has an invalid early RequestId source or condition, the consuming
+  GatewayClass reports `Accepted=False/InvalidParameters`. Check the class
   status for these deployment-local errors.
 - The consuming GatewayClass also reports `ResolvedRefs=False/InvalidParameters` when this
   Controller cannot resolve a reference declared by its EdgionGatewayConfig, and the message

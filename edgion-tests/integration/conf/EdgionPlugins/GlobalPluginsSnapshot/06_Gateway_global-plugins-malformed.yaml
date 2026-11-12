@@ -1,0 +1,24 @@
+# Private Gateway for the gw-core-02b fail-closed case. Its Gateway-level
+# edgion.io/edgion-plugins annotation holds a malformed reference (uppercase and
+# '_' are not valid object-name characters), so it is not a reference at all.
+# Every request through this listener must be denied with 500 instead of the
+# malformed slot being skipped and the request served without it.
+#
+# A dedicated Gateway (own port) keeps the malformed reference away from the
+# shared example-gateway EdgionGatewayConfig and every other suite.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: global-plugins-malformed
+  namespace: edgion-default
+  annotations:
+    edgion.io/edgion-plugins: "Global_Plugins_Malformed"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 32008
+      allowedRoutes:
+        namespaces:
+          from: All

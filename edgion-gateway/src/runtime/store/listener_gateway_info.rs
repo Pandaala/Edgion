@@ -29,7 +29,7 @@ use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::gateway::{gateway_attachment_proof, gateway_listener_is_explicitly_ineligible};
 use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
-use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
+use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAttachments, PluginAttachmentKey};
 use edgion_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
@@ -272,6 +272,18 @@ pub struct ListenerGatewayInfoStore {
     snapshot: ArcSwap<ListenerGatewayInfoSnapshot>,
 }
 
+/// Project an HTTP attachment field into ordered cold plugin keys. An invalid
+/// slot (malformed target or invalid owner identity) keeps its position as the
+/// empty sentinel, which never names a published plugin: it resolves to the
+/// fail-closed missing-reference runtime and can never borrow a same-name plugin.
+pub(crate) fn http_attachment_keys(field: HttpPluginAttachments<'_>) -> Vec<String> {
+    field
+        .entries()
+        .into_iter()
+        .map(|entry| entry.map_or_else(|_| String::new(), PluginAttachmentKey::into_key))
+        .collect()
+}
+
 /// Canonical cold projection used by listener inventory and request publication.
 pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, ListenerEntry)> {
     let mut entries = Vec::new();
@@ -295,12 +307,7 @@ pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, L
         .and_then(|map| map.get(annotations::REQUIRE_SNI_HOST_MATCH))
         .map(|v| v == "true");
 
-    let plugin_store_keys: Vec<String> = HttpPluginAttachments::Gateway(gateway)
-        .entries()
-        .into_iter()
-        .flatten()
-        .map(|reference| reference.into_key())
-        .collect();
+    let plugin_store_keys = http_attachment_keys(HttpPluginAttachments::Gateway(gateway));
 
     // Precompute the gateway-layer DNS resolver candidate from the two
     // `edgion.io/dns-resolver{,-ref}` annotations, so AI endpoint and external

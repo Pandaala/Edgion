@@ -152,7 +152,8 @@ fn annotation_projection_preserves_plugin_namespace_fallback() {
             (
                 "local, shared/plugin local",
                 if namespace == Some("") {
-                    vec![]
+                    // gw-core-02b: an invalid owner keeps each slot as a sentinel.
+                    vec!["", ""]
                 } else {
                     vec![expected, "shared/plugin"]
                 },
@@ -492,14 +493,16 @@ fn actual_http_attachment_keys_match_publication_and_pin_old_listener_info() {
     store.rebuild(&[owner.clone()]);
     let old = store.get(&key);
     let expected = crate::plugins::publication::inputs::GatewayInput::from_gateway(&owner).http_keys;
-    assert_eq!(expected, ["default/local", "other/good", "default/missing"]);
+    // gw-core-02b: invalid slots stay in place as empty fail-closed sentinels.
+    assert_eq!(expected, ["default/local", "", "other/good", "", "default/missing"]);
     assert_eq!(old[0].plugin_store_keys, expected);
     owner.metadata.name = None;
     store.rebuild(&[owner.clone()]);
-    assert!(store.get(&key)[0].plugin_store_keys.is_empty());
-    assert!(crate::plugins::publication::inputs::GatewayInput::from_gateway(&owner)
-        .http_keys
-        .is_empty());
+    assert_eq!(store.get(&key)[0].plugin_store_keys, [""; 5]);
+    assert_eq!(
+        crate::plugins::publication::inputs::GatewayInput::from_gateway(&owner).http_keys,
+        [""; 5]
+    );
     assert_eq!(old[0].plugin_store_keys, expected);
 }
 

@@ -364,6 +364,14 @@ listener. Create the `EdgionPlugins` resource before referencing it, and remove
 the reference before deleting the resource. A missing target is reported on the
 consuming GatewayClass as `ResolvedRefs=False` (see the GatewayClass page).
 
+A malformed reference is rejected the same way: a name or namespace that is not a
+valid Kubernetes object name (for example uppercase letters or `_`), an extra `/`,
+or an empty segment keeps its position in the list and returns `500` instead of
+being skipped. A malformed `globalPluginsRef` entry sets `Accepted=False` on this
+EdgionGatewayConfig and `Accepted=False/InvalidParameters` on the consuming
+GatewayClass; a malformed Gateway annotation entry sets the Gateway's
+`ResolvedRefs=False`.
+
 ### spec.accessLogExtern
 
 The masking whitelist for [`AccessLogExtern`](../observability/access-log.md#extending-the-log-accesslogextern)-declared

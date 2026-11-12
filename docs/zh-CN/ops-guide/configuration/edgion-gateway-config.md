@@ -294,6 +294,11 @@ Gateway 上的 `edgion.io/edgion-plugins` 注解遵循同样的规则（作用�
 在只由单个 Gateway 使用的 listener 上，拒绝发生在路由匹配之前，因此该 listener 上的
 ACME HTTP-01 校验请求也会被拒绝。请先创建 `EdgionPlugins` 资源再引用它；删除资源前先移除引用。目标缺失会在消费该配置的 GatewayClass 上报告为 `ResolvedRefs=False`（见 GatewayClass 页面）。
 
+格式错误的引用按同样方式拒绝：name 或 namespace 不是合法的 Kubernetes 对象名（例如含大写字母或 `_`）、
+多出一个 `/` 或存在空段时，该引用在列表中保留原位置并返回 `500`，而不会被跳过。格式错误的
+`globalPluginsRef` 条目会使该 EdgionGatewayConfig 为 `Accepted=False`，并使消费它的 GatewayClass 为
+`Accepted=False/InvalidParameters`；Gateway 注解中格式错误的条目会使该 Gateway 为 `ResolvedRefs=False`。
+
 ### spec.accessLogExtern
 
 [`AccessLogExtern`](../observability/access-log.md#扩展日志accesslogextern) 声明字段的脱敏白名单。平台方所有——是 Cluster 作用域，与 `globalPluginsRef` 同级——因此某个 namespace 下自己的 `EdgionPlugins` 无法为整个集群放宽脱敏。

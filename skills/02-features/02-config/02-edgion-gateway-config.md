@@ -480,7 +480,9 @@ fails closed: the Gateway prepares a `MissingEdgionPlugins` reject runtime in it
 place, so requests get `500` before upstream instead of skipping the plugin
 (same for the Gateway `edgion.io/edgion-plugins` annotation; gw-core-02). On a
 single-Gateway listener the gate runs before route matching, so ACME HTTP-01
-challenges on that listener are denied too.
+challenges on that listener are denied too. A malformed reference (invalid
+name/namespace, extra `/`, empty segment) or an invalid owner identity keeps its
+slot and is denied the same way instead of being skipped (gw-core-02b).
 
 ### spec.accessLogExtern
 

@@ -245,20 +245,21 @@ fn owning_reference_demand_rejects_invalid_sources_names_and_stamps_per_descript
 }
 
 #[test]
-fn actual_gateway_attachment_projection_rejects_invalid_slots_and_owner() {
+fn actual_gateway_attachment_projection_keeps_invalid_slots_and_owner_as_sentinels() {
     let mut owner = gateway();
     owner.metadata.namespace = None;
     owner.metadata.annotations = Some(std::collections::BTreeMap::from([(
         annotations::EDGION_PLUGINS.into(),
         "local, default/local /bad other/good bad/a/b missing".into(),
     )]));
+    // gw-core-02b: invalid slots keep their position as empty fail-closed sentinels.
     assert_eq!(
         GatewayInput::from_gateway(&owner).http_keys,
-        ["default/local", "other/good", "default/missing"]
+        ["default/local", "", "other/good", "", "default/missing"]
     );
     assert!(owner.metadata.namespace.is_none());
     owner.metadata.name = None;
-    assert!(GatewayInput::from_gateway(&owner).http_keys.is_empty());
+    assert_eq!(GatewayInput::from_gateway(&owner).http_keys, [""; 5]);
     for value in ["", " , \t,\n "] {
         owner
             .metadata

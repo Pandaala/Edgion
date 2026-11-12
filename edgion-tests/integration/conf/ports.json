@@ -1,5 +1,5 @@
 {
-  "current_max": 32007,
+  "current_max": 32008,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -133,6 +133,9 @@
     },
     "EdgionPlugins/GlobalPluginsSnapshot/MissingGatewayPlugins": {
       "http": 32007
+    },
+    "EdgionPlugins/GlobalPluginsSnapshot/MalformedGatewayPlugins": {
+      "http": 32008
     },
     "EdgionPlugins/AccessLogExtern": {
       "http": 31395

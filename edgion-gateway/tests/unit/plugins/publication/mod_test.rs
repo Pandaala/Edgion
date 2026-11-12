@@ -1537,7 +1537,7 @@ fn merged_graphql_bare_source_admission_collision_and_pins() {
 }
 
 #[test]
-fn actual_global_fields_preserve_siblings_missing_drop_and_pinned_scope() {
+fn actual_global_fields_preserve_siblings_and_keep_invalid_slots_fail_closed() {
     let publisher = publisher();
     publisher.replace_http_plugins(HashMap::from([
         ("apps/plugins".into(), plugin("dsl", true)),
@@ -1557,15 +1557,21 @@ fn actual_global_fields_preserve_siblings_missing_drop_and_pinned_scope() {
     );
     publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg.clone()))]));
     let pinned = scope(&publisher, "apps/a");
-    assert_eq!(pinned.global_keys, ["apps/plugins", "default/missing", "apps/plugins"]);
+    // gw-core-02b: malformed slots keep their position as empty sentinels.
+    let keys = ["apps/plugins", "", "", "default/missing", "apps/plugins"];
+    assert_eq!(pinned.global_keys, keys);
+    same_runtimes(&pinned.resolved_globals, &pinned, &keys);
     assert!(pinned.http("apps/plugins").unwrap().is_activatable);
     assert!(pinned.http("default/missing").is_none());
+    assert!(pinned.http("").is_none());
     assert!(pinned.http("/decoy").is_none());
     assert!(pinned.http("apps/bad/name").is_none());
     cfg.metadata.namespace = Some("".into());
     publisher.replace_gateway_configs(HashMap::from([("policy-a".into(), Arc::new(cfg.clone()))]));
     let invalid = scope(&publisher, "apps/a");
-    assert!(invalid.global_keys.is_empty());
+    // An invalid owner denies every slot instead of silently dropping the list.
+    assert_eq!(invalid.global_keys, [""; 5]);
+    same_runtimes(&invalid.resolved_globals, &invalid, &[""; 5]);
     assert!(invalid.http("apps/plugins").is_none());
     assert!(pinned.http("apps/plugins").unwrap().is_activatable);
     cfg.metadata.namespace = None;
@@ -1591,9 +1597,17 @@ fn actual_gateway_owner_cannot_borrow_same_name_plugin_from_live_inventory() {
     let pinned = scope(&publisher, "apps/a");
     assert!(pinned.http("apps/plugins").unwrap().is_activatable);
     assert!(pinned.http("apps/missing").is_none());
+    let keys = ["apps/plugins", "apps/missing", ""];
+    let first = publisher.snapshot().gateway("apps/a").unwrap();
+    assert_eq!(first.http_keys, keys);
+    same_runtimes(&first.resolved_http, &first.scope, &keys);
     owner.metadata.name = None;
     publisher.replace_gateways(HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&owner))]));
     assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    // gw-core-02b: an invalid owner denies every slot without borrowing the live plugin.
+    let invalid = publisher.snapshot().gateway("apps/a").unwrap();
+    assert_eq!(invalid.http_keys, [""; 3]);
+    same_runtimes(&invalid.resolved_http, &invalid.scope, &[""; 3]);
     assert!(pinned.http("apps/plugins").unwrap().is_activatable);
     assert_eq!(publisher.snapshot().http_sources().len(), 1);
 }
@@ -2512,4 +2526,68 @@ fn prepared_gateway_slice_keeps_ambiguous_placeholder() {
     let prepared = owner.resolved_http.as_deref().expect("collision is kept");
     assert_eq!(prepared.len(), 2, "missing and colliding targets are both kept");
     assert!(prepared.iter().all(|runtime| runtime.rejects_invalid_config()));
+}
+
+fn annotated_gateway(annotation: &str) -> GatewayInput {
+    GatewayInput::from_gateway(
+        &crate::test_current_status::from_value::<Gateway>(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"name": "a", "namespace": "apps",
+                "annotations": {"edgion.io/edgion-plugins": annotation}},
+            "spec": {"gatewayClassName": "a", "listeners": [{"name": "web", "port": 18080, "protocol": "HTTP"}]},
+        }))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn prepared_slices_keep_malformed_slots_in_order_and_recover_when_corrected() {
+    let publisher = publisher();
+    publisher.replace_http_plugins(HashMap::from([
+        ("apps/plugins".into(), plugin("dsl", true)),
+        ("apps/other".into(), named_plugin("other")),
+        // A raw source stored under the sentinel spelling must never be borrowed.
+        ("".into(), plugin("dsl", true)),
+    ]));
+    // gw-core-02b: uppercase/underscore, extra segment and empty namespace are
+    // not references; each keeps its slot as a fail-closed sentinel.
+    set_global_refs(
+        &publisher,
+        Some(json!([
+            {"namespace":"apps","name":"Plugins_Typo"},
+            {"namespace":"apps","name":"plugins"}
+        ])),
+    );
+    publisher.replace_gateways(HashMap::from([(
+        "apps/a".into(),
+        annotated_gateway("Other_Typo apps/other/extra plugins /other"),
+    )]));
+    let owner = publisher.snapshot().gateway("apps/a").unwrap();
+    assert_eq!(owner.scope.global_keys, ["", "apps/plugins"]);
+    same_runtimes(&owner.scope.resolved_globals, &owner.scope, &["", "apps/plugins"]);
+    let gateway_keys = ["", "", "apps/plugins", ""];
+    assert_eq!(owner.http_keys, gateway_keys);
+    same_runtimes(&owner.resolved_http, &owner.scope, &gateway_keys);
+    assert!(!owner.resolved_http.as_deref().unwrap()[2].rejects_invalid_config());
+    assert!(owner.scope.http("").is_none());
+    assert!(
+        owner.scope.http("apps/other").is_none(),
+        "a malformed slot creates no demand"
+    );
+
+    // Correcting the references rebuilds the scope and owner with live runtimes.
+    set_global_refs(&publisher, Some(json!([{"namespace":"apps","name":"plugins"}])));
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), annotated_gateway("other plugins"))]));
+    let fixed = publisher.snapshot().gateway("apps/a").unwrap();
+    same_runtimes(&fixed.scope.resolved_globals, &fixed.scope, &["apps/plugins"]);
+    same_runtimes(&fixed.resolved_http, &fixed.scope, &["apps/other", "apps/plugins"]);
+    assert!(fixed
+        .resolved_http
+        .as_deref()
+        .unwrap()
+        .iter()
+        .chain(fixed.scope.resolved_globals.as_deref().unwrap())
+        .all(|runtime| !runtime.rejects_invalid_config()));
+    // The captured malformed slices stay pinned to their publication.
+    same_runtimes(&owner.resolved_http, &owner.scope, &gateway_keys);
 }

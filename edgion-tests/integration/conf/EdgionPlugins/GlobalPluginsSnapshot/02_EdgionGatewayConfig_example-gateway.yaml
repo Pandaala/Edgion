@@ -5,10 +5,11 @@
 # One ref is declared: gp-resp-header-modifier (defined in 01_EdgionPlugins_*.yaml).
 # A request through this gateway should succeed (200) with X-Global-Plugin added.
 #
-# Do not add a dangling reference here: a missing global target fails closed
-# (500) for every Gateway of this class, which is every suite sharing
-# example-gateway. The fail-closed case uses the private Gateway in
-# 04_Gateway_global-plugins-missing.yaml instead.
+# Do not add a dangling or malformed reference here: a missing or malformed
+# global target fails closed (500) for every Gateway of this class, which is
+# every suite sharing example-gateway. The fail-closed cases use the private
+# Gateways in 04_Gateway_global-plugins-missing.yaml and
+# 06_Gateway_global-plugins-malformed.yaml instead.
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:

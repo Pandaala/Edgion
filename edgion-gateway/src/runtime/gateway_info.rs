@@ -45,7 +45,8 @@ pub struct GatewayInfo {
 
     /// Resolved "namespace/name" store keys of EdgionPlugins attached to this Gateway via
     /// the `edgion.io/edgion-plugins` annotation. Run for every request on this Gateway,
-    /// after GatewayClass-wide global plugins and before route-level plugins.
+    /// after GatewayClass-wide global plugins and before route-level plugins. An invalid
+    /// slot is kept as an empty fail-closed sentinel, matching the publication keys.
     pub plugin_store_keys: Vec<String>,
 
     /// Gateway-layer DNS resolver candidate, precomputed from the Gateway's

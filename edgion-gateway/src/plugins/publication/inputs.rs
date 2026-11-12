@@ -20,7 +20,7 @@ use crate::plugins::stream::plugin_generation::StreamStages;
 use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs, resolve_stream_plugin_store_key};
 use crate::routes::http::delegation_build::child_accepted_keys;
 use crate::runtime::matching::route::{check_allowed_routes, ResolvedParentRef};
-use crate::runtime::store::listener_gateway_info::{gateway_listener_entries, ListenerEntry};
+use crate::runtime::store::listener_gateway_info::{gateway_listener_entries, http_attachment_keys, ListenerEntry};
 
 #[derive(Clone, Debug)]
 pub(crate) struct GatewayListener {
@@ -42,12 +42,7 @@ pub(crate) struct GatewayInput {
 
 impl GatewayInput {
     pub(crate) fn from_gateway(gateway: &Gateway) -> Self {
-        let http_keys = HttpPluginAttachments::Gateway(gateway)
-            .entries()
-            .into_iter()
-            .flatten()
-            .map(|reference| reference.into_key())
-            .collect();
+        let http_keys = http_attachment_keys(HttpPluginAttachments::Gateway(gateway));
         let connection_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Gateway(gateway));
         let listeners = gateway_listener_entries(gateway)
             .into_iter()

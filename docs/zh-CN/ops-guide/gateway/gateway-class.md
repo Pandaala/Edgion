@@ -162,7 +162,7 @@ Gateway 收到的配置会保留完整 `status`，并包含由 Controller 生成
 - 如果 `controllerName` 与 Controller 配置的名称不完全匹配，Edgion 永远不会设置 `Accepted` 状态，引用该 class 的 Gateway 将保持未编程状态。
 - `parametersRef` 的 `group` 或 `kind` 错误时会以 `Accepted: False` 拒绝；未设置 `parametersRef` 是有效的，将回退到默认值。
 - `EdgionGatewayConfig` 是集群作用域的，因此 `parametersRef` 不包含 `namespace`。
-- 共享的 `EdgionGatewayConfig.status` 只报告配置自身的合法性。可见的 `globalPluginsRef` 若包含不允许在早期阶段使用的 RequestId 来源或条件，错误记录在消费该配置的 GatewayClass 上：`Accepted=False/InvalidParameters`。请在 GatewayClass 状态中查看此类部署局部错误。
+- 共享的 `EdgionGatewayConfig.status` 只报告配置自身的合法性。可见的 `globalPluginsRef` 条目若格式错误（不是合法的对象名或 namespace），或包含不允许在早期阶段使用的 RequestId 来源或条件，错误记录在消费该配置的 GatewayClass 上：`Accepted=False/InvalidParameters`。请在 GatewayClass 状态中查看此类部署局部错误。
 - 当本 Controller 无法解析其 EdgionGatewayConfig 声明的引用时，消费它的 GatewayClass 还会报告 `ResolvedRefs=False/InvalidParameters`，消息会列出每个未解析的字段，class 仍为 `Accepted`。该状态可通过 `kubectl describe gatewayclass` 或 `-o yaml` 查看（默认的 `kubectl get` 列只显示 `Accepted`）。覆盖的引用及期间 Gateway 的行为：
   - `globalPluginsRef` 目标不存在（在观察 EdgionPlugins 时）：执行该 class 全局插件的请求返回 `500`。
   - `realIp.trustedIpRefs` 的 IpList 不存在、不是已启用的 IpList，或（启用 ReferenceGrant 校验时）不是 Cluster 可见：该 class 忽略转发头（任一列表不可用时所有可信列表都不生效），客户端 IP 即为直连对端。

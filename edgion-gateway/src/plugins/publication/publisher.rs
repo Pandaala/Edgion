@@ -31,7 +31,7 @@ use crate::plugins::runtime::entry_bundle::EntryDemand;
 use crate::plugins::stream::plugin_generation::{StreamEntryDemand, StreamPluginGeneration, StreamStages};
 use crate::routes::grpc::DomainGrpcRouteRules;
 use crate::routes::http::routes_mgr::DomainRouteRules;
-use crate::runtime::store::listener_gateway_info::{GatewayInfoIndex, ListenerEntry};
+use crate::runtime::store::listener_gateway_info::{http_attachment_keys, GatewayInfoIndex, ListenerEntry};
 
 static PUBLISHER: LazyLock<PluginPublisher> = LazyLock::new(PluginPublisher::new);
 
@@ -447,11 +447,8 @@ impl Inputs {
         };
         let globals: Vec<String> = config
             .as_ref()
-            .into_iter()
-            .flat_map(|config| HttpPluginAttachments::EgcGlobals(config).entries())
-            .flatten()
-            .map(|reference| reference.into_key())
-            .collect();
+            .map(|config| http_attachment_keys(HttpPluginAttachments::EgcGlobals(config)))
+            .unwrap_or_default();
         let mut http: HashSet<String> = globals.iter().cloned().collect();
         let mut stream: HashMap<String, StreamStages> = HashMap::new();
         for (_, gateway) in gateways {
@@ -476,6 +473,9 @@ impl Inputs {
                 routes.push(Arc::clone(route));
             }
         }
+        // Invalid attachment slots stay in order as empty sentinels for
+        // fail-closed resolution; they never enter compile demand.
+        http.remove("");
         routes.sort_by_key(|route| Arc::as_ptr(route) as usize);
         ScopePlan {
             signature: ScopeSignature {
