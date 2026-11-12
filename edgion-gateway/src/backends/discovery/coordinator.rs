@@ -1745,11 +1745,14 @@ fn normalize_section(
         let source_identity = slice.identity.as_ref().expect("identified slices are prevalidated");
         let mut origin_slice_key = None;
         for endpoint in &slice.resource.endpoints {
+            // discovery.k8s.io/v1 EndpointConditions: a nil `ready` should be
+            // interpreted as true (kube-proxy does the same). Hand-written and
+            // sync-bridge slices commonly omit it.
             let ready = endpoint
                 .conditions
                 .as_ref()
                 .and_then(|conditions| conditions.ready)
-                .unwrap_or(false);
+                .unwrap_or(true);
             for address in &endpoint.addresses {
                 let Ok(ip) = address.parse::<IpAddr>() else {
                     return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::InvalidEndpointAddress);

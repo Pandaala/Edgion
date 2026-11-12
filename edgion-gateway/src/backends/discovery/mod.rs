@@ -13,5 +13,5 @@ pub use coordinator::{
 pub(crate) use coordinator::{HealthPolicyIdentity, OutlierPolicyIdentity};
 pub use dns_cache::{upstream_dns_cache, DEFAULT_DNS_CACHE_TTL};
 pub use dns_table::{dns_endpoint_table, DnsEndpointTable, DnsEndpointTableStats, DnsRefreshPolicy};
-pub use endpoint_slice::{create_ep_slice_handler, get_roundrobin_store, EndpointSliceExt, EpSliceStore};
+pub use endpoint_slice::{create_ep_slice_handler, get_roundrobin_store, EpSliceStore};
 pub use services::{create_service_handler, get_global_service_store, ServiceStore};

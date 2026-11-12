@@ -53,7 +53,7 @@ same-input reasoning is not approval for a new mutable configuration path.
 
 **Reality**:
 
-1. **Discovery layer only produces Inet addresses**: Backend addresses come from K8s Endpoint/EndpointSlice IP:port, constructed via `"ip:port".parse::<SocketAddr>()` (`endpoint_slice/discovery_impl.rs`, `endpoint/discovery_impl.rs`); always `Inet`.
+1. **Discovery layer only produces Inet addresses**: Backend addresses come from EndpointSlice IP:port; `normalize_section` parses each address as a numeric `IpAddr` and `materialize_section` (`backends/discovery/coordinator.rs`) builds `PingoraSocketAddr::Inet(socket)`; always `Inet`.
 2. **UDS backends cannot appear in the current architecture**: No discovery/construction path generates a `SocketAddr::Unix` `Backend`. The `else` branch of `filter_map` is exhaustive matching for the pingora type system; effectively dead code.
 3. **SP affinity is the same**: Inet-only filtering in `sp_affinity_build` / `sp_affinity_get_or_build` does not affect actual behavior.
 

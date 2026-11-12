@@ -489,6 +489,71 @@ fn direct_endpoint_mapping_is_section_scoped_and_includes_unready_slots() {
 }
 
 #[test]
+fn nil_ready_condition_is_interpreted_as_ready_and_selectable() {
+    // discovery.k8s.io/v1 EndpointConditions: a nil `ready` should be
+    // interpreted as true. Only an explicit `ready: false` excludes.
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".to_string(),
+        service(Some("service-uid"), IntOrString::Int(8080)),
+    )]));
+    let addr: SocketAddr = "10.0.0.1:8080".parse().unwrap();
+    for (case, conditions, expected_ready) in [
+        ("missing conditions", None, true),
+        ("empty conditions", Some(EndpointConditions::default()), true),
+        (
+            "nil ready with other conditions set",
+            Some(EndpointConditions {
+                ready: None,
+                serving: Some(true),
+                terminating: Some(true),
+            }),
+            true,
+        ),
+        (
+            "explicit ready",
+            Some(EndpointConditions {
+                ready: Some(true),
+                ..Default::default()
+            }),
+            true,
+        ),
+        (
+            "explicit unready",
+            Some(EndpointConditions {
+                ready: Some(false),
+                ..Default::default()
+            }),
+            false,
+        ),
+    ] {
+        let mut source = (*slice("backend-a", Some("slice-a"), true)).clone();
+        source.endpoints[0].conditions = conditions;
+        coordinator.replace_endpoint_slices(&HashMap::from([("default/backend-a".to_string(), Arc::new(source))]));
+        let section = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+            .unwrap();
+        assert_eq!(section.all_slots().len(), 1, "{case}");
+        let slot = section.slot_for_addr(addr).unwrap();
+        assert_eq!(slot.ready, expected_ready, "{case}");
+        assert_eq!(slot.origin_set[0].ready, expected_ready, "{case}");
+        assert_eq!(section.ready_slots.len(), usize::from(expected_ready), "{case}");
+        let selectors = &section.selectors;
+        for selector in [
+            &selectors.round_robin,
+            &selectors.consistent_hash,
+            &selectors.least_conn,
+            &selectors.ewma,
+        ] {
+            assert_eq!(selector.backend_count(), usize::from(expected_ready), "{case}");
+        }
+    }
+}
+
+#[test]
 fn direct_endpoint_index_preserves_per_ip_ports_and_captured_generations() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     publish_base(&coordinator);

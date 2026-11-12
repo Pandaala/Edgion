@@ -46,10 +46,12 @@ and had no count cap; the *per-backend weight* was also unbounded. lb-F005 cappe
 used by the data-plane `RrCore` / `ChCore` (`compiled_selector.rs`) is this `RoundRobinSelector`
 / `ConsistentHashRing` pair, so the lb-F005 fix did **not** extend here.
 
-The defect was dormant because the EndpointSlice discovery path hard-codes `weight: 1`
-(`discovery/endpoint_slice/discovery_impl.rs`) and `replace_backends` (`compiled_selector.rs`)
-explicitly carries over the old `weight=1` Arc. It would have become live the moment
-per-endpoint weights are introduced.
+The defect was dormant because the EndpointSlice discovery path hard-coded `weight: 1`
+(at fix time in `discovery/endpoint_slice/discovery_impl.rs`, with `replace_backends` in
+`compiled_selector.rs` carrying over the old `weight=1` Arc). It would have become live the
+moment per-endpoint weights are introduced. Current source (2026-11-12): both historical
+sites are gone; `materialize_section` (`backends/discovery/coordinator.rs`) hard-codes
+`weight: 1` for every slot backend.
 
 ## Why the fix is correct
 

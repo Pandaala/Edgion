@@ -1,0 +1,14 @@
+# Selector-less Service backed by a hand-written EndpointSlice that omits
+# endpoint conditions (see EndpointSlice_nil-ready-backend.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: nil-ready-backend
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http-30001
+      port: 30001
+      protocol: TCP
+      targetPort: 30001
+  type: ClusterIP

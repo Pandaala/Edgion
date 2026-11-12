@@ -1,0 +1,18 @@
+# Hand-written (sync-bridge style) EndpointSlice whose endpoint omits
+# `conditions`. Per discovery.k8s.io/v1 a nil `ready` means ready, so the
+# Gateway must route to it.
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: nil-ready-backend
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: nil-ready-backend
+addressType: IPv4
+ports:
+  - name: http-30001
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"

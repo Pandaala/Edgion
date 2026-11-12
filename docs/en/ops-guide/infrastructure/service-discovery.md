@@ -44,6 +44,58 @@ External service discovery integration utilizes a **Sync Bridge** (such as an op
 
 ---
 
+## Endpoint Readiness
+
+Edgion follows the Kubernetes `discovery.k8s.io/v1` contract for `endpoints[].conditions.ready`:
+
+| `conditions.ready` | Gateway behavior |
+|:---|:---|
+| `true` | The endpoint receives traffic. |
+| Omitted (no `conditions`, empty `conditions`, or no `ready` key) | Treated as ready and receives traffic, the same as kube-proxy. |
+| `false` | The endpoint is excluded from load balancing. |
+
+A sync bridge therefore does not need to write `conditions` for healthy instances. To take an instance out of rotation, remove it from the slice or set `ready: false`:
+
+```yaml
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: my-service-slice
+  namespace: default
+  labels:
+    kubernetes.io/service-name: my-service
+addressType: IPv4
+ports:
+  - name: http
+    port: 8080
+endpoints:
+  # No conditions: treated as ready
+  - addresses:
+      - "10.0.0.11"
+  # Explicitly not ready: excluded from load balancing
+  - addresses:
+      - "10.0.0.12"
+    conditions:
+      ready: false
+```
+
+Recommended mapping from registry instance state:
+
+| Registry | Instance state | EndpointSlice endpoint |
+|:---|:---|:---|
+| Consul | All health checks `passing` or `warning` (Consul DNS also includes `warning` by default) | Ready (omit `conditions` or set `ready: true`) |
+| Consul | Any check `critical`, or maintenance mode | `ready: false`, or omit the endpoint |
+| Nacos | `healthy: true` and `enabled: true` | Ready |
+| Nacos | `healthy: false` or `enabled: false` | `ready: false`, or omit the endpoint |
+| Eureka | `UP` | Ready |
+| Eureka | `DOWN`, `OUT_OF_SERVICE`, `STARTING`, or `UNKNOWN` | `ready: false`, or omit the endpoint |
+
+> `ready` is a snapshot taken when the sync bridge writes the slice; nothing refreshes it between syncs. To remove a failed instance promptly, attach an `EdgionBackendTrafficPolicy` with [active health checks](../../user-guide/http-route/backends/health-check.md) or [outlier detection](../../user-guide/http-route/backends/circuit-breaker.md) to the synced Service.
+>
+> The Gateway currently selects endpoints by `ready` only; the `serving` and `terminating` conditions are not used.
+
+---
+
 ## 1. HashiCorp Consul Integration
 
 ### Kubernetes Environment (consul-k8s Catalog Sync)

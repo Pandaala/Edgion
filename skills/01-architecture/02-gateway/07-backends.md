@@ -55,7 +55,10 @@ See the [normalization ownership guard](../../04-review/backends/regression-guar
 
 Canonical section keys are only Service port number or name. Every valid section contains exact
 all/ready endpoint slots plus eagerly compiled RoundRobin, ConsistentHash, LeastConn, and EWMA
-selectors. Equivalent same-socket origins merge into a deterministic sorted origin set. The
+selectors. Equivalent same-socket origins merge into a deterministic sorted origin set.
+Readiness follows `discovery.k8s.io/v1`: a nil `conditions.ready` counts as ready and only an
+explicit `false` is unready; `serving`/`terminating` are not read yet (see the
+[readiness guard](../../04-review/backends/regression-guards/endpoint-slice-ready-condition-semantics.md)). The
 native Route compiler takes an actual Route's effective field loan and stores
 one `CompiledServiceTarget` containing the canonical policy target, Service key and
 checked `ServiceSectionKey::Number`. Missing or invalid declared ports produce an

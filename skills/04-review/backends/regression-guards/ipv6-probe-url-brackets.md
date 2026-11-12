@@ -54,5 +54,6 @@ Re-open only if:
 ## Reference Cases
 
 - backends-F001 (review finding, 2026-05-20)
-- `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs:38` — the pre-existing
-  correct `format!("[{}]:{}", address, port)` IPv6 pattern already in the codebase.
+- Historical: the former EndpointSlice `discovery_impl.rs` helper (`EndpointSliceExt`) held the
+  pre-existing correct `format!("[{}]:{}", address, port)` IPv6 pattern. That caller-less helper was
+  removed under infra3-01 (2026-11-12); discovery now builds numeric `SocketAddr` values directly.

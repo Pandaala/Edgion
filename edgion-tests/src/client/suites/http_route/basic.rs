@@ -154,6 +154,35 @@ impl HttpTestSuite {
         })
     }
 
+    /// A hand-written EndpointSlice endpoint without `conditions` has a nil
+    /// `ready`, which discovery.k8s.io/v1 defines as ready; it must be routable.
+    fn test_nil_ready_endpoint_routable() -> TestCase {
+        TestCase::new(
+            "nil_ready_endpoint_routable",
+            "EndpointSlice endpoint without conditions is treated as ready",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let request = ctx
+                        .http_client
+                        .get(format!("{}/echo", ctx.http_url()))
+                        .header("Host", "nil-ready.example.com");
+                    match request.send().await {
+                        Ok(response) if response.status().is_success() => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "nil-ready endpoint received traffic".to_string(),
+                        ),
+                        Ok(response) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Unexpected status for nil-ready endpoint: {}", response.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), e.to_string()),
+                    }
+                })
+            },
+        )
+    }
+
     /// Parameterized case body, built from a closure that *captures* `label`.
     ///
     /// A bare `fn` pointer cannot capture anything, so this shape only compiles
@@ -192,6 +221,7 @@ impl TestSuite for HttpTestSuite {
             Self::test_echo_post(),
             Self::test_status_codes(),
             Self::test_delay(),
+            Self::test_nil_ready_endpoint_routable(),
             Self::test_captured_parameter("closure"),
         ]
     }

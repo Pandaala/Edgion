@@ -44,6 +44,58 @@ Edgion 支持在不修改核心代码的前提下，集成各种主流的外部�
 
 ---
 
+## 端点就绪语义
+
+Edgion 遵循 Kubernetes `discovery.k8s.io/v1` 对 `endpoints[].conditions.ready` 的约定：
+
+| `conditions.ready` | Gateway 行为 |
+|:---|:---|
+| `true` | 端点接收流量。 |
+| 省略（没有 `conditions`、`conditions` 为空或没有 `ready` 字段） | 视为就绪并接收流量，与 kube-proxy 一致。 |
+| `false` | 端点不参与负载均衡。 |
+
+因此，同步桥接器无需为健康实例写入 `conditions`。要将某个实例摘除，可以从 slice 中删除该端点，或设置 `ready: false`：
+
+```yaml
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: my-service-slice
+  namespace: default
+  labels:
+    kubernetes.io/service-name: my-service
+addressType: IPv4
+ports:
+  - name: http
+    port: 8080
+endpoints:
+  # 未设置 conditions：视为就绪
+  - addresses:
+      - "10.0.0.11"
+  # 显式未就绪：不参与负载均衡
+  - addresses:
+      - "10.0.0.12"
+    conditions:
+      ready: false
+```
+
+注册中心实例状态的推荐映射：
+
+| 注册中心 | 实例状态 | EndpointSlice 端点 |
+|:---|:---|:---|
+| Consul | 所有健康检查均为 `passing` 或 `warning`（Consul DNS 默认也包含 `warning`） | 就绪（省略 `conditions` 或设置 `ready: true`） |
+| Consul | 任一检查为 `critical`，或处于维护模式 | `ready: false`，或不写入该端点 |
+| Nacos | `healthy: true` 且 `enabled: true` | 就绪 |
+| Nacos | `healthy: false` 或 `enabled: false` | `ready: false`，或不写入该端点 |
+| Eureka | `UP` | 就绪 |
+| Eureka | `DOWN`、`OUT_OF_SERVICE`、`STARTING` 或 `UNKNOWN` | `ready: false`，或不写入该端点 |
+
+> `ready` 只是同步桥接器写入 slice 时的快照，两次同步之间没有任何组件会刷新它。为了及时摘除故障实例，建议为同步出来的 Service 绑定带有[主动健康检查](../../user-guide/http-route/backends/health-check.md)或[异常检测（熔断）](../../user-guide/http-route/backends/circuit-breaker.md)的 `EdgionBackendTrafficPolicy`。
+>
+> 目前 Gateway 只根据 `ready` 选择端点，不使用 `serving` 和 `terminating` 条件。
+
+---
+
 ## 1. HashiCorp Consul 集成
 
 ### Kubernetes 环境 (consul-k8s Catalog Sync)

@@ -20,7 +20,7 @@ pub use degrade_threshold::{
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, dns_endpoint_table, get_global_service_store,
     get_roundrobin_store, get_service_discovery_coordinator, upstream_dns_cache, DnsEndpointTableStats,
-    DnsRefreshPolicy, EndpointSliceExt, EpSliceStore, ServiceStore, DEFAULT_DNS_CACHE_TTL,
+    DnsRefreshPolicy, EpSliceStore, ServiceStore, DEFAULT_DNS_CACHE_TTL,
 };
 pub use outlier_detection::{get_outlier_detection_store, FailureClass, OutlierCompletionToken};
 
