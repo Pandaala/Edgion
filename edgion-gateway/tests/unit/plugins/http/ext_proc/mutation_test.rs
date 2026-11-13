@@ -524,3 +524,43 @@ fn local_reply_ops_move_accepted_header_name_storage() {
     };
     assert_eq!(name.as_ptr(), remove_pointer);
 }
+
+fn sized_mutation(set: usize, remove: usize) -> HeaderMutation {
+    HeaderMutation {
+        set_headers: (0..set)
+            .map(|index| {
+                set_header_opt(
+                    &format!("x-set-{index}"),
+                    "v",
+                    HeaderAppendAction::OverwriteIfExistsOrAdd,
+                )
+            })
+            .collect(),
+        remove_headers: (0..remove).map(|index| format!("x-remove-{index}")).collect(),
+    }
+}
+
+#[test]
+fn validate_mutation_size_caps_set_entries_but_not_removals() {
+    assert_eq!(HEADER_MUTATION_SET_CAP, 256);
+    assert_eq!(validate_mutation_size(&HeaderMutation::default()), Ok(()));
+    // Removals cannot grow the map, so a long removal list is never rejected.
+    for (set, remove) in [
+        (HEADER_MUTATION_SET_CAP, 0),
+        (HEADER_MUTATION_SET_CAP, HEADER_MUTATION_SET_CAP + 1),
+        (0, 8 * HEADER_MUTATION_SET_CAP),
+    ] {
+        assert_eq!(
+            validate_mutation_size(&sized_mutation(set, remove)),
+            Ok(()),
+            "{set}/{remove}"
+        );
+    }
+    for (set, remove) in [(HEADER_MUTATION_SET_CAP + 1, 0), (HEADER_MUTATION_SET_CAP + 1, 1)] {
+        assert_eq!(
+            validate_mutation_size(&sized_mutation(set, remove)),
+            Err("too many set headers"),
+            "{set}/{remove}"
+        );
+    }
+}

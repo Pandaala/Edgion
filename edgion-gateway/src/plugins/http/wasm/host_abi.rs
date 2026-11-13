@@ -47,7 +47,8 @@ pub const STATUS_UNIMPLEMENTED: i32 = 12;
 pub const MAX_CALLOUTS_PER_REQUEST: u32 = 8;
 
 pub use super::limits::{
-    MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS,
+    MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_HEADER_WRITES_PER_PHASE, MAX_RETAINED_ABI_BYTES,
+    MAX_RETAINED_ABI_OPS,
 };
 
 /// Aggregate request-body mutation work allowed in one request-body hook,
@@ -292,6 +293,10 @@ pub struct CallbackFrame {
     /// Host-retained ABI operation count charged this phase. Reset by
     /// `begin_phase`. Complements `retained_bytes` for tiny-op floods.
     retained_ops: usize,
+    /// Header writes (replace/add values plus `set_header_map_pairs` pairs)
+    /// queued this phase. Reset with the frame; bounded by
+    /// `MAX_HEADER_WRITES_PER_PHASE` (see `checked_header_writes`).
+    header_writes: usize,
 }
 
 impl HostState {
@@ -371,6 +376,18 @@ impl HostState {
     fn commit_abi_charge(&mut self, checked: (usize, usize)) {
         self.frame.retained_bytes = checked.0;
         self.frame.retained_ops = checked.1;
+    }
+
+    /// Validate `writes` more header writes against the per-phase cap WITHOUT
+    /// mutating the counter. Returns the new total for the caller to store
+    /// together with its ABI charge commit, or `Err(STATUS_BAD_ARGUMENT)` when
+    /// the phase would exceed `MAX_HEADER_WRITES_PER_PHASE`.
+    fn checked_header_writes(&self, writes: usize) -> Result<usize, i32> {
+        self.frame
+            .header_writes
+            .checked_add(writes)
+            .filter(|total| *total <= MAX_HEADER_WRITES_PER_PHASE)
+            .ok_or(STATUS_BAD_ARGUMENT)
     }
 
     fn check_transient_allocation(&self, profile: AllocationProfile) -> Result<(), i32> {
@@ -1596,6 +1613,10 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             if let Err(status) = caller.data().checked_abi_charge(allocation.bytes) {
                 return status;
             }
+            let header_writes = match caller.data().checked_header_writes(1) {
+                Ok(total) => total,
+                Err(status) => return status,
+            };
             if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
                 return STATUS_BAD_ARGUMENT;
             }
@@ -1663,6 +1684,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
+            state.frame.header_writes = header_writes;
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
                 &mut state.frame.request_headers
             } else {
@@ -1701,6 +1723,10 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             if let Err(status) = caller.data().checked_abi_charge(allocation.bytes) {
                 return status;
             }
+            let header_writes = match caller.data().checked_header_writes(1) {
+                Ok(total) => total,
+                Err(status) => return status,
+            };
             if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
                 return STATUS_BAD_ARGUMENT;
             }
@@ -1768,6 +1794,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
+            state.frame.header_writes = header_writes;
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
                 &mut state.frame.request_headers
             } else {
@@ -1870,6 +1897,12 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             if let Err(status) = caller.data().checked_abi_charge(base_allocation.bytes) {
                 return status;
             }
+            // Counted by the guest pair count before decoding or copying, so an
+            // oversized replacement map is rejected without host allocation.
+            let header_writes = match caller.data().checked_header_writes(map_profile.map.pair_count) {
+                Ok(total) => total,
+                Err(status) => return status,
+            };
             if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
                 return STATUS_BAD_ARGUMENT;
             }
@@ -1941,6 +1974,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // dedup) in expected-linear time. `remove` keeps the first observed
             // spelling while `seen` (discarded above) owns canonical keys.
             state.commit_abi_charge(checked_charge);
+            state.frame.header_writes = header_writes;
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
                 &mut state.frame.request_headers
             } else {
@@ -2070,6 +2104,14 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             } else {
                 None
             };
+            // Each local-response header is applied as one header write; the
+            // list replaces any earlier one, so bound each call before copying.
+            if headers_profile
+                .as_ref()
+                .is_some_and(|profile| profile.map.pair_count > MAX_HEADER_WRITES_PER_PHASE)
+            {
+                return STATUS_BAD_ARGUMENT;
+            }
             let mut allocation = AllocationProfile::default();
             if let Some(profile) = &body_profile {
                 allocation = match allocation.add_bytes(profile.len()) {

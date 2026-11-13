@@ -17,8 +17,10 @@ rejected verdict.
 
 This covers only the ExtProc response-trailer mutation map. The Pingora
 `insert_header_value` wrapper and Wasm callout header maps are separate roots
-(findings wasm-01 and wasm-03 of the 2026-11-08 Gateway panic audit, tracked in
-`tasks/panic-issues/`).
+(findings wasm-01 and wasm-03 of the 2026-11-08 Gateway panic audit). wasm-01 is
+bounded on the Edgion side by the [ExtProc header mutation set cap](header-mutation-operation-cap.md)
+and the [Wasm per-phase header write cap](../../wasm/regression-guards/header-write-cap-per-phase.md);
+wasm-03 is still tracked in `tasks/panic-issues/`.
 
 ## Rationale and evidence
 

@@ -17,3 +17,4 @@ before applying a decision to current code.
 - [ExtProc request-body replacement, owner terminalization, and interactive Continue-and-Replace](regression-guards/ext-proc-interactive-continue-and-replace.md)
 - [BODY-003 — ExtProc Phase Verdict Matching — FIXED](regression-guards/ext-proc-phase-verdict-matching.md)
 - [Trailer mutation never panics on HeaderMap capacity](regression-guards/trailer-mutation-header-map-capacity.md)
+- [Header mutations are capped at 256 set entries (panic-audit wasm-01)](regression-guards/header-mutation-operation-cap.md)

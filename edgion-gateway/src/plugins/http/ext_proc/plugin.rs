@@ -607,6 +607,9 @@ fn validate_request_common_response(common: &CommonResponse, apply_body_mutation
     {
         return Err("malformed body mutation");
     }
+    if let Some(headers) = common.header_mutation.as_ref() {
+        mutation::validate_mutation_size(headers)?;
+    }
     Ok(())
 }
 
@@ -636,6 +639,9 @@ fn validate_response_headers_common(common: &CommonResponse) -> Result<(), &'sta
     if ResponseStatus::try_from(common.status).ok() != Some(ResponseStatus::Continue) || common.body_mutation.is_some()
     {
         return Err("invalid response headers verdict");
+    }
+    if let Some(headers) = common.header_mutation.as_ref() {
+        mutation::validate_mutation_size(headers)?;
     }
     Ok(())
 }
@@ -678,6 +684,9 @@ pub(super) fn immediate_action(
     let grpc_status = imm.grpc_status.map(|status| status.status);
     if grpc_status.is_some_and(|status| status > 16) {
         return Err("invalid immediate gRPC status");
+    }
+    if let Some(headers) = imm.headers.as_ref() {
+        mutation::validate_mutation_size(headers)?;
     }
     Ok(ImmediateAction::Reply(ValidatedImmediateResponse {
         status: status as u16,

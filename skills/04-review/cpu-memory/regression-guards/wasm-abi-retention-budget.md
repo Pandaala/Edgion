@@ -86,6 +86,7 @@ finding asked for.
 ## Reference cases
 
 - Sibling wasm memory finding (shared data): [cases/wasm-shared-data-no-eviction-no-cluster-kv.md](../intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md).
+- This budget bounds retained memory, not header-name counts. Guest header writes are bounded separately by the [per-phase header write cap](../../wasm/regression-guards/header-write-cap-per-phase.md) (panic-audit wasm-01).
 - Code: `edgion-gateway/src/plugins/http/wasm/host_abi.rs` (`charge_abi`,
   `MAX_RETAINED_ABI_BYTES`, `impl ResourceLimiter for HostState`),
   `vm_manager.rs::new_vm` (`store.limiter`).

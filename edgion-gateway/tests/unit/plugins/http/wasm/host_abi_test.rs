@@ -1865,3 +1865,280 @@ fn guest_input_profiles_preserve_memory_error_precedence() {
         }
     }
 }
+
+/// Guest exposing each header-writing ABI call with fixed `x-cap: v` value
+/// arguments, plus raw map-pointer entry points for pair-based calls.
+const HEADER_WRITE_CAP_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_replace_header_map_value"
+        (func $replace (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_add_header_map_value"
+        (func $add (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_remove_header_map_value"
+        (func $remove (param i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_header_map_pairs"
+        (func $set_pairs (param i32 i32 i32) (result i32)))
+      (import "env" "proxy_send_local_response"
+        (func $local (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 0) "x-cap")
+      (data (i32.const 8) "v")
+      (func (export "replace") (param i32) (result i32)
+        (call $replace (local.get 0) (i32.const 0) (i32.const 5) (i32.const 8) (i32.const 1)))
+      (func (export "add") (param i32) (result i32)
+        (call $add (local.get 0) (i32.const 0) (i32.const 5) (i32.const 8) (i32.const 1)))
+      (func (export "remove") (param i32) (result i32)
+        (call $remove (local.get 0) (i32.const 0) (i32.const 5)))
+      (func (export "set_pairs") (param i32 i32 i32) (result i32)
+        (call $set_pairs (local.get 0) (local.get 1) (local.get 2)))
+      (func (export "local") (param i32 i32) (result i32)
+        (call $local (i32.const 403) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+                     (local.get 0) (local.get 1) (i32.const 0)))
+    )
+    "#;
+
+/// Guest offset where tests place serialized header maps.
+const HEADER_WRITE_CAP_MAP_OFFSET: usize = 1024;
+
+struct HeaderWriteCapGuest {
+    store: Store<HostState>,
+    instance: Instance,
+    replace: wasmtime::TypedFunc<i32, i32>,
+    add: wasmtime::TypedFunc<i32, i32>,
+    remove: wasmtime::TypedFunc<i32, i32>,
+    set_pairs: wasmtime::TypedFunc<(i32, i32, i32), i32>,
+    local: wasmtime::TypedFunc<(i32, i32), i32>,
+}
+
+impl HeaderWriteCapGuest {
+    fn new(request_headers: Vec<(String, String)>) -> Self {
+        let (mut store, instance) = instantiate_guest(HEADER_WRITE_CAP_GUEST);
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, request_headers, vec![], HashMap::new());
+        let replace = instance.get_typed_func(&mut store, "replace").unwrap();
+        let add = instance.get_typed_func(&mut store, "add").unwrap();
+        let remove = instance.get_typed_func(&mut store, "remove").unwrap();
+        let set_pairs = instance.get_typed_func(&mut store, "set_pairs").unwrap();
+        let local = instance.get_typed_func(&mut store, "local").unwrap();
+        Self {
+            store,
+            instance,
+            replace,
+            add,
+            remove,
+            set_pairs,
+            local,
+        }
+    }
+
+    /// Each single-value write grows `pending_ops` (and an added header grows
+    /// the snapshot) by exactly one slot, and the retention budget charges the
+    /// whole grown vector, so ~1k single writes already approach the default
+    /// byte budget. Lift it so the header-write cap is the only bound tested.
+    fn lift_retention_budget(&mut self) {
+        self.store.data_mut().allocation_limits = AbiAllocationLimits {
+            transient_bytes: MAX_GUEST_MEMORY_BYTES,
+            retained_bytes: usize::MAX,
+            retained_ops: usize::MAX,
+        };
+    }
+
+    /// Write a map of `count` distinct header names and return its length.
+    fn write_distinct_map(&mut self, count: usize) -> i32 {
+        let pairs = (0..count)
+            .map(|index| (format!("x-cap-{index}"), String::new()))
+            .collect::<Vec<_>>();
+        let encoded = encode_map(&pairs);
+        write_guest(&self.instance, &mut self.store, HEADER_WRITE_CAP_MAP_OFFSET, &encoded);
+        encoded.len() as i32
+    }
+
+    fn replace(&mut self, map: i32) -> i32 {
+        self.replace.call(&mut self.store, map).unwrap()
+    }
+
+    fn add(&mut self, map: i32) -> i32 {
+        self.add.call(&mut self.store, map).unwrap()
+    }
+
+    fn remove(&mut self, map: i32) -> i32 {
+        self.remove.call(&mut self.store, map).unwrap()
+    }
+
+    fn set_pairs(&mut self, map: i32, len: i32) -> i32 {
+        self.set_pairs
+            .call(&mut self.store, (map, HEADER_WRITE_CAP_MAP_OFFSET as i32, len))
+            .unwrap()
+    }
+
+    fn local(&mut self, len: i32) -> i32 {
+        self.local
+            .call(&mut self.store, (HEADER_WRITE_CAP_MAP_OFFSET as i32, len))
+            .unwrap()
+    }
+
+    fn frame(&self) -> &CallbackFrame {
+        &self.store.data().frame
+    }
+
+    /// Snapshot of every frame field a header write may touch.
+    fn header_state(&self) -> HeaderWriteState {
+        let frame = self.frame();
+        HeaderWriteState {
+            request_headers: frame.request_headers.clone(),
+            response_headers: frame.response_headers.clone(),
+            pending_ops: frame.pending_ops.len(),
+            retained_bytes: frame.retained_bytes,
+            retained_ops: frame.retained_ops,
+            header_writes: frame.header_writes,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HeaderWriteState {
+    request_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, String)>,
+    pending_ops: usize,
+    retained_bytes: usize,
+    retained_ops: usize,
+    header_writes: usize,
+}
+
+#[test]
+fn header_map_pairs_cap_accepts_exact_limit_and_rejects_next_pair_atomically() {
+    let existing = vec![("kept".to_string(), "value".to_string())];
+
+    let mut guest = HeaderWriteCapGuest::new(existing.clone());
+    let len = guest.write_distinct_map(MAX_HEADER_WRITES_PER_PHASE);
+    assert_eq!(guest.set_pairs(MAP_HTTP_REQUEST_HEADERS, len), STATUS_OK);
+    assert_eq!(guest.frame().request_headers.len(), MAX_HEADER_WRITES_PER_PHASE);
+    assert!(matches!(
+        guest.frame().pending_ops.as_slice(),
+        [HeaderOp::ReplaceAll { pairs, .. }] if pairs.len() == MAX_HEADER_WRITES_PER_PHASE
+    ));
+    assert_eq!(guest.frame().header_writes, MAX_HEADER_WRITES_PER_PHASE);
+
+    let mut guest = HeaderWriteCapGuest::new(existing.clone());
+    let len = guest.write_distinct_map(MAX_HEADER_WRITES_PER_PHASE + 1);
+    assert_eq!(guest.set_pairs(MAP_HTTP_REQUEST_HEADERS, len), STATUS_BAD_ARGUMENT);
+    assert_eq!(
+        guest.header_state(),
+        HeaderWriteState {
+            request_headers: existing,
+            response_headers: vec![],
+            pending_ops: 0,
+            retained_bytes: 0,
+            retained_ops: 0,
+            header_writes: 0,
+        }
+    );
+}
+
+#[test]
+fn header_value_writes_share_phase_cap_and_reset_with_new_phase() {
+    let mut guest = HeaderWriteCapGuest::new(vec![]);
+    guest.lift_retention_budget();
+    let half = MAX_HEADER_WRITES_PER_PHASE / 2;
+    for _ in 0..half {
+        assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    }
+    for _ in half..MAX_HEADER_WRITES_PER_PHASE {
+        assert_eq!(guest.add(MAP_HTTP_RESPONSE_HEADERS), STATUS_OK);
+    }
+    assert_eq!(guest.frame().header_writes, MAX_HEADER_WRITES_PER_PHASE);
+    assert_eq!(guest.frame().pending_ops.len(), MAX_HEADER_WRITES_PER_PHASE);
+
+    let before = guest.header_state();
+    assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_BAD_ARGUMENT);
+    assert_eq!(guest.add(MAP_HTTP_RESPONSE_HEADERS), STATUS_BAD_ARGUMENT);
+    assert_eq!(guest.add(MAP_HTTP_REQUEST_HEADERS), STATUS_BAD_ARGUMENT);
+    assert_eq!(guest.header_state(), before, "a rejected write mutates nothing");
+
+    // Removals never insert a header and stay available at the cap.
+    assert_eq!(guest.remove(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    assert!(guest.frame().request_headers.is_empty());
+    assert_eq!(guest.frame().header_writes, MAX_HEADER_WRITES_PER_PHASE);
+
+    guest
+        .store
+        .data_mut()
+        .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+    assert_eq!(guest.frame().header_writes, 0);
+    assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    assert_eq!(guest.frame().header_writes, 1);
+    guest.store.data_mut().release_phase_payloads();
+    assert_eq!(guest.frame().header_writes, 0);
+}
+
+#[test]
+fn header_map_pairs_and_value_writes_count_against_one_cap() {
+    let mut guest = HeaderWriteCapGuest::new(vec![]);
+    let pairs = MAX_HEADER_WRITES_PER_PHASE - 25;
+    let len = guest.write_distinct_map(pairs);
+    assert_eq!(guest.set_pairs(MAP_HTTP_REQUEST_HEADERS, len), STATUS_OK);
+    for _ in 0..24 {
+        assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    }
+    assert_eq!(guest.frame().header_writes, MAX_HEADER_WRITES_PER_PHASE - 1);
+    // A second whole-map replacement larger than the remaining room fails
+    // before decoding, leaving the earlier writes intact.
+    let len = guest.write_distinct_map(2);
+    let before = guest.header_state();
+    assert_eq!(guest.set_pairs(MAP_HTTP_REQUEST_HEADERS, len), STATUS_BAD_ARGUMENT);
+    assert_eq!(guest.header_state(), before);
+    assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    let before = guest.header_state();
+    assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_BAD_ARGUMENT);
+    assert_eq!(guest.header_state(), before);
+    // An empty replacement map adds no names and is accepted at the cap.
+    let len = guest.write_distinct_map(0);
+    assert_eq!(guest.set_pairs(MAP_HTTP_REQUEST_HEADERS, len), STATUS_OK);
+    assert!(guest.frame().request_headers.is_empty());
+    assert_eq!(guest.frame().header_writes, MAX_HEADER_WRITES_PER_PHASE);
+}
+
+#[test]
+fn local_response_header_count_is_capped_per_call() {
+    let mut guest = HeaderWriteCapGuest::new(vec![]);
+    let len = guest.write_distinct_map(MAX_HEADER_WRITES_PER_PHASE + 1);
+    assert_eq!(guest.local(len), STATUS_BAD_ARGUMENT);
+    assert!(guest.frame().local_response.is_none());
+
+    let len = guest.write_distinct_map(MAX_HEADER_WRITES_PER_PHASE);
+    assert_eq!(guest.local(len), STATUS_OK);
+    let accepted = guest.frame().local_response.as_ref().unwrap();
+    assert_eq!(accepted.status, 403);
+    assert_eq!(accepted.headers.len(), MAX_HEADER_WRITES_PER_PHASE);
+    // The local response replaces its header list instead of accumulating,
+    // so it is bounded per call and does not consume queued-write room.
+    assert_eq!(guest.frame().header_writes, 0);
+
+    // A rejected replacement keeps the previously accepted local response.
+    let len = guest.write_distinct_map(MAX_HEADER_WRITES_PER_PHASE + 1);
+    assert_eq!(guest.local(len), STATUS_BAD_ARGUMENT);
+    let kept = guest.frame().local_response.as_ref().unwrap();
+    assert_eq!(kept.status, 403);
+    assert_eq!(kept.headers.len(), MAX_HEADER_WRITES_PER_PHASE);
+    assert_eq!(kept.headers[0], ("x-cap-0".to_string(), String::new()));
+}
+
+/// A write that passes the cap check but fails later (here: a map the guest
+/// may not write) must not consume the per-phase header-write budget; the
+/// total is stored only together with a successful commit.
+#[test]
+fn rejected_header_writes_after_cap_check_do_not_consume_the_budget() {
+    let mut guest = HeaderWriteCapGuest::new(vec![]);
+    let len = guest.write_distinct_map(2);
+    let before = guest.header_state();
+    for map in [MAP_HTTP_CALL_RESPONSE_HEADERS, MAP_HTTP_RESPONSE_TRAILERS] {
+        assert_eq!(guest.replace(map), STATUS_BAD_ARGUMENT);
+        assert_eq!(guest.add(map), STATUS_BAD_ARGUMENT);
+        assert_eq!(guest.set_pairs(map, len), STATUS_BAD_ARGUMENT);
+        assert_eq!(guest.header_state(), before);
+    }
+    assert_eq!(guest.frame().header_writes, 0);
+    assert_eq!(guest.replace(MAP_HTTP_REQUEST_HEADERS), STATUS_OK);
+    assert_eq!(guest.frame().header_writes, 1);
+}

@@ -1855,6 +1855,156 @@ mod buffered_request {
             .unwrap_err();
         assert_eq!(status.code(), tonic::Code::Aborted);
     }
+
+    fn header_mutation_verdict(set: usize, remove: usize) -> CommonResponse {
+        CommonResponse {
+            header_mutation: Some(op_count_mutation(set, remove)),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn request_header_operation_cap_applies_at_limit_and_rejects_one_more_per_policy() {
+        // (failure_mode_allow, set entries, remove entries)
+        for (allow, set, remove) in [
+            (false, OP_CAP + 1, 0),
+            (true, OP_CAP + 1, 0),
+            (true, OP_CAP + 1, LONG_REMOVE),
+            (false, OP_CAP, LONG_REMOVE),
+            (true, 0, LONG_REMOVE),
+        ] {
+            let accepted = set <= OP_CAP;
+            let mut config = config(allow);
+            config.processing_mode.request_body_mode = BodySendMode::None;
+            let mut h = harness(&config, Ok(Bytes::new())).await;
+            if accepted {
+                h.session.expect_record_outcome().never();
+                h.session
+                    .expect_set_request_header_value()
+                    .times(set)
+                    .returning(|_, _| Ok(()));
+                h.session
+                    .expect_remove_request_header()
+                    .times(remove)
+                    .returning(|_| Ok(()));
+            } else {
+                expect_failure(&mut h.session, allow, "bad-verdict");
+                h.session.expect_set_request_header_value().never();
+                h.session.expect_append_request_header_value().never();
+                h.session.expect_remove_request_header().never();
+            }
+            let actor = async {
+                let message = h.requests.recv().await.unwrap();
+                assert!(matches!(
+                    message.request,
+                    Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                        end_of_stream: true,
+                        ..
+                    }))
+                ));
+                assert!(h.requests.recv().await.is_none());
+                h.responses
+                    .send(Ok(headers(Some(header_mutation_verdict(set, remove)), None)))
+                    .await
+                    .unwrap();
+                drop(h.responses);
+            };
+            let mut log = PluginLog::new("ExtProc");
+            let (result, ()) = tokio::join!(h.plugin.run_request(&mut h.session, &mut log), actor);
+            if accepted {
+                assert_eq!(result, PluginRunningResult::GoodNext);
+                assert!(!log.contains(OP_LIMIT_DETAIL));
+            } else {
+                assert_policy(result, allow);
+                assert_eq!(
+                    h.owner.lock().as_ref().unwrap().test_state(),
+                    (if allow { "fail-open" } else { "fail-close" }, "bad-verdict", true)
+                );
+                assert!(log.contains(OP_LIMIT_DETAIL));
+            }
+            assert_eq!(h.sessions.available_permits(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn response_header_operation_cap_applies_at_limit_and_rejects_one_more_per_policy() {
+        for (allow, set, remove) in [
+            (false, OP_CAP + 1, 0),
+            (true, OP_CAP + 1, 0),
+            (true, OP_CAP + 1, LONG_REMOVE),
+            (false, OP_CAP, LONG_REMOVE),
+            (true, 0, LONG_REMOVE),
+        ] {
+            let accepted = set <= OP_CAP;
+            let mut config = config(allow);
+            config.processing_mode.request_header_mode = HeaderSendMode::Skip;
+            config.processing_mode.request_body_mode = BodySendMode::None;
+            config.processing_mode.response_header_mode = HeaderSendMode::Send;
+            let mut h = harness(&config, Ok(Bytes::new())).await;
+            expect_response(&mut h.session, Arc::clone(&h.owner));
+            if accepted {
+                h.session.expect_record_outcome().never();
+                h.session
+                    .expect_set_response_header_value()
+                    .times(set)
+                    .returning(|_, _| Ok(()));
+                h.session
+                    .expect_remove_response_header()
+                    .times(remove)
+                    .returning(|_| Ok(()));
+            } else {
+                expect_failure(&mut h.session, allow, "bad-verdict");
+                h.session.expect_set_response_header_value().never();
+                h.session.expect_append_response_header_value().never();
+                h.session.expect_remove_response_header().never();
+            }
+            assert_eq!(
+                h.plugin
+                    .run_request(&mut h.session, &mut PluginLog::new("ExtProc"))
+                    .await,
+                PluginRunningResult::GoodNext
+            );
+            let actor = async {
+                let message = h.requests.recv().await.unwrap();
+                assert!(matches!(
+                    message.request,
+                    Some(processing_request::Request::ResponseHeaders(HttpHeaders {
+                        end_of_stream: true,
+                        ..
+                    }))
+                ));
+                assert!(h.requests.recv().await.is_none());
+                h.responses
+                    .send(Ok(ProcessingResponse {
+                        response: Some(processing_response::Response::ResponseHeaders(HeadersResponse {
+                            response: Some(header_mutation_verdict(set, remove)),
+                        })),
+                        mode_override: None,
+                    }))
+                    .await
+                    .unwrap();
+                drop(h.responses);
+            };
+            let mut log = PluginLog::new("ExtProc");
+            let (result, ()) = tokio::join!(h.plugin.run_upstream_response(&mut h.session, &mut log), actor);
+            if accepted {
+                assert_eq!(result, PluginRunningResult::GoodNext);
+                assert!(!log.contains(OP_LIMIT_DETAIL));
+            } else {
+                assert_policy(result, allow);
+                assert_eq!(
+                    h.owner.lock().as_ref().unwrap().test_state(),
+                    (
+                        if allow { "fail-open" } else { "fail-close" },
+                        "response-header-invalid-verdict",
+                        true
+                    )
+                );
+                assert!(log.contains(OP_LIMIT_DETAIL));
+            }
+            assert_eq!(h.sessions.available_permits(), 1);
+        }
+    }
 }
 
 #[tokio::test]
@@ -1896,4 +2046,312 @@ async fn request_body_capacity_exhaustion_overrides_failure_mode_allow() {
         })
     );
     assert_eq!(owner.test_state(), ("fail-close", "body-capacity-exhausted", true));
+}
+
+const OP_CAP: usize = mutation::HEADER_MUTATION_SET_CAP;
+const OP_LIMIT_DETAIL: &str = "too many set headers";
+/// A removal list well beyond the set cap: removals are never capped.
+const LONG_REMOVE: usize = 4 * OP_CAP;
+
+/// A processor header mutation with `set` distinct overwrite entries and
+/// `remove` distinct removals.
+fn op_count_mutation(set: usize, remove: usize) -> edgion_common::ext_proc::proto::HeaderMutation {
+    use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption};
+
+    HeaderMutation {
+        set_headers: (0..set)
+            .map(|index| HeaderValueOption {
+                header: Some(HeaderValue {
+                    key: format!("x-op-{index}"),
+                    value: "v".to_string(),
+                    raw_value: Vec::new(),
+                }),
+                append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                keep_empty_value: false,
+            })
+            .collect(),
+        remove_headers: (0..remove).map(|index| format!("x-rm-{index}")).collect(),
+    }
+}
+
+fn op_count_immediate(set: usize, remove: usize) -> ImmediateResponse {
+    ImmediateResponse {
+        status: Some(edgion_common::ext_proc::proto::HttpStatus { code: 403 }),
+        headers: Some(op_count_mutation(set, remove)),
+        ..Default::default()
+    }
+}
+
+fn expect_bad_verdict_outcome(session: &mut MockPluginSession, failure_mode_allow: bool, times: usize) {
+    session
+        .expect_record_outcome()
+        .withf(move |outcome, value| {
+            matches!(outcome, DyeOutcome::FailOpen) == failure_mode_allow && value == "bad-verdict"
+        })
+        .times(times)
+        .return_const(());
+}
+
+fn assert_failure_policy(result: &PluginRunningResult, failure_mode_allow: bool) {
+    if failure_mode_allow {
+        assert_eq!(result, &PluginRunningResult::GoodNext);
+    } else {
+        assert_eq!(
+            result,
+            &PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn request_header_mutation_over_operation_cap_follows_bad_verdict_policy() {
+    use edgion_common::ext_proc::proto::{body_mutation, BodyMutation};
+
+    for (failure_mode_allow, expected_outcome) in [(true, "fail-open"), (false, "fail-close")] {
+        let ext_proc = ExtProc::build(&test_config(failure_mode_allow)).expect("build must not dial");
+        // `false` is the request-headers phase, `true` the buffered request-body phase.
+        for apply_body_mutation in [false, true] {
+            for (set, remove) in [(OP_CAP + 1, 0), (OP_CAP + 1, LONG_REMOVE)] {
+                let owner = AttachedExtProc::test_lazy();
+                let mut session = MockPluginSession::new();
+                expect_bad_verdict_outcome(&mut session, failure_mode_allow, 1);
+                session.expect_set_request_header_value().never();
+                session.expect_append_request_header_value().never();
+                session.expect_remove_request_header().never();
+                session.expect_overwrite_request_body().never();
+                let common = CommonResponse {
+                    header_mutation: Some(op_count_mutation(set, remove)),
+                    body_mutation: apply_body_mutation.then(|| BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(b"must-not-apply".to_vec())),
+                    }),
+                    ..Default::default()
+                };
+                let mut log = PluginLog::new("ExtProc");
+                let result = ext_proc
+                    .apply_request_common_response(
+                        &mut session,
+                        &mut log,
+                        Some(&owner),
+                        Some(common),
+                        apply_body_mutation,
+                    )
+                    .await
+                    .expect_err("an oversized mutation must be rejected");
+                assert_failure_policy(&result, failure_mode_allow);
+                assert_eq!(owner.test_state(), (expected_outcome, "bad-verdict", true));
+                assert!(log.contains(OP_LIMIT_DETAIL));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_header_mutation_at_operation_cap_applies() {
+    let ext_proc = ExtProc::build(&test_config(false)).expect("build must not dial");
+    for apply_body_mutation in [false, true] {
+        let mut session = MockPluginSession::new();
+        session.expect_record_outcome().never();
+        session
+            .expect_set_request_header_value()
+            .times(OP_CAP)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_remove_request_header()
+            .times(LONG_REMOVE)
+            .returning(|_| Ok(()));
+        let common = CommonResponse {
+            header_mutation: Some(op_count_mutation(OP_CAP, LONG_REMOVE)),
+            ..Default::default()
+        };
+        let mut log = PluginLog::new("ExtProc");
+        assert_eq!(
+            ext_proc
+                .apply_request_common_response(&mut session, &mut log, None, Some(common), apply_body_mutation)
+                .await,
+            Ok(())
+        );
+        assert!(!log.contains(OP_LIMIT_DETAIL));
+    }
+}
+
+#[tokio::test]
+async fn response_header_mutation_over_operation_cap_follows_bad_verdict_policy() {
+    for failure_mode_allow in [true, false] {
+        let ext_proc = ExtProc::build(&test_config(failure_mode_allow)).expect("build must not dial");
+        for (set, remove) in [(OP_CAP + 1, 0), (OP_CAP + 1, LONG_REMOVE)] {
+            let mut session = MockPluginSession::new();
+            expect_bad_verdict_outcome(&mut session, failure_mode_allow, 1);
+            session.expect_set_response_header_value().never();
+            session.expect_append_response_header_value().never();
+            session.expect_remove_response_header().never();
+            session.expect_has_response_header().never();
+            let common = CommonResponse {
+                header_mutation: Some(op_count_mutation(set, remove)),
+                ..Default::default()
+            };
+            let mut log = PluginLog::new("ExtProc");
+            let result = ext_proc.apply_response_headers_response(&mut session, &mut log, Some(common));
+            assert_failure_policy(&result, failure_mode_allow);
+            assert!(log.contains(OP_LIMIT_DETAIL));
+        }
+    }
+}
+
+#[tokio::test]
+async fn response_header_mutation_at_operation_cap_applies() {
+    let ext_proc = ExtProc::build(&test_config(false)).expect("build must not dial");
+    let mut session = MockPluginSession::new();
+    session.expect_record_outcome().never();
+    session
+        .expect_set_response_header_value()
+        .times(OP_CAP)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_response_header()
+        .times(LONG_REMOVE)
+        .returning(|_| Ok(()));
+    let common = CommonResponse {
+        header_mutation: Some(op_count_mutation(OP_CAP, LONG_REMOVE)),
+        ..Default::default()
+    };
+    let mut log = PluginLog::new("ExtProc");
+    assert_eq!(
+        ext_proc.apply_response_headers_response(&mut session, &mut log, Some(common)),
+        PluginRunningResult::GoodNext
+    );
+}
+
+#[tokio::test]
+async fn header_verdict_over_operation_cap_is_rejected_before_mode_override() {
+    let mut config = test_config(false);
+    config.processing_mode.response_header_mode = HeaderSendMode::Send;
+    // A pending response-trailer phase gives both header phases a reduction to apply.
+    config.processing_mode.response_trailer_mode = HeaderSendMode::Send;
+    config.allow_mode_override = true;
+    config.allowed_override_modes = vec![terminal_reduction(&config.processing_mode)];
+    let ext_proc = ExtProc::build(&config).expect("build must not dial");
+    let reduction = wire_terminal_reduction(config.processing_mode.response_header_mode);
+    for request_phase in [true, false] {
+        for (set, accepted) in [(OP_CAP + 1, false), (OP_CAP, true)] {
+            let owner = AttachedExtProc::new(
+                ext_proc.client.clone(),
+                config.processing_mode.clone(),
+                true,
+                Arc::clone(&ext_proc.allowed_override_modes),
+            );
+            let before = owner.effective_mode().unwrap();
+            let common = CommonResponse {
+                header_mutation: Some(op_count_mutation(set, 0)),
+                ..Default::default()
+            };
+            let result = if request_phase {
+                validate_request_header_verdict(&owner, &common, false, Some(&reduction))
+            } else {
+                validate_response_header_verdict(&owner, &common, Some(&reduction))
+            };
+            if accepted {
+                // Control: the same override applies once the mutation is within the cap.
+                assert_ne!(result.expect("a mutation at the cap must be accepted"), before);
+            } else {
+                assert_eq!(result.err(), Some(OP_LIMIT_DETAIL));
+                assert_eq!(owner.effective_mode().unwrap(), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn immediate_action_rejects_header_mutation_over_operation_cap_after_suppression() {
+    assert!(matches!(
+        immediate_action(op_count_immediate(OP_CAP + 1, 0), true),
+        Ok(ImmediateAction::Suppress)
+    ));
+    for (set, remove) in [(OP_CAP + 1, 0), (OP_CAP + 1, LONG_REMOVE)] {
+        assert!(matches!(
+            immediate_action(op_count_immediate(set, remove), false),
+            Err(OP_LIMIT_DETAIL)
+        ));
+    }
+    let Ok(ImmediateAction::Reply(valid)) = immediate_action(op_count_immediate(OP_CAP, LONG_REMOVE), false) else {
+        panic!("a mutation at the set cap must be accepted, whatever its removal count");
+    };
+    let headers = valid.headers.expect("accepted headers are carried");
+    assert_eq!(
+        (headers.set_headers.len(), headers.remove_headers.len()),
+        (OP_CAP, LONG_REMOVE)
+    );
+}
+
+#[tokio::test]
+async fn immediate_header_mutation_over_operation_cap_follows_bad_verdict_policy() {
+    for (failure_mode_allow, expected_outcome) in [(true, "fail-open"), (false, "fail-close")] {
+        let ext_proc = ExtProc::build(&test_config(failure_mode_allow)).expect("build must not dial");
+        let mut session = MockPluginSession::new();
+        expect_bad_verdict_outcome(&mut session, failure_mode_allow, 2);
+        session.expect_queue_local_reply_header_op().never();
+        session.expect_is_grpc_request().never();
+
+        let request_owner = AttachedExtProc::test_lazy();
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc
+            .handle_request_immediate(
+                &request_owner,
+                &mut session,
+                &mut log,
+                op_count_immediate(OP_CAP + 1, 0),
+            )
+            .await;
+        assert_failure_policy(&result, failure_mode_allow);
+        assert_eq!(request_owner.test_state(), (expected_outcome, "bad-verdict", true));
+        assert!(log.contains(OP_LIMIT_DETAIL));
+
+        let response_owner = AttachedExtProc::test_lazy();
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc
+            .handle_response_header_immediate(
+                &response_owner,
+                &mut session,
+                &mut log,
+                op_count_immediate(OP_CAP + 1, LONG_REMOVE),
+            )
+            .await;
+        assert_failure_policy(&result, failure_mode_allow);
+        assert_eq!(
+            response_owner.test_state(),
+            (expected_outcome, "response-header-invalid-verdict", true)
+        );
+        assert!(log.contains(OP_LIMIT_DETAIL));
+    }
+}
+
+#[tokio::test]
+async fn immediate_header_mutation_at_operation_cap_is_queued_for_local_reply() {
+    let ext_proc = ExtProc::build(&test_config(false)).expect("build must not dial");
+    let mut session = MockPluginSession::new();
+    session.expect_record_outcome().never();
+    session.expect_is_grpc_request().return_const(false);
+    session
+        .expect_queue_local_reply_header_op()
+        .times(OP_CAP + LONG_REMOVE)
+        .returning(|_| Ok(()));
+    let owner = AttachedExtProc::test_lazy();
+    let result = ext_proc
+        .handle_request_immediate(
+            &owner,
+            &mut session,
+            &mut PluginLog::new("ExtProc"),
+            op_count_immediate(OP_CAP, LONG_REMOVE),
+        )
+        .await;
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse {
+            status: 403,
+            body: None
+        }
+    );
+    assert_eq!(owner.test_state(), ("immediate-response", "request-immediate", true));
 }

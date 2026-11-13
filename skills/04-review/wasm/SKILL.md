@@ -15,6 +15,7 @@ before applying a decision to current code.
 - [Explicit Go SDK selection for fixture builds](regression-guards/sdk-build-toolchain-selection.md)
 
 - [Buffer ranges own their snapshot before guest allocation](regression-guards/buffer-range-snapshot-before-guest-allocation.md)
+- [Guest header writes are capped at 1,024 per hook phase (panic-audit wasm-01)](regression-guards/header-write-cap-per-phase.md)
 
 - [Shared-data byte gauges aggregate live stores and balance destruction](regression-guards/shared-data-gauge-live-stores.md)
 - [Plugin owner destruction closes background work](regression-guards/tick-quiescence-on-zero-reference-eviction.md)

@@ -42,6 +42,26 @@ pub(super) fn is_protected_header(name: &str) -> bool {
     edgion_resources::response_header_policy::is_protected_response_header(name)
 }
 
+/// Maximum `set_headers` entries one processor `HeaderMutation` may carry. It
+/// bounds processor-controlled distinct names before they reach Pingora's
+/// `insert_header`, which panics once a `HeaderMap` can no longer grow. Like
+/// Envoy ext_proc's operation-count pre-check, but `remove_headers` is not
+/// capped: removals cannot grow the map, and a client that sends many headers
+/// must not be able to push a stripping processor's removal list over a cap.
+/// 256 matches Pingora's HTTP/1 `MAX_HEADERS` and the ExtProc
+/// `TRAILER_FIELD_CAP`.
+pub(super) const HEADER_MUTATION_SET_CAP: usize = 256;
+
+/// Reject a mutation whose `set_headers` list exceeds
+/// [`HEADER_MUTATION_SET_CAP`]. Callers run it before applying any part of the
+/// verdict, so a violation follows the bad-verdict failure policy.
+pub(super) fn validate_mutation_size(mutation: &HeaderMutation) -> Result<(), &'static str> {
+    if mutation.set_headers.len() > HEADER_MUTATION_SET_CAP {
+        return Err("too many set headers");
+    }
+    Ok(())
+}
+
 /// Decode a processor-supplied header value, preferring the modern `raw_value`
 /// (bytes) field and falling back to the legacy `value` (string) field.
 ///

@@ -115,6 +115,10 @@ spec:
 
 条件动作按 header 名称是否存在判断，即使现有值不是 UTF-8，也视为存在。同名值保留追加顺序；不同名称之间不保证原始报文顺序。Edgion 按列表顺序执行 `set_headers`，随后执行 `remove_headers`。这些动作和空值规则是 Edgion 的行为约定；采用 Envoy 的 `raw_value` 字节表示不意味着两者的所有 mutation 细节完全一致。
 
+作用于请求头、响应头或 `ImmediateResponse` 的单个 `HeaderMutation` 最多携带 256 条 `set_headers`；`remove_headers` 不设上限，因为删除不会让 header 表变大。`set_headers` 超出上限即视为畸形 verdict：其中任何条目都不会被应用，与其他畸形 verdict 一样由 `failureModeAllow` 决定结果。该计数检查参照 Envoy ext_proc 的操作数检查（`max_headers_count`，默认 100），但 Envoy 同时限制删除条数，且对被拒绝的 mutation 处理方式不同。响应 trailer 仍沿用其自身的 256 字段与 64 KiB 上限（见下文）。
+
+HTTP/2 客户端可以发送远多于 256 个 header。如果处理服务的 `set_headers` 列表会随客户端 header 数量增长（例如把每个请求头原样回写），客户端就能把它推过上限。在 `failureModeAllow: true` 下，这次 verdict 以及该处理服务对该请求的后续处理都会被跳过。不要依赖这类 fail-open 处理服务来完成与安全相关的 header 修改。
+
 ### 受保护的 header（安全）
 
 处理服务**不能**改动：

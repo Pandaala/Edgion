@@ -76,8 +76,8 @@ Wasm 不能作为独立条目配置在 `upstreamResponsePlugins`。请求条目�
 | Host 函数 | 支持 | 说明 |
 |---|:---:|---|
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头、附属响应 trailers，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
-| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
-| `proxy_send_local_response` | ✅ | 以最终 HTTP 状态码（`200`–`599`）、响应体和响应头短路请求；无效状态码会替换为 `500`。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
+| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝。每个钩子阶段最多 1,024 次 header 写入（请求头阶段内的 callout 回调共用这一额度）：每次 replace 或 add 计 1，`proxy_set_header_map_pairs` 按 pair 数计，删除不计。会超出上限的那次调用返回 `BAD_ARGUMENT`（2），且不做任何修改；遇到非 OK 状态就 panic 的 SDK（如 Rust SDK）会因此 trap，此时按 `failOpen` 处理 |
+| `proxy_send_local_response` | ✅ | 以最终 HTTP 状态码（`200`–`599`）、响应体和响应头短路请求；无效状态码会替换为 `500`。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝）。每次调用最多 1,024 个 header pair；超出时返回 `BAD_ARGUMENT`（2），并保留此前已接受的本地响应。遇到非 OK 状态就 panic 的 SDK（如 Rust SDK）会因此 trap，此时按 `failOpen` 处理 |
 | `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 外呼须由所属插件的 allowlist 授权（见[定时器](#shared-data-与定时器)） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 插件运行时 KV + CAS——见 [shared data](#shared-data-与定时器) |
@@ -411,7 +411,9 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 `timeoutMs` 约束的是执行*时间*，而非宿主*内存*。另有两道上限约束单次钩子能在宿主侧分配的内存，防止有 bug 或恶意的 guest 把进程推向 OOM（OOM 会波及无关的路由与租户——`failOpen` 无法从全进程内存耗尽中恢复）：
 
 - **每阶段 ABI 保留预算**——guest 在单次钩子内通过反复 ABI 调用累积的宿主保留量（排队的 header 操作、`proxy_log` 日志行、`proxy_set_property` 条目）上限为 **32 MiB / 20 万次操作**。超预算后后续 ABI 调用返回错误状态且**不做任何部分变更**；这些累积器在钩子返回时清空。合法的 header/日志/属性用量远低于此。
-- **guest 线性内存上限**——guest 内存增长上限 **128 MiB**（表 10 万项），远高于任何真实 proxy-wasm 工作集。这同时约束了 guest 传给宿主调用的任何单个值的大小。
+- **guest 线性内存上限**——guest 内存增长上限 **128 MiB**（表 2 万项），远高于任何真实 proxy-wasm 工作集；可通过 `gateway.wasm_limits` 设置更低的部署上限。这同时约束了 guest 传给宿主调用的任何单个值的大小。
+
+此外，**每阶段 header 写入上限**为 **1,024** 次（见宿主调用表），使 guest 的 header 写入低于网关 header 表可能失败的规模。整表回写请求头的 guest 在客户端发送超过 1,024 个 header 时会失败，而 HTTP/2 允许这样做。在 `failOpen: true` 下，该 guest 对这个请求的修改随之被跳过，因此不要依赖这类 guest 来清除与安全相关的 header。
 
 ## 插件运行时生命周期
 

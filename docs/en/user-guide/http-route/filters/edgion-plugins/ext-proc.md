@@ -119,6 +119,10 @@ Outgoing header values use protobuf `raw_value`, preserving non-UTF-8 bytes allo
 
 Conditional actions check whether the header name exists, including when its existing value is not UTF-8. Values of the same name retain append order; original wire order across different names is not guaranteed. Edgion applies `set_headers` in list order, followed by `remove_headers`. These action and empty-value rules describe Edgion's behavior; using Envoy's `raw_value` representation does not imply identical mutation behavior in every detail.
 
+One `HeaderMutation` for request headers, response headers, or an `ImmediateResponse` may carry at most 256 `set_headers` entries; `remove_headers` is not capped, because removals cannot grow the header map. A mutation with more set entries is a malformed verdict: none of its entries are applied and `failureModeAllow` decides the outcome, as for any other malformed verdict. The count check follows Envoy's ext_proc operation-count check (`max_headers_count`, default 100), but Envoy also caps removals and handles a rejected mutation differently. Response trailers keep their own 256-field and 64 KiB caps (see below).
+
+An HTTP/2 client can send far more than 256 headers. A processor whose `set_headers` list grows with the client's header count, for example one that echoes every request header, can therefore be pushed over the cap by the client. Under `failureModeAllow: true` its verdict, and the rest of its processing for that request, is then skipped. Do not rely on such a fail-open processor for security-relevant header changes.
+
 ### Protected headers (security)
 
 The processor **cannot** mutate:

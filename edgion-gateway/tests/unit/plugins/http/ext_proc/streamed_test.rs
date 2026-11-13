@@ -572,3 +572,75 @@ async fn completed_request_abandonment_closes_pending_response_owner_without_ove
         assert!(!text.contains("logging-fallback"));
     }
 }
+
+/// A streamed-body ImmediateResponse whose header mutation exceeds the set
+/// cap is a bad verdict: no local-reply operation is produced and the failure
+/// policy decides between deactivation and a 500. Removals are never capped.
+#[tokio::test]
+async fn immediate_response_header_mutation_over_operation_cap_follows_failure_policy() {
+    use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption};
+
+    let cap = super::super::mutation::HEADER_MUTATION_SET_CAP;
+    let mutation = |set: usize, remove: usize| HeaderMutation {
+        set_headers: (0..set)
+            .map(|index| HeaderValueOption {
+                header: Some(HeaderValue {
+                    key: format!("x-op-{index}"),
+                    value: "v".to_string(),
+                    raw_value: Vec::new(),
+                }),
+                append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                keep_empty_value: false,
+            })
+            .collect(),
+        remove_headers: (0..remove).map(|index| format!("x-rm-{index}")).collect(),
+    };
+    let immediate = |headers: HeaderMutation| ProcessingResponse {
+        response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+            status: Some(HttpStatus { code: 403 }),
+            headers: Some(headers),
+            body: b"denied".to_vec(),
+            ..Default::default()
+        })),
+        mode_override: None,
+    };
+
+    for failure_mode_allow in [false, true] {
+        for (set, remove) in [(cap + 1, 0), (cap + 1, 4 * cap)] {
+            let mut handler = handler_with(vec![Ok(immediate(mutation(set, remove)))], failure_mode_allow);
+            let mut chunk = Some(Bytes::from_static(b"payload"));
+            match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
+                ChunkVerdict::Terminate {
+                    status,
+                    body,
+                    header_ops,
+                    ..
+                } => {
+                    assert!(!failure_mode_allow, "fail-open must not terminate");
+                    assert_eq!(status, 500);
+                    assert_eq!(body, None);
+                    assert!(header_ops.is_empty());
+                }
+                ChunkVerdict::Continue => {
+                    assert!(failure_mode_allow, "fail-close must terminate");
+                    assert_eq!(chunk.as_deref(), Some(&b"payload"[..]));
+                }
+            }
+            let (outcome, cause) = handler.take_pending_outcome().expect("bad verdict records an outcome");
+            assert_eq!(matches!(outcome, DyeOutcome::FailOpen), failure_mode_allow);
+            assert_eq!(cause, "bad-verdict");
+            assert!(handler.take_log().is_none());
+        }
+    }
+
+    let mut handler = handler_with(vec![Ok(immediate(mutation(cap, 4 * cap)))], false);
+    let mut chunk = Some(Bytes::from_static(b"payload"));
+    match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
+        ChunkVerdict::Terminate { status, header_ops, .. } => {
+            assert_eq!(status, 403);
+            assert_eq!(header_ops.len(), 5 * cap);
+        }
+        ChunkVerdict::Continue => panic!("a mutation at the set cap must be accepted"),
+    }
+    assert!(handler.take_pending_outcome().is_none());
+}

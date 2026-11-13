@@ -20,6 +20,27 @@ pub const MAX_RETAINED_ABI_BYTES: usize = 32 * 1024 * 1024;
 /// overhead the byte budget alone under-charges.
 pub const MAX_RETAINED_ABI_OPS: usize = 200_000;
 
+/// Per-phase cap on guest-controlled header writes.
+///
+/// Every queued header write is later applied to the live request/response
+/// header map. Pingora's `insert_header` uses the panicking
+/// `http::HeaderMap::insert`, which panics once the map cannot grow: at
+/// 24,576 distinct names, or from 6,554 names when crafted hash collisions put
+/// the map in its displacement-danger state. The retention budgets above admit
+/// tens of thousands of small pairs, so they cannot bound names on their own.
+///
+/// `proxy_replace_header_map_value` and `proxy_add_header_map_value` count as
+/// one write each; `proxy_set_header_map_pairs` counts its pair count;
+/// removals do not count. `proxy_send_local_response` replaces (rather than
+/// accumulates) its header list, so it is bounded per call by the same value.
+/// 1024 leaves room for a guest that rewrites a whole header map and matches
+/// the callout response header bound (`validate_response_headers`). Only the
+/// request-headers, request-body and response-headers phases apply writes, so
+/// one plugin adds at most 3,072 request and about 4,096 response names, which
+/// keeps a single plugin below 6,554 together with downstream request headers
+/// or an HTTP/1 upstream response.
+pub const MAX_HEADER_WRITES_PER_PHASE: usize = 1024;
+
 /// Max guest linear-memory size (bytes) enforced by the Store `ResourceLimiter`
 /// in `WasmVmManager::new_vm`. The pooling allocator's default per-instance
 /// memory cap is effectively the full wasm32 4 GiB, so without this an
