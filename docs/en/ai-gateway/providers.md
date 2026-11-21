@@ -21,6 +21,11 @@ Other managed operations return fixed `404 unsupported_endpoint`. `api: openaiRe
 `api: anthropicMessages` admits exact POST `/v1/messages` for `Anthropic` only.
 An ordinary HTTPRoute to a Service can separately proxy opaque HTTP traffic without managed AI semantics.
 
+Chat Completions requests matched by Guardrail require `"stream": true`.
+An omitted or false value returns `400 unsupported_parameter` before provider
+dispatch. Final provider 4xx and 5xx responses follow the route's usual AI error
+handling with either failure policy. See the [Guardrail guide](../user-guide/http-route/filters/edgion-plugins/guardrail.md).
+
 ## Supported providers
 
 | `provider` | Protocol behavior | Default endpoint |

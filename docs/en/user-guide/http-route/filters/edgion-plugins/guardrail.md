@@ -56,10 +56,17 @@ spec:
         failOpen: false
 ```
 
-Attach the resource through an `ExtensionRef` on the AI route. The route must
-produce a successful, identity-encoded `text/event-stream` response through
-the canonical AI translation/event path. Generic SSE endpoints, non-AI JSON,
-WebSockets, and duplex HTTP streams are not Guardrail inputs.
+Attach the resource through an `ExtensionRef` on the AI route. When Guardrail
+matches a Chat Completions request, the client must set `"stream": true`.
+Omitting `stream` or setting it to `false` returns HTTP 400
+(`unsupported_parameter`) before provider dispatch, with either `failOpen` setting.
+
+Guardrail evaluates successful, identity-encoded `text/event-stream` responses
+from the canonical AI translation/event path. A final provider 4xx or 5xx
+continues through the route's usual AI error handling, including any accepted
+and normalized `Retry-After` on a final 429. Guardrail skips the evaluator and
+the first-window hold for these errors. Generic SSE endpoints, non-AI JSON,
+WebSockets, and duplex HTTP streams are outside its scope.
 
 ## Configuration
 

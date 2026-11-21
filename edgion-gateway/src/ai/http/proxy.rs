@@ -383,6 +383,15 @@ impl AiProxy {
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
 
+        if !canonical.requested_streaming && session.ctx().semantic_guard_active() {
+            return Self::reject(
+                session,
+                log,
+                "guardrail-requires-stream",
+                AiProxyError::UnsupportedParameter,
+            );
+        }
+
         if self.config.usage_observation == AiUsageObservation::Provider
             || self.config.backend_selection.selection_type == AiBackendSelection::CostWeighted
         {

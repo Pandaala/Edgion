@@ -593,9 +593,8 @@ fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
     }
 }
 
-#[test]
-fn plan_debug_never_renders_canonical_body() {
-    let plan = ReadyAiAttemptPlan {
+fn unary_chat_plan() -> ReadyAiAttemptPlan {
+    ReadyAiAttemptPlan {
         api: edgion_resources::resources::edgion_plugins::AiApi::OpenaiChat,
         operation: crate::ai::runtime::attempt_plan::AiOperation::ChatCompletions,
         conversion: None,
@@ -620,10 +619,97 @@ fn plan_debug_never_renders_canonical_body() {
         quota: None,
         quota_status: None,
         terminate_on_over_limit: false,
-    };
+    }
+}
+
+#[test]
+fn plan_debug_never_renders_canonical_body() {
+    let plan = unary_chat_plan();
     let rendered = format!("{plan:?}");
     assert!(!rendered.contains("must-not-render"));
     assert!(rendered.contains("request_body_bytes"));
+}
+
+#[tokio::test]
+async fn guardrail_rejects_unary_chat_in_either_request_plugin_order() {
+    use crate::ai::guards::semantic::Guardrail;
+    use crate::plugins::http::common::outbound::client::PreparedManagedHttp;
+    use crate::plugins::runtime::traits::ai_session::{AiSessionCapability, MockAiSessionCapability};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"name":"guard","namespace":"tenant"},
+        "spec": {"requestPlugins":[{"type":"Guardrail","config":{
+            "target":{"url":"https://guard.example"},"request":{"path":{"template":"/decision"}},"failOpen":true
+        }}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let field = entry.managed_http_config().unwrap().unwrap();
+    let defaults = edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot::from_configs([]);
+    let input = PreparedManagedHttp::new(&field, &defaults).unwrap();
+    let (guard, _) = Guardrail::create_attached(&input, "guard".to_owned()).unwrap();
+    let proxy = AiProxy::from_config(&config(), "proxy").unwrap();
+    let store = AiBackendStore::new();
+    for guard_first in [false, true] {
+        for body in [br#"{"model":"m"}"#.as_slice(), br#"{"model":"m","stream":false}"#] {
+            let mut ctx = crate::EdgionHttpContext::new();
+            ctx.route_unit = Some(native_admission_route());
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new("admission");
+            if guard_first {
+                ctx.ensure_ai_state().semantic_guard_claimed = true;
+                session.expect_get_method().return_const("POST".to_string());
+                session
+                    .expect_get_path()
+                    .return_const("/v1/chat/completions".to_string());
+                session.expect_declares_body().return_const(Some(true));
+                session
+                    .expect_read_request_body()
+                    .once()
+                    .returning(move |_| Ok(Bytes::from_static(body)));
+                let mut ai = MockAiSessionCapability::new();
+                ai.expect_capture_ai_client_api().once().return_const(true);
+                session
+                    .expect_ai()
+                    .return_var(Box::new(ai) as Box<dyn AiSessionCapability>);
+            } else {
+                let mut plan = unary_chat_plan();
+                plan.requested_streaming = canonical_openai_request(Bytes::from_static(body), true)
+                    .unwrap()
+                    .requested_streaming;
+                assert!(ctx.try_set_ai_attempt_plan(AiAttemptPlan::Ready(plan)));
+            }
+            session.expect_ctx().return_const(ctx);
+            session
+                .expect_set_response_header()
+                .withf(|name, value| name == "content-type" && value == "application/json")
+                .once()
+                .returning(|_, _| Ok(()));
+            let result = if guard_first {
+                proxy
+                    .run_request_with_store_and_entropy(&store, 0, &mut session, &mut log)
+                    .await
+            } else {
+                guard.run_request(&mut session, &mut log).await
+            };
+            let PluginRunningResult::ErrResponse {
+                status,
+                body: Some(body),
+            } = result
+            else {
+                panic!("unary Chat admission must return a local error");
+            };
+            assert_eq!(status, 400);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["error"]["code"],
+                "unsupported_parameter"
+            );
+        }
+    }
 }
 
 #[test]

@@ -19,6 +19,11 @@ GET `/v1/models`；自定义路径需先经 URLRewrite 改写。其他受管操�
 `404 unsupported_endpoint`。`api: openaiResponses` 则只接受 OpenAI 的 POST `/v1/responses`。`api: anthropicMessages` 只接受 Anthropic 的 POST `/v1/messages`。
 普通 HTTPRoute 到 Service 可独立代理不透明 HTTP 流量，不提供受管 AI 语义。
 
+Chat Completions 请求命中响应侧 Guardrail 时，客户端必须设置 `"stream": true`。省略该字段或传入
+`false` 都会在请求发往提供商之前收到 `400 unsupported_parameter`，两种 `failOpen` 设置均适用。
+提供商最终返回 4xx 或 5xx 时，Guardrail 跳过评估和首窗口等待，继续走路由原有的 AI 错误处理流程。
+例如，最终 429 可以携带网关按冷却策略校验并规范化的 `Retry-After`。
+
 ## 支持的提供商
 
 | `provider` | 协议行为 | 默认 Endpoint |

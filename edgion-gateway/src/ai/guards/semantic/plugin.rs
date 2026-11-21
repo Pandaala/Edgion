@@ -108,6 +108,15 @@ impl RequestFilter for Guardrail {
                 crate::ai::AiProxyError::UnsupportedParameter,
             );
         }
+        if matches!(session.ctx().ai_state().and_then(|state| state.attempt_plan.as_ref()),
+            Some(crate::ai::AiAttemptPlan::Ready(plan)) if !plan.requested_streaming)
+        {
+            log.push_err("guardrail-requires-stream");
+            return crate::ai::protocols::error::ai_error_response(
+                session,
+                crate::ai::AiProxyError::UnsupportedParameter,
+            );
+        }
         let owner = Arc::new(AttachedGuardrail::new());
         if !session
             .ai()
@@ -155,6 +164,23 @@ impl UpstreamResponse for Guardrail {
             return PluginRunningResult::GoodNext;
         };
         let status = session.get_response_status().unwrap_or(0);
+        // Earlier response filters can rewrite a successful status while retaining
+        // the model output. Only skip an error that also came from the provider.
+        if (400..=599).contains(&status)
+            && session
+                .ctx()
+                .get_current_upstream()
+                .and_then(|upstream| upstream.status)
+                .is_some_and(|original| (400..=599).contains(&original))
+        {
+            session.ai().disable_semantic_guard();
+            owner.publish(GuardrailSummary {
+                outcome: "skipped",
+                reason: "upstream-error",
+                ..GuardrailSummary::default()
+            });
+            return PluginRunningResult::GoodNext;
+        }
         let content_type_ok = session
             .response_header_map()
             .get(http::header::CONTENT_TYPE)
