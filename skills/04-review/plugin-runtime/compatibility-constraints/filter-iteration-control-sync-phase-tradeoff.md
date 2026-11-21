@@ -8,7 +8,12 @@ knowledge_type: compatibility-constraints
 
 ## Conclusion and scope
 
-At locked Pingora revision
+The local Pingora path patch adopts upstream `018abe0` for the downstream
+body callback (upstream-main issue 04). Edgion inherits its async default.
+Its synchronous read-only body plugins and asynchronous streaming processors
+run in the upstream stage and are skipped on ordinary cache hits.
+
+At the previously inspected Pingora revision
 `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`,
 `ProxyHttp::upstream_response_filter`, the upstream body hook, and the upstream
 trailer hook are asynchronous, while the downstream `response_body_filter`
@@ -72,7 +77,7 @@ key is generated.
 | Response termination | No typed terminal/sink contract added | One clean terminal boundary, before real trailers; failure is not clean EOS |
 | Callback cancellation | No Edgion processor ownership contract added | Body/trailer leases close only the cancelled group |
 | Precommit response decision | No Hold contract added | Bounded Release/Replace/Fail before writer handoff, with an absolute deadline |
-| Downstream body callback | Changed to async | Locked fork remains sync; Edgion has no production override requiring migration |
+| Downstream body callback | Changed to async | Local path patch awaits the inherited callback on live and cache-hit responses |
 
 Upstream commits
 [`018abe0`](https://github.com/cloudflare/pingora/commit/018abe093903ee926dd3a75a8c966698101ce886)

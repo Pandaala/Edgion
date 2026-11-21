@@ -312,8 +312,7 @@ impl ProxyHttp for EdgionHttpProxy {
     where
         Self::CTX: Send + Sync,
     {
-        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, sink, ctx)
-            .await
+        pg_upstream_response_body_filter::process_response_body(session, body, end_of_stream, sink, ctx).await
     }
 
     async fn upstream_response_body_filter_event(
@@ -327,8 +326,7 @@ impl ProxyHttp for EdgionHttpProxy {
     where
         Self::CTX: Send + Sync,
     {
-        pg_upstream_response_body_filter::upstream_response_body_filter_event(self, session, body, event, sink, ctx)
-            .await
+        pg_upstream_response_body_filter::process_response_body_event(session, body, event, sink, ctx).await
     }
 
     async fn upstream_response_trailer_filter(

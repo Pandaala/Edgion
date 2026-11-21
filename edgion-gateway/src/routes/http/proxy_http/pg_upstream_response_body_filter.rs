@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::EdgionHttpProxy;
 use crate::ai::protocols::openai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 use crate::response::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
 
@@ -331,19 +330,7 @@ async fn run_leased_stream_event(
 /// - `Ok(None)` - continue processing normally
 /// - `Ok(Some(duration))` - rate limit for the given duration (for bandwidth throttling)
 #[inline]
-pub async fn upstream_response_body_filter(
-    _edgion_http: &EdgionHttpProxy,
-    session: &mut Session,
-    body: &mut Option<bytes::Bytes>,
-    end_of_stream: bool,
-    sink: &mut ResponseBodySink,
-    ctx: &mut EdgionHttpContext,
-) -> pingora_core::Result<Option<Duration>> {
-    process_response_body(session, body, end_of_stream, sink, ctx).await
-}
-
-#[inline]
-async fn process_response_body(
+pub(super) async fn process_response_body(
     session: &mut Session,
     body: &mut Option<bytes::Bytes>,
     end_of_stream: bool,
@@ -366,19 +353,7 @@ async fn process_response_body(
 /// Adapt the fork's typed response lifecycle without collapsing the
 /// pre-trailer boundary into a no-trailers EOS.
 #[inline]
-pub async fn upstream_response_body_filter_event(
-    _edgion_http: &EdgionHttpProxy,
-    session: &mut Session,
-    body: &mut Option<bytes::Bytes>,
-    event: UpstreamResponseBodyEvent,
-    sink: &mut ResponseBodySink,
-    ctx: &mut EdgionHttpContext,
-) -> pingora_core::Result<Option<Duration>> {
-    process_response_body_event(session, body, event, sink, ctx).await
-}
-
-#[inline]
-async fn process_response_body_event(
+pub(super) async fn process_response_body_event(
     session: &mut Session,
     body: &mut Option<bytes::Bytes>,
     event: UpstreamResponseBodyEvent,

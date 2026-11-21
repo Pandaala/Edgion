@@ -397,18 +397,6 @@ impl StreamingResponseProcessor for PreTrailerOutput {
 
 #[tokio::test]
 async fn pre_trailer_generated_body_uses_scoped_maximum_delay_without_closing_eos() {
-    let proxy = EdgionHttpProxy {
-        listener_port: 0,
-        is_https_listener: false,
-        listener_key: edgion_resources::ListenerKey("unit-pre-trailer".into()),
-        server_header_opts: Default::default(),
-        access_logger: Arc::new(crate::observe::AccessLogger::new()),
-        egc: crate::config::bind_gateway_config(None),
-        enable_http2: false,
-        preflight_handler: super::super::PreflightHandler,
-        http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::new()),
-        grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::new()),
-    };
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("8192"))));
@@ -419,8 +407,7 @@ async fn pre_trailer_generated_body_uses_scoped_maximum_delay_without_closing_eo
     ctx.freeze_response_processor_driver();
     let mut body = None;
     let mut sink = ResponseBodySink::new();
-    let delay = upstream_response_body_filter_event(
-        &proxy,
+    let delay = process_response_body_event(
         &mut session,
         &mut body,
         UpstreamResponseBodyEvent::TerminalBeforeTrailers,
