@@ -74,6 +74,12 @@ fn ip_literal_link_local_metadata_address_is_rejected() {
 }
 
 #[test]
+fn geoip_non_dialable_literal_is_rejected_before_fetch() {
+    let error = classify_literal_destination("http://224.0.0.1/db.mmdb").unwrap_err();
+    assert!(error.contains("non_dialable"), "{error}");
+}
+
+#[test]
 fn hostname_update_url_is_not_classified_here() {
     // Hostname targets are out of scope for this literal check; DNS-time
     // egress policy is a separate concern from this task.

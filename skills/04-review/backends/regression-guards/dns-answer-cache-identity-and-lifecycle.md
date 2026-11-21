@@ -18,7 +18,7 @@ All DNS answer caching goes through one canonical mechanism,
 | Instance | Consumers | Sizing |
 |---|---|---|
 | `egress_answer_cache()` (`edgion-common`) | `EgressResolver`s with operator-configured destinations (Gateway plugins, LinkSys, Wasm callouts with allowlisted origins, GeoIP, Controller OAuth2) | 4096 entries, 16 shards |
-| `request_egress_answer_cache()` (`edgion-gateway/src/plugins/http/common/outbound/egress.rs`) | `EgressResolver::new_request_influenced`: DSL `http.call` URLs and the redirects they follow | 1024 entries, 8 shards |
+| `request_egress_answer_cache()` (`edgion-gateway/src/plugins/http/common/outbound/egress.rs`) | `EgressResolver::new_request_influenced`: DSL `http.call` and replayable redirects when `httpBlockPrivateIps` is enabled or the Gateway blocked CIDR list is nonempty | 1024 entries, 8 shards |
 | `upstream_dns_cache()` (`edgion-gateway/src/backends/discovery/dns_cache.rs`) | AI provider endpoints, ExternalJump destinations of RegionRoute / DynamicExternalUpstream (`util::net::resolve_domain`), and new UDP sessions to `system`-mode ExternalName Services (`backends::prepare_l4_service`, 250 ms budget, single-flight so spoofable sources cannot multiply queries) | `lru_cache` defaults with an 8-shard floor |
 
 Callers must not add another DNS cache type; a new instance is justified only to isolate a
@@ -28,9 +28,14 @@ zero fallback TTL bypass caching entirely (the HTTPDNS bootstrap fetcher, OTLP t
 Deliberately uncached resolution: the Controller DNS resolver service and the Gateway DNS
 endpoint table (both resolve in the background and publish EndpointSlices; see
 [endpoint table lifecycle](dns-endpoint-table-lifecycle.md)), ExternalName `system` mode on
-HTTP, gRPC, TCP and TLS (OS resolver per attempt), and the unguarded DSL client
-(reqwest's default resolver, only when `httpBlockPrivateIps` is off). Every resolver answer is
-truncated to 256 addresses (`MAX_ANSWER_ADDRS`) before it reaches any consumer.
+HTTP, gRPC, TCP and TLS (OS resolver per attempt). With DSL private blocking off and an empty Gateway CIDR list,
+the checked system resolver bypasses Edgion's DNS answer cache. It filters the returned
+socket addresses and passes each admitted result to reqwest with its original IPv6
+interface scope ID. The cached path stores IPs only and does not promise to retain
+an OS scope ID. Both paths classify the dial candidates. The shared answer cache caps
+answers at 256 IPs. The uncached DSL resolver checks the first 256 distinct sockets
+(`MAX_ANSWER_ADDRS`), in OS order. The Gateway resolver-selection test starts an isolated
+process with an empty CIDR list and checks the scope ID returned for a numeric scoped IPv6 name.
 
 **Key** = `(ResolverSpec::fingerprint(), queried name, DnsQueryPolicy)`. These inputs describe the
 answer completely: a changed hostname, resolver or family is a different key, so updates need no
@@ -104,8 +109,9 @@ consumers with different `blockPrivate` policies and the dialed address is alway
 `edgion_outbound_egress_blocked_total` therefore counts per use.
 
 **Deadlines and observability**: every resolver call inside a flight is bounded (hickory query
-timeouts, the HTTPDNS request timeout, 30 s of waiting for the System resolver, whose blocking
-`getaddrinfo` still completes in the background). The stale refresh runs
+timeouts, the HTTPDNS request timeout, 30 s of waiting for the System resolver).
+Cancellation or timeout aborts queued system lookups on the blocking pool. A lookup
+already executing `getaddrinfo` finishes on its worker thread. The stale refresh runs
 inline on the claiming request, so during an outage one request per key per back-off interval
 waits up to that deadline (accepted; a background refresher was rejected). Store-stats list
 in-flight keys as `policy|name` only; the request-influenced instance reports counts only.
@@ -153,6 +159,11 @@ Per-lookup hickory resolvers are built with their own response cache disabled.
   for data-free single-flight mutexes (decided by the user on 2026-11-06).
 
 ## Verification and re-evaluation
+
+The common-01 scope regression test feeds fabricated system socket results to
+`UncachedLocalSystemResolver`. It checks filtering, deduplication, the answer cap
+and distinct interface IDs on the same IPv6 address. It exercises the filter
+boundary without requiring a particular OS DNS response or a live link-local dial.
 
 Re-verified 2026-11-07 after a second five-reviewer review (spec §10 "Second post-merge
 review"): tests for cancelled refreshes counted as failures (single and repeated, to the stale

@@ -6,7 +6,7 @@
 //! and IP-classification policy without introducing a Controller -> Gateway
 //! dependency.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -30,14 +30,29 @@ pub enum IpClass {
     /// Matched the operator-configured blocked CIDR list. Never produced for
     /// loopback or link-local addresses, which keep their built-in classes.
     BlockedCidr,
-    /// RFC 1918 private IPv4 space.
+    /// RFC 1918 private IPv4 or RFC 6598 shared address space.
     Private,
     /// RFC 4193 unique-local IPv6 space.
     UniqueLocal,
     /// 0.0.0.0 or ::.
     Unspecified,
+    /// An invalid unicast destination or an invalid NAT64/6to4 embedded address.
+    NonDialable,
     /// Any other address.
     Global,
+}
+
+impl IpClass {
+    /// Rejections shared even by consumers that allow local and private targets.
+    pub fn always_blocked_reason(self) -> Option<EgressBlockReason> {
+        match self {
+            Self::BlockedCidr => Some(EgressBlockReason::BlockedCidr),
+            Self::NonDialable => Some(EgressBlockReason::NonDialable),
+            Self::Loopback | Self::LinkLocal | Self::Private | Self::UniqueLocal | Self::Unspecified | Self::Global => {
+                None
+            }
+        }
+    }
 }
 
 /// Process-wide operator-configured blocked CIDRs. Installed at most once, at
@@ -99,15 +114,51 @@ pub fn classify_ip(ip: IpAddr) -> IpClass {
 ///
 /// Loopback and link-local keep their built-in classes, so the list can only
 /// add blocks and never changes their reasons or exceptions. Any other address
-/// covered by `blocked` (IPv4-mapped forms included) is
+/// covered by `blocked` (including either representation of a well-known
+/// NAT64 or 6to4 address, and IPv4-mapped forms) is
 /// [`IpClass::BlockedCidr`].
 #[inline]
 pub fn classify_ip_with(ip: IpAddr, blocked: Option<&IpRadixMatcher>) -> IpClass {
-    let class = classify_builtin(ip);
+    let class = match ip {
+        IpAddr::V6(v6) if let Some(v4) = transition_ipv4(v6) => {
+            if blocked.is_some_and(|matcher| matcher.contains(&IpAddr::V4(v4))) {
+                return IpClass::BlockedCidr;
+            }
+            if is_global_transition_endpoint(v4) {
+                IpClass::Global
+            } else {
+                IpClass::NonDialable
+            }
+        }
+        _ => classify_builtin(ip),
+    };
     match class {
         IpClass::Loopback | IpClass::LinkLocal => class,
         _ if blocked.is_some_and(|matcher| matcher.contains(&ip)) => IpClass::BlockedCidr,
         _ => class,
+    }
+}
+
+/// RFC 6052 well-known /96 and RFC 3056 6to4 /16 use different IPv4 offsets.
+fn transition_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    match ip.segments() {
+        [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] | [0x2002, hi, lo, ..] => {
+            Some(Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo)))
+        }
+        _ => None,
+    }
+}
+
+/// Transition endpoints require global unicast. These additional IANA
+/// special-purpose blocks remain available as native IPv4 for local uses.
+fn is_global_transition_endpoint(ip: Ipv4Addr) -> bool {
+    if classify_v4(ip) != IpClass::Global || ip.is_documentation() {
+        return false;
+    }
+    match ip.octets() {
+        [192, 0, 0, host] => matches!(host, 9 | 10), // Globally reachable protocol anycasts
+        [192, 88, 99, _] | [198, 18..=19, _, _] => false, // Deprecated relay and benchmarking
+        _ => true,
     }
 }
 
@@ -142,10 +193,12 @@ fn classify_v4(ip: Ipv4Addr) -> IpClass {
         IpClass::Loopback
     } else if ip.is_link_local() {
         IpClass::LinkLocal
-    } else if ip.is_private() {
+    } else if ip.is_private() || matches!(ip.octets(), [100, 64..=127, _, _]) {
         IpClass::Private
     } else if ip.is_unspecified() {
         IpClass::Unspecified
+    } else if matches!(ip.octets()[0], 0 | 224..=255) {
+        IpClass::NonDialable
     } else {
         IpClass::Global
     }
@@ -158,6 +211,7 @@ pub enum EgressBlockReason {
     LinkLocal,
     BlockedCidr,
     Unspecified,
+    NonDialable,
     Private,
 }
 
@@ -169,6 +223,7 @@ impl EgressBlockReason {
             Self::LinkLocal => "link_local",
             Self::BlockedCidr => "blocked_cidr",
             Self::Unspecified => "unspecified",
+            Self::NonDialable => "non_dialable",
             Self::Private => "private",
         }
     }
@@ -188,7 +243,9 @@ pub struct EgressPolicy {
 #[derive(Clone, Copy)]
 pub enum ResolverAddressPolicy {
     Standard(EgressPolicy),
-    ConfiguredCidrsOnly,
+    /// Keep local and private addresses, subject to configured CIDRs and
+    /// the unconditional non-dialable class.
+    AllowPrivateAndLocal,
 }
 
 impl From<EgressPolicy> for ResolverAddressPolicy {
@@ -210,6 +267,49 @@ struct Inner {
 #[derive(Clone)]
 pub struct EgressResolver {
     inner: Arc<Inner>,
+}
+
+/// OS resolver for clients that permit scoped local sockets and require an
+/// uncached answer on every dial. The socket and its interface ID stay together.
+#[derive(Clone, Copy)]
+pub struct UncachedLocalSystemResolver {
+    observer: Option<EgressBlockObserver>,
+}
+
+impl UncachedLocalSystemResolver {
+    pub fn new(observer: Option<EgressBlockObserver>) -> Self {
+        Self { observer }
+    }
+
+    fn allowed_sockets(&self, sockets: impl Iterator<Item = SocketAddr>) -> Vec<SocketAddr> {
+        let mut seen = std::collections::HashSet::new();
+        sockets
+            .filter(|addr| seen.insert(*addr))
+            .take(crate::dns::MAX_ANSWER_ADDRS)
+            .filter(|addr| {
+                is_ip_allowed_with_observer(
+                    addr.ip(),
+                    ResolverAddressPolicy::AllowPrivateAndLocal,
+                    false,
+                    self.observer,
+                )
+            })
+            .collect()
+    }
+}
+
+impl Resolve for UncachedLocalSystemResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let resolver = *self;
+        Box::pin(async move {
+            let sockets = crate::dns::system::lookup_system_sockets((name.as_str().to_owned(), 0)).await?;
+            let allowed = resolver.allowed_sockets(sockets);
+            if allowed.is_empty() {
+                return Err("egress policy blocked all resolved addresses".into());
+            }
+            Ok(Box::new(allowed.into_iter()) as Addrs)
+        })
+    }
 }
 
 enum ResolveFailure {
@@ -322,9 +422,7 @@ pub fn is_ip_allowed_with_observer(
     let class = classify_ip(ip);
     let reason = match policy.into() {
         ResolverAddressPolicy::Standard(policy) => egress_block_reason(class, policy, allow_loopback),
-        ResolverAddressPolicy::ConfiguredCidrsOnly => {
-            (class == IpClass::BlockedCidr).then_some(EgressBlockReason::BlockedCidr)
-        }
+        ResolverAddressPolicy::AllowPrivateAndLocal => class.always_blocked_reason(),
     };
     let Some(reason) = reason else {
         return true;
@@ -343,6 +441,7 @@ fn egress_block_reason(class: IpClass, policy: EgressPolicy, allow_loopback: boo
         IpClass::LinkLocal => Some(EgressBlockReason::LinkLocal),
         IpClass::BlockedCidr => Some(EgressBlockReason::BlockedCidr),
         IpClass::Unspecified => Some(EgressBlockReason::Unspecified),
+        IpClass::NonDialable => Some(EgressBlockReason::NonDialable),
         IpClass::Private | IpClass::UniqueLocal if policy.block_private => Some(EgressBlockReason::Private),
         IpClass::Private | IpClass::UniqueLocal | IpClass::Global => None,
     }

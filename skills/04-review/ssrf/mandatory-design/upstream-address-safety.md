@@ -29,8 +29,44 @@ inherits through `classify_ip` (`IpClass::BlockedCidr`,
 `BackendAddrBlockedCidrNotAllowed`). Vendor addresses are deliberately not
 hard-coded into the classifier; see
 [Operator-configured egress blocked CIDRs](../intentional-design/operator-blocked-cidrs.md).
-CGNAT, NAT64/6to4 embedded IPv4 and reserved ranges remain an open P2 gap tracked in
-[`tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md`](../../../../tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md).
+
+### Built-in address policy (common-01)
+
+The Gateway backend and guarded outbound policies consume the shared classifier
+in `edgion-common/src/egress.rs` before dialing. In common-01 item 5, the
+IPv4 fallback previously treated shared, multicast and reserved space as global,
+and the IPv6 branch recognized only IPv4-mapped addresses. The resulting
+candidate list could include a destination disallowed by the intended policy.
+
+- Native and IPv4-mapped CGNAT (`100.64.0.0/10`) follows the private-address switch.
+  The backend caller permits it for Pod networks. An explicit Gateway CIDR match
+  still takes precedence.
+- Nonzero `0.0.0.0/8`, `224.0.0.0/4` and `240.0.0.0/4` (including limited
+  broadcast) are non-dialable, independent of private or loopback permission.
+  Native and mapped all-zero addresses keep the caller's unspecified-address policy.
+- In `64:ff9b::/96`, inspect the last 32 bits as the NAT64 destination. In
+  `2002::/16`, inspect the next 32 bits as the 6to4 tunnel endpoint. Both
+  require globally reachable unicast IPv4. The actual socket address remains IPv6.
+  The operator list checks both the IPv6 address and the embedded IPv4. A match
+  yields `blocked_cidr`; a built-in non-dialable rejection yields `non_dialable`
+  on observed resolver paths and `BackendAddrNonDialable` at HTTP backend admission.
+  A 6to4 tunnel endpoint alone does not establish the final application destination.
+  See [RFC 6052 section 3.1](https://www.rfc-editor.org/rfc/rfc6052#section-3.1)
+  and [RFC 3056 section 2](https://www.rfc-editor.org/rfc/rfc3056#section-2).
+
+Check literal, DNS and redirect decisions together, including DSL with private
+blocking off and no configured CIDRs. Only that combination preserves OS-returned
+IPv6 scope IDs on hostname answers through uncached system socket resolution.
+See [DNS cache selection and scope test coverage](../../backends/regression-guards/dns-answer-cache-identity-and-lifecycle.md).
+The shared unit cases live in
+`edgion-common/tests/unit/egress_test.rs`; the DynamicExternalUpstream
+`reject_non_dialable_backend` case checks the request-correlated backend
+diagnostic. Revisit the embedded-address rules if the supported translation
+prefixes or the IPv4 special-purpose registry changes.
+
+The common-01 verification on 2026-11-21 passed 13 Common egress tests,
+10 DNS EndpointSlice tests, one HTTP DNS endpoint test and six Resources
+diagnostic tests.
 
 ## Review Decision
 
@@ -72,7 +108,7 @@ Edgion's local integration fixtures rely on `127.0.0.1` Endpoint/EndpointSlice, 
 
 [forward-auth-webhook-ssrf.md](../regression-guards/forward-auth-webhook-ssrf.md) closes findings of the form "static operator URI should ban internal access", because ForwardAuth/Webhook's legitimate use case is precisely to access internal services, and a blanket private-network block would break the feature.
 
-This rule is narrower: it does not ban internal networks, only loopback and link-local / metadata; and it focuses on the consistency of safety policies among Gateway upstream dial paths.
+Backend admission preserves cluster-private reachability and applies the shared built-in address policy and configured CIDRs across Gateway upstream dial paths.
 
 ## Integration evidence: external-loopback rejection (ARCH-354)
 

@@ -622,20 +622,20 @@ target:
 
 URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice 解析的 Service 目标不同——网关需要自行完成 DNS 解析，并在建立连接前对结果进行分类。两个执行点实现同一套策略，因此无论 `target.url` 指向的是主机名还是 IP 字面量，行为都一致：
 
-- **始终拒绝**：未指定地址（`0.0.0.0`、`::`）、回环地址（`127.0.0.0/8`、`::1`）和链路本地地址，其中包括云元数据地址 `169.254.169.254` 及其所在的整个 `169.254.0.0/16` 网段；以及 Gateway [`outbound_egress_blocked_cidrs`](../configuration/gateway-config.md#出站封禁-cidr) 列表中的所有地址段（随项目发布的配置里列出的是链路本地之外的云元数据端点）。
-- **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fc00::/7`），在始终拒绝的类别之外追加。
-- **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
+- **始终拒绝**：未指定地址（`0.0.0.0`、`::`）、回环地址（`127.0.0.0/8`、`::1`）和链路本地地址，其中包括云元数据地址 `169.254.169.254` 及其所在的整个 `169.254.0.0/16` 网段。此外也拒绝不可拨号地址，以及 Gateway [`outbound_egress_blocked_cidrs`](../configuration/gateway-config.md#出站封禁-cidr) 列表中的所有地址段（随项目发布的配置里列出的是链路本地之外的云元数据端点）。
+- **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）、IPv4 共享地址空间（`100.64.0.0/10`）及唯一本地地址（`fc00::/7`），在始终拒绝的类别之外追加。
+- **省略 `target.blockPrivate` 时**，webhook 继承 Gateway 的 `outbound_egress_block_private` 生效值（默认 `false`）。显式设为 `false` 可访问内部制品库等私网目的地址，始终拒绝的规则仍然生效。
 
 拒绝地址会使本次连接失败，WebhookKeyGet 不写入值。对主机名目标，解析器按 `private`、`loopback`、
-`link_local`、`unspecified` 或 `blocked_cidr` 原因增加 `edgion_outbound_egress_blocked_total`。
-对 IP 字面量 URL，出站策略记录 `private` 和 `unspecified`。回环、链路本地及配置 CIDR 命中由更早的后端地址检查拒绝，不增加该计数器。
+`link_local`、`unspecified`、`non_dialable` 或 `blocked_cidr` 原因增加 `edgion_outbound_egress_blocked_total`。
+对 IP 字面量 URL，出站策略记录 `private` 和 `unspecified`。回环、链路本地、不可拨号地址及配置 CIDR 命中由更早的后端地址检查拒绝，不增加该计数器。
 
 **网关本地出站设置。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置。同一配置块还管理 Gateway 主动发起的 reqwest 调用所共用的 HTTP/2 响应头上限：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | 受保护出站目标的网关级默认值。Webhook 可用 `target.blockPrivate` 覆盖；Redis 不可覆盖。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
-| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 解析器未报告记录 TTL 时，受保护出站 DNS 应答（包括 Redis）在出站应答缓存（共享缓存，以及 DSL `http.call` 使用的独立缓存）中的新鲜期（上限 300 秒；已报告的 TTL 在 5–300 秒范围内生效）。缓存保存原始应答，每次使用时重新分类。`0` 关闭缓存。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 解析器未报告记录 TTL 时，受保护出站 DNS 应答（包括 Redis）在出站应答缓存（共享缓存，以及 DSL `http.call` 在启用私网拦截或 Gateway 封禁列表非空时使用的独立缓存）中的新鲜期（上限 300 秒；已报告的 TTL 在 5–300 秒范围内生效）。缓存保存原始应答，每次使用时重新分类。`0` 关闭缓存。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
 | `outbound_http2_max_header_list_size`（网关配置文件） | Integer（字节） | `16384` | Gateway 主动发起的 reqwest 调用共用的 HTTP/2 解码响应头列表上限。有效范围为 `16384..=65536`，修改后需要重启 Gateway；不影响客户端到 Gateway 的流量或 Pingora 路由 upstream。 |
 | `outbound_egress_blocked_cidrs`（网关配置文件） | CIDR 字符串数组 | `[]`（随项目发布的配置列出了云元数据端点） | 接入出站策略的客户端和 Gateway 后端拒绝的额外目的地址，不受 `blockPrivate` 影响。只能追加；修改需重启。见[出站封禁 CIDR](../configuration/gateway-config.md#出站封禁-cidr)。 |
 

@@ -18,6 +18,8 @@ pub enum BlockedBackendReason {
     /// Operator-configured `outbound_egress_blocked_cidrs` (e.g. vendor cloud
     /// metadata endpoints outside link-local)
     BlockedCidr,
+    /// Address unsuitable for a unicast dial, including invalid transition endpoints.
+    NonDialable,
 }
 
 fn parse_ip_literal(domain: &str) -> Option<IpAddr> {
@@ -36,10 +38,10 @@ fn parse_ip_literal(domain: &str) -> Option<IpAddr> {
 ///
 /// Blocked categories protect against SSRF to host-local loopback and cloud metadata
 /// services (AWS/GCP/Azure IMDS at `169.254.169.254`, plus the broader link-local segment),
-/// plus any address in the operator-configured `outbound_egress_blocked_cidrs` list.
+/// as well as non-dialable destinations and operator-configured blocked CIDRs.
 ///
 /// Deliberately **not** blocked:
-/// - RFC1918 private ranges (10/8, 172.16/12, 192.168/16) — common K8s cluster traffic
+/// - RFC1918 and CGNAT ranges used for cluster traffic
 /// - Unix domain sockets — sidecar/local IPC pattern
 ///
 /// Note: this is defense-in-depth. The primary egress control should be a NetworkPolicy
@@ -56,6 +58,7 @@ pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendR
         IpClass::Loopback => Some(BlockedBackendReason::Localhost),
         IpClass::LinkLocal => Some(BlockedBackendReason::LinkLocal),
         IpClass::BlockedCidr => Some(BlockedBackendReason::BlockedCidr),
+        IpClass::NonDialable => Some(BlockedBackendReason::NonDialable),
         IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified | IpClass::Global => None,
     }
 }

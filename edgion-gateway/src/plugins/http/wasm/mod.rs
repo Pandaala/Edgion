@@ -38,7 +38,7 @@ pub mod request;
 pub use plugin::WasmPlugin;
 
 /// Reqwest dials IP literals without consulting its DNS resolver. Apply the
-/// operator list to the same parsed URL the client will send.
+/// built-in non-dialable and configured CIDR blocks to the actual request URL.
 #[cfg(feature = "wasm")]
 fn admit_configured_destination(url: &url::Url) -> Result<(), &'static str> {
     use crate::util::net::{classify_ip, IpClass};
@@ -47,8 +47,14 @@ fn admit_configured_destination(url: &url::Url) -> Result<(), &'static str> {
         Some(url::Host::Ipv6(ip)) => ip.into(),
         _ => return Ok(()),
     };
-    if classify_ip(ip) == IpClass::BlockedCidr {
-        return Err("Wasm destination blocked by configured egress CIDR");
+    match classify_ip(ip) {
+        IpClass::BlockedCidr => Err("Wasm destination blocked by configured egress CIDR"),
+        IpClass::NonDialable => Err("Wasm destination is non-dialable"),
+        IpClass::Loopback
+        | IpClass::LinkLocal
+        | IpClass::Private
+        | IpClass::UniqueLocal
+        | IpClass::Unspecified
+        | IpClass::Global => Ok(()),
     }
-    Ok(())
 }

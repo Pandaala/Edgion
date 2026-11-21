@@ -15,8 +15,9 @@ to a blocked IP literal (loopback / private / link-local / ULA / unspecified)
 terminates the request with `status = 0` instead of being silently followed.
 The 10-hop overall cap is preserved.
 
-When `httpBlockPrivateIps: false` (the default), the original permissive
-client with `Policy::limited(10)` is used — behavior unchanged.
+With `httpBlockPrivateIps: false` (the default), the client allows private
+and local addresses but still checks every redirect literal and resolved address
+for non-dialable destinations and configured CIDRs, even with an empty list.
 
 **Do not re-open this as a redirect-bypass SSRF finding.** The first-hop-only
 gap that previously allowed `public-host → 302 → 169.254.169.254` was closed
@@ -24,7 +25,9 @@ in F-012 (2026-05-26).
 
 ## Hostname enforcement
 
-Guarded clients also use the canonical `EgressResolver` on every connection.
+Both private-address policies classify the exact system DNS answers when dialing a hostname.
+With private blocking off and no configured CIDRs, the uncached path retains the OS socket's
+IPv6 interface scope. All other DSL clients use the request-influenced DNS answer cache.
 The resolver classifies the exact DNS results reqwest receives for dialing, so
 a redirect to a hostname that resolves to a blocked address fails with
 `status = 0`. There is no separate preflight lookup and therefore no
@@ -34,7 +37,7 @@ DNS-rebinding TOCTOU window.
 
 - `edgion-gateway/src/plugins/http/dsl/runtime.rs::dsl_http_client(block_private_ips, follow_redirects)`:
   selects among four process-global clients by egress policy and redirect
-  behavior. Guarded clients attach `EgressResolver`; opaque `Body` clients
+  behavior. All four clients attach a policy-checking DNS resolver; opaque `Body` clients
   deny redirects.
 - `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::call_builtin_http`:
   passes `runtime.block_private_ips` to `dsl_http_client(..)`.

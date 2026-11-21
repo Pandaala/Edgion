@@ -101,8 +101,8 @@ pub struct WebhookTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 
-    /// URL targets only. When `true`, resolved RFC1918 / unique-local addresses are
-    /// rejected in addition to the always-blocked loopback and link-local ranges.
+    /// URL targets only. When `true`, RFC1918, CGNAT and unique-local addresses are
+    /// rejected in addition to the built-in and operator-configured destination blocks.
     /// `None` = inherit the gateway-local `outbound_egress.block_private` default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_private: Option<bool>,

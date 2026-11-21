@@ -78,7 +78,7 @@ arguments.
 - `httpMaxTimeoutMs` (default 5000, range 1–60000 ms)
 - `httpMaxRequestBodyBytes` (default 1 MiB, explicit maximum 32 MiB)
 - `httpMaxResponseBodyBytes` (default and explicit maximum 1 MiB)
-- `httpBlockPrivateIps` (default false). Configured Gateway blocked CIDRs apply independently to literals, DNS answers and redirect destinations.
+- `httpBlockPrivateIps` (default false). Built-in non-dialable addresses and configured Gateway blocked CIDRs apply independently to literals, DNS answers and redirect destinations.
 
 Call timeouts are clamped to the configured maximum. For an opaque `Body`, the effective
 request limit is the smaller of `httpMaxRequestBodyBytes` and the gateway's resolved
@@ -97,11 +97,12 @@ invariant.
 ## SSRF Boundary
 
 All process-global HTTP clients disable environment proxy inheritance. `Str` and `Nil`
-calls follow at most 10 redirects. With private-IP blocking on, direct IP literals are
-checked before sending, while every hostname is resolved through `EgressResolver`; the
-resolver classifies the exact addresses handed to reqwest for dialing. Loopback, private,
-link-local, unspecified, IPv4-mapped IPv6, ULA, and IPv6 link-local destinations are
-blocked. Redirect hops use the same literal and dial-time DNS checks.
+calls follow at most 10 redirects. Both modes check direct IP literals before sending
+and filter the exact DNS addresses handed to reqwest. Only strict private blocking
+or a configured Gateway CIDR list selects the DSL answer cache. Otherwise the uncached
+system lookup filters socket addresses and retains their IPv6 interface scope. Enabling private-IP blocking additionally rejects loopback, private
+(including shared IPv4 space), unique-local, link-local and unspecified destinations,
+including their IPv4-mapped forms. Redirect hops apply the same checks.
 
 Opaque `Body` calls never follow redirects because their pull stream is intentionally
 single-use; the 3xx response is returned to the script. This also avoids silently

@@ -988,7 +988,7 @@ pub fn record_webhook_resolve_error(reason: &'static str) {
 
 /// Record an outbound address rejected by the egress policy.
 ///
-/// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
+/// `reason` uses the fixed labels from [`edgion_common::egress::EgressBlockReason`].
 pub fn record_egress_blocked(reason: &'static str) {
     fixed_counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
 }

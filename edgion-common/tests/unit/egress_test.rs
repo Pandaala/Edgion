@@ -62,9 +62,57 @@ fn classify_all_segments_and_ipv4_mapped_ipv6() {
         ("::ffff:192.168.1.1", IpClass::Private),
         ("::ffff:0.0.0.0", IpClass::Unspecified),
         ("::ffff:8.8.8.8", IpClass::Global),
+        ("100.63.255.255", IpClass::Global),
+        ("100.64.0.0", IpClass::Private),
+        ("100.127.255.255", IpClass::Private),
+        ("::ffff:100.64.0.1", IpClass::Private),
+        ("100.128.0.0", IpClass::Global),
+        ("0.0.0.1", IpClass::NonDialable),
+        ("0.255.255.255", IpClass::NonDialable),
+        ("1.0.0.0", IpClass::Global),
+        ("223.255.255.255", IpClass::Global),
+        ("224.0.0.0", IpClass::NonDialable),
+        ("239.255.255.255", IpClass::NonDialable),
+        ("240.0.0.0", IpClass::NonDialable),
+        ("255.255.255.255", IpClass::NonDialable),
+        ("::ffff:224.0.0.1", IpClass::NonDialable),
     ];
     for (value, expected) in cases {
         assert_eq!(classify_ip(ip(value)), expected, "classify_ip({value})");
+    }
+}
+
+#[test]
+fn transition_prefixes_require_global_unicast_ipv4() {
+    for prefix in ["64:ff9b::", "2002::"] {
+        for (v4, expected) in [
+            ("0.0.0.0", IpClass::NonDialable),
+            ("10.0.0.1", IpClass::NonDialable),
+            ("100.64.0.1", IpClass::NonDialable),
+            ("127.0.0.1", IpClass::NonDialable),
+            ("169.254.1.1", IpClass::NonDialable),
+            ("192.0.0.8", IpClass::NonDialable),
+            ("192.0.0.9", IpClass::Global),
+            ("192.0.0.10", IpClass::Global),
+            ("192.0.2.1", IpClass::NonDialable),
+            ("192.88.99.2", IpClass::NonDialable),
+            ("198.19.255.255", IpClass::NonDialable),
+            ("198.51.100.1", IpClass::NonDialable),
+            ("203.0.113.1", IpClass::NonDialable),
+            ("224.0.0.1", IpClass::NonDialable),
+            ("255.255.255.255", IpClass::NonDialable),
+            ("8.8.8.8", IpClass::Global),
+        ] {
+            let [a, b, c, d] = v4.parse::<Ipv4Addr>().unwrap().octets();
+            let mut bytes = prefix.parse::<Ipv6Addr>().unwrap().octets();
+            let offset = if prefix == "2002::" { 2 } else { 12 };
+            bytes[offset..offset + 4].copy_from_slice(&[a, b, c, d]);
+            assert_eq!(classify_ip(Ipv6Addr::from(bytes).into()), expected, "{prefix} {v4}");
+        }
+    }
+    // Network-specific translation prefixes and neighboring ranges are native IPv6.
+    for value in ["64:ff9b:1::a9fe:1", "64:ff9b:0:0:0:1:a9fe:1", "2003:7f00:1::"] {
+        assert_eq!(classify_ip(ip(value)), IpClass::Global);
     }
 }
 
@@ -79,6 +127,8 @@ fn blocked_cidr_list_only_adds_blocks_and_keeps_builtin_classes() {
         "fd00:ec2::254/128",
         "10.9.0.0/16",
         "8.8.8.0/24",
+        "64:ff9b::909:900/120",
+        "2002:909:900::/40",
         "0.0.0.0/8",
         "127.0.0.0/8",
         "169.254.0.0/16",
@@ -87,12 +137,18 @@ fn blocked_cidr_list_only_adds_blocks_and_keeps_builtin_classes() {
     let cases = [
         ("100.100.100.200", IpClass::BlockedCidr),
         ("::ffff:100.100.100.200", IpClass::BlockedCidr),
-        ("100.100.100.201", IpClass::Global),
+        ("100.100.100.201", IpClass::Private),
         ("fd00:ec2::254", IpClass::BlockedCidr),
         ("fd00:ec2::253", IpClass::UniqueLocal),
         ("10.9.1.1", IpClass::BlockedCidr),
         ("10.8.1.1", IpClass::Private),
         ("8.8.8.8", IpClass::BlockedCidr),
+        ("64:ff9b::808:808", IpClass::BlockedCidr),
+        ("2002:808:808:a:b:c:d:e", IpClass::BlockedCidr),
+        ("64:ff9b::909:909", IpClass::BlockedCidr),
+        ("2002:909:909::1", IpClass::BlockedCidr),
+        ("64:ff9b::6400:1", IpClass::Global),
+        ("64:ff9b::6464:64c8", IpClass::BlockedCidr),
         ("0.0.0.0", IpClass::BlockedCidr),
         // Loopback and link-local keep their built-in classes (and so their
         // reasons and exceptions) even when the list also covers them.
@@ -105,8 +161,55 @@ fn blocked_cidr_list_only_adds_blocks_and_keeps_builtin_classes() {
         assert_eq!(classify_ip_with(ip(value), Some(&matcher)), expected, "{value}");
     }
     // Without a list every address keeps its built-in class.
-    assert_eq!(classify_ip_with(ip("100.100.100.200"), None), IpClass::Global);
+    assert_eq!(classify_ip_with(ip("100.100.100.200"), None), IpClass::Private);
     assert_eq!(classify_ip_with(ip("fd00:ec2::254"), None), IpClass::UniqueLocal);
+}
+
+#[test]
+fn relaxed_resolver_keeps_local_and_global_dials_and_rejects_non_dialable() {
+    let allowed = [
+        "127.0.0.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "100.64.0.1",
+        "64:ff9b::808:808",
+        "2002:808:808::1",
+    ]
+    .map(ip);
+    let rejected = ["64:ff9b::a9fe:1", "2002:7f00:1::", "239.1.1.1"].map(ip);
+    let result = filter_resolved_addrs_with_observer(
+        allowed.into_iter().chain(rejected).collect(),
+        ResolverAddressPolicy::AllowPrivateAndLocal,
+        false,
+        None,
+    );
+    assert_eq!(result, allowed);
+    assert_eq!(EgressBlockReason::NonDialable.as_str(), "non_dialable");
+}
+
+#[test]
+fn uncached_system_answers_keep_scoped_sockets_and_filter_once_per_distinct_socket() {
+    thread_local! {
+        static DROPS: std::cell::RefCell<Vec<EgressBlockReason>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn observe(reason: EgressBlockReason) {
+        DROPS.with(|drops| drops.borrow_mut().push(reason));
+    }
+    let resolver = UncachedLocalSystemResolver::new(Some(observe));
+    let scoped = |scope| SocketAddr::V6(std::net::SocketAddrV6::new("fe80::1".parse().unwrap(), 0, 0, scope));
+    let rejected = SocketAddr::new(ip("224.0.0.1"), 0);
+    let global = SocketAddr::new(ip("8.8.8.8"), 0);
+    let sockets = [scoped(5), rejected, scoped(3), rejected, scoped(5), global];
+    assert_eq!(
+        resolver.allowed_sockets(sockets.into_iter()),
+        [scoped(5), scoped(3), global]
+    );
+    DROPS.with(|drops| assert_eq!(*drops.borrow(), [EgressBlockReason::NonDialable]));
+
+    let distinct = (1..).map(scoped);
+    let allowed = resolver.allowed_sockets(distinct);
+    assert_eq!(allowed.len(), crate::dns::MAX_ANSWER_ADDRS);
+    assert_eq!(allowed.last(), Some(&scoped(crate::dns::MAX_ANSWER_ADDRS as u32)));
 }
 
 #[test]
@@ -175,6 +278,10 @@ fn observed_filter_preserves_address_order_and_drop_reasons() {
         ("::", Some(EgressBlockReason::Unspecified)),
         ("::ffff:0.0.0.0", Some(EgressBlockReason::Unspecified)),
         ("10.1.2.3", Some(EgressBlockReason::Private)),
+        ("100.80.0.1", Some(EgressBlockReason::Private)),
+        ("64:ff9b::6440:1", Some(EgressBlockReason::NonDialable)),
+        ("2002:7f00:1::1", Some(EgressBlockReason::NonDialable)),
+        ("240.0.0.1", Some(EgressBlockReason::NonDialable)),
         ("fd00::1", Some(EgressBlockReason::Private)),
         ("::ffff:192.168.1.1", Some(EgressBlockReason::Private)),
         ("93.184.216.34", None),

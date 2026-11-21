@@ -11,7 +11,7 @@ before applying a decision to current code.
 
 ## Mandatory design
 
-- [Upstream Address Safety](mandatory-design/upstream-address-safety.md)
+- [Upstream address safety](mandatory-design/upstream-address-safety.md), including [built-in address ranges](mandatory-design/upstream-address-safety.md#built-in-address-policy-common-01)
 
 ## Intentional design
 

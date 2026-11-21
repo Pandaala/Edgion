@@ -394,7 +394,7 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub fips_policy: Option<crate::tls::fips_profile::FipsPolicyMode>,
 
-    /// Reject RFC1918 / unique-local addresses for outbound URL targets by default.
+    /// Reject RFC1918, CGNAT and unique-local addresses for outbound URL targets by default.
     /// A `target.blockPrivate` on the resource overrides this. Loopback and
     /// link-local are always rejected regardless. Default false, matching
     /// `classify_backend_addr`'s stance for Service targets.

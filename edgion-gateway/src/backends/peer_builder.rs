@@ -233,8 +233,9 @@ pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool,
 /// - Loopback (`127.0.0.0/8`, `::1`) — typical SSRF-to-host
 /// - Link-local (`169.254.0.0/16`, `fe80::/10`) — covers cloud metadata (`169.254.169.254`)
 /// - Operator-configured `outbound_egress_blocked_cidrs`
+/// - Non-dialable destinations, including invalid transition endpoints
 ///
-/// RFC1918 private ranges are **not** blocked; cluster-internal pod/service IPs live there.
+/// RFC1918 and CGNAT ranges can contain cluster-internal pod/service IPs.
 #[inline]
 pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: bool) -> Result<(), EdgionErrorCode> {
     match classify_backend_addr(addr) {
@@ -243,6 +244,7 @@ pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: 
         Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
         Some(BlockedBackendReason::BlockedCidr) => Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
+        Some(BlockedBackendReason::NonDialable) => Err(EdgionErrorCode::BackendAddrNonDialable),
     }
 }
 
@@ -284,16 +286,11 @@ pub(crate) fn validate_endpoint_backend_addr(
     if addr.as_inet().is_none() {
         return Err(EdgionErrorCode::BackendPortResolutionFailed);
     }
-    match classify_backend_addr(addr) {
-        Some(BlockedBackendReason::Localhost)
-            if allow_loopback_upstream || edgion_common::test_mode::is_integration_testing_mode() =>
-        {
+    match validate_backend_addr(addr, allow_loopback_upstream) {
+        Err(EdgionErrorCode::BackendLocalhostNotAllowed) if edgion_common::test_mode::is_integration_testing_mode() => {
             Ok(())
         }
-        Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
-        Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
-        Some(BlockedBackendReason::BlockedCidr) => Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
-        None => Ok(()),
+        result => result,
     }
 }
 

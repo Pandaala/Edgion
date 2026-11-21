@@ -208,11 +208,19 @@ a custom image must do the same. To trust a private CA, use `caCertificateRefs`
 
 ### Outbound egress blocked CIDRs
 
-`gateway.outbound_egress_blocked_cidrs` adds destination ranges that Gateway backends and guarded outbound clients reject, on top of its built-in blocks (loopback `127.0.0.0/8` / `::1`, subject to the
-existing loopback exceptions, and link-local `169.254.0.0/16` / `fe80::/10`, which covers
-the common cloud metadata address `169.254.169.254`). It exists for cloud metadata and
-platform endpoints that sit **outside** link-local, which the built-in classifier cannot
-know about because those addresses can be ordinary business addresses in another network.
+The Gateway checks each destination against its built-in policies. Loopback
+(`127.0.0.0/8`, `::1`) follows the caller's loopback policy. Standard outbound
+clients and backends reject link-local addresses (`169.254.0.0/16`,
+`fe80::/10`), including the common metadata address `169.254.169.254`.
+
+| Destination | Built-in policy |
+|---|---|
+| Shared IPv4 space (`100.64.0.0/10`) | Follows private-address blocking. Services may use these addresses as Pod backends. |
+| Nonzero addresses in `0.0.0.0/8`, multicast `224.0.0.0/4`, reserved `240.0.0.0/4` (including limited broadcast) | Rejected as non-dialable. The all-zero address retains the caller's unspecified-address policy. |
+| Well-known NAT64 prefix `64:ff9b::/96` and 6to4 prefix `2002::/16` | Require a globally reachable unicast IPv4 destination (NAT64) or tunnel endpoint (6to4). Eligible connections use the original IPv6 address. |
+
+Use `gateway.outbound_egress_blocked_cidrs` to reject additional destinations,
+such as vendor metadata addresses outside link-local space.
 
 ```yaml
 gateway:
@@ -229,10 +237,10 @@ gateway:
   the endpoints above. Remove an entry only when that address is a legitimate destination
   in your network; vendors whose metadata service uses `169.254.169.254` or another
   link-local address are already covered by the built-in block.
-- **Additive only**: the list can add blocks but never unblocks a built-in range. Loopback
-  and link-local addresses keep their built-in handling even when an entry also covers them.
-  A listed address is rejected regardless of `outbound_egress_block_private`,
-  `target.blockPrivate` and `allowLoopbackUpstream`.
+- **Precedence**: native and IPv4-mapped loopback and link-local addresses keep the caller's
+  existing rules even when a CIDR covers them. For example, listing `127.0.0.0/8` preserves
+  the backend's `allowLoopbackUpstream` exception. For every other address class, a matching
+  CIDR rejects the destination regardless of the private-address or loopback settings.
 - **Scope**: the list applies to HTTP/gRPC and L4 backends, RequestMirror, DirectEndpoint,
   AllEndpointStatus, active health probes, and guarded outbound clients including webhooks,
   ForwardAuth, OIDC, AI providers, DSL HTTP calls, Wasm callouts and downloads, GeoIP and
@@ -241,14 +249,15 @@ gateway:
   Kafka broker connections use the SDK's dialer. Elasticsearch LinkSys uses its own
   client configuration. Use network-level egress controls for those two connectors.
 - **Format**: each entry uses `address/prefix` notation (a bare address is rejected); an
-  IPv4-mapped IPv6 destination matches the IPv4 entry. An invalid entry fails startup.
+  IPv4-mapped IPv6 destination matches the IPv4 entry. For well-known NAT64 and 6to4,
+  an entry can match either the original IPv6 address or the embedded IPv4 address. An invalid entry fails startup.
   Changes require a Gateway restart; there is no environment variable or CLI flag.
 - **Observability**: HTTP backend address admission can record the access-log diagnostic
-  `BackendAddrBlockedCidrNotAllowed`. L4 routes use their existing unsafe-upstream
+  `BackendAddrBlockedCidrNotAllowed` for a list match or `BackendAddrNonDialable` for a built-in non-dialable destination. L4 routes use their existing unsafe-upstream
   status. DNS answers discarded before endpoint selection do not produce a request
   diagnostic. The observed egress resolver increments
   `edgion_outbound_egress_blocked_total{reason="blocked_cidr"}` for each matching
-  address it drops. A managed outbound URL rejected by its IP-literal backend check
+  address it drops, and uses `reason="non_dialable"` for a built-in non-dialable rejection. A managed outbound URL rejected by its IP-literal backend check
   does not increment that counter.
 
 This is defense in depth. A Kubernetes `NetworkPolicy` (or host firewall) egress deny for

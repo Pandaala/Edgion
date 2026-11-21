@@ -8,7 +8,7 @@ knowledge_type: regression-guards
 
 ## Recorded conclusion
 
-Renamed DSL `is_private_ip_host` → `is_ssrf_blocked_ip_literal` (+ tightened doc-comment naming RFC 1918 / 4193 / 6874 anchors): the old name read as a generic classifier and hid the load-bearing SSRF-block intent at the single `http.call` caller (`builtins.rs:866`, gated by `runtime.block_private_ips`). `ip_literal` keeps the "hostnames are not resolved" limitation in the name. Private free fn, never exported — no wire/behavior change. Skills docs `dsl-engine-security-model.md` §7 + `03-coding/dsl/http-call.md` updated
+Renamed DSL `is_private_ip_host` → `is_ssrf_blocked_ip_literal` (+ tightened doc-comment naming RFC 1918 / 4193 / 6874 anchors): the old name read as a generic classifier and hid the load-bearing SSRF-block intent at the original `http.call` caller (then gated by `runtime.block_private_ips`). The current literal and redirect checks run in both modes. `ip_literal` keeps the "hostnames are not resolved" limitation in the name. Private free fn, never exported — no wire/behavior change. Skills docs `dsl-engine-security-model.md` §7 + `03-coding/dsl/http-call.md` updated
 
 ## Evidence boundary
 

@@ -30,6 +30,10 @@ spec:
             domain: "203.0.113.200"
             port: 30001
             tls: false
+          "reserved":
+            domain: "240.0.0.1"
+            port: 30001
+            tls: false
           "blocked-dns":
             domain: deu-blocked.invalid
             port: 30001

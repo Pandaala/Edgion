@@ -1,21 +1,20 @@
 use super::EdgionHttpProxy;
 use crate::ai::http::attempt;
-use crate::backends::peer_builder::{apply_backend_app_protocol, extract_tls_config};
+use crate::backends::peer_builder::{apply_backend_app_protocol, extract_tls_config, validate_backend_addr};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
 use crate::backends::runtime::{CompiledBackendTarget, CompiledServiceTarget};
 use crate::backends::ServiceBackendKind;
-use crate::backends::{get_peer, try_get_peer};
+use crate::backends::{get_peer, try_get_peer, unsafe_upstream_reason};
 use crate::backends::{SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
 use crate::ctx::BackendSource;
 use crate::observe::metrics::record_authority_rejected;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
 use crate::routes::http::routes_mgr::RouteRules;
 use crate::routes::http::session_persistence;
-use crate::util::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
+use crate::util::net::resolve_domain;
 use crate::{end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback};
 use crate::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
 use edgion_resources::err::EdError;
@@ -805,6 +804,7 @@ async fn get_peer_with_sp_fallback(
             status @ (EdgionErrorCode::BackendLocalhostNotAllowed
             | EdgionErrorCode::BackendAddrLinkLocalNotAllowed
             | EdgionErrorCode::BackendAddrBlockedCidrNotAllowed
+            | EdgionErrorCode::BackendAddrNonDialable
             | EdgionErrorCode::BackendDnsResolutionFailed),
         ) => {
             ctx.record_error(status);
@@ -1538,27 +1538,12 @@ fn first_safe_resolved_addr(
 ) -> Result<std::net::SocketAddr, Option<(std::net::SocketAddr, EdgionErrorCode)>> {
     let mut rejected = None;
     for addr in addrs {
-        match validate_resolved_domain_addr(addr, allow_loopback_upstream) {
+        match validate_backend_addr(&PingoraSocketAddr::Inet(*addr), allow_loopback_upstream) {
             Ok(()) => return Ok(*addr),
             Err(status) => rejected = Some((*addr, status)),
         }
     }
     Err(rejected)
-}
-
-fn validate_resolved_domain_addr(
-    addr: &std::net::SocketAddr,
-    allow_loopback_upstream: bool,
-) -> Result<(), EdgionErrorCode> {
-    match classify_backend_addr(&PingoraSocketAddr::Inet(*addr)) {
-        None => {}
-        Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => {}
-        Some(BlockedBackendReason::Localhost) => return Err(EdgionErrorCode::BackendLocalhostNotAllowed),
-        Some(BlockedBackendReason::LinkLocal) => return Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
-        Some(BlockedBackendReason::BlockedCidr) => return Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
-    }
-
-    Ok(())
 }
 
 fn record_unsafe_resolved_upstream_attempt(
@@ -1568,13 +1553,7 @@ fn record_unsafe_resolved_upstream_attempt(
 ) {
     ctx.push_upstream(Some(addr.ip().to_string()), Some(addr.port()));
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let reason = match status {
-            EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
-            EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
-            EdgionErrorCode::BackendAddrBlockedCidrNotAllowed => "unsafe blocked-cidr upstream",
-            _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
-        };
-        upstream.err.push(reason.into());
+        upstream.err.push(unsafe_upstream_reason(status).into());
     }
 }
 

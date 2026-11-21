@@ -435,11 +435,13 @@ fn is_external_name(service_key: &str) -> bool {
         })
 }
 
-/// Every probe honors operator CIDRs. DNS endpoints also require the built-in
+/// Every probe honors unconditional blocks. DNS endpoints also require the built-in
 /// endpoint checks because their addresses bypass API server validation.
 fn refuses_probe_endpoint(addr: std::net::SocketAddr, dns_derived: bool) -> bool {
     if !dns_derived {
-        return crate::util::net::classify_ip(addr.ip()) == crate::util::net::IpClass::BlockedCidr;
+        return crate::util::net::classify_ip(addr.ip())
+            .always_blocked_reason()
+            .is_some();
     }
     crate::backends::peer_builder::validate_endpoint_backend_addr(
         &pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),

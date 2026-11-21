@@ -13,6 +13,7 @@ guarded DSL clients use the canonical `EgressResolver`. Direct IP literals still
 `is_ssrf_blocked_ip_literal` as an early check, while hostnames are classified after
 resolution against the exact addresses reqwest receives for dialing.
 
+For current DNS policy and cache selection, see the [per-hop checks](../regression-guards/dsl-http-call-redirect-per-hop.md#hostname-enforcement).
 The resolver closes the former DNS-rebinding window without a separate preflight lookup:
 reqwest dials the resolver's checked addresses rather than resolving the hostname again.
 Redirected `Str` and `Nil` requests receive the same per-connection check; opaque `Body`

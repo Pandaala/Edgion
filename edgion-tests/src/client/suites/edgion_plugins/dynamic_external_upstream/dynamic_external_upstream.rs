@@ -645,6 +645,18 @@ impl TestSuite for DynamicExternalUpstreamTestSuite {
             Self::reject_matched_localhost_rejected(),
             Self::reject_matched_blocked_cidr_rejected(),
             Self::reject_matched_blocked_cidr_dns_answer(),
+            TestCase::new(
+                "reject_non_dialable_backend",
+                "Reject a reserved backend literal with the request diagnostic",
+                |ctx| {
+                    Box::pin(probe_address_rejection(
+                        ctx,
+                        REJECT_HOST,
+                        "reserved",
+                        "BackendAddrNonDialable",
+                    ))
+                },
+            ),
             // Regex extraction
             Self::regex_match_extracted(),
             Self::regex_no_match_fallback(),

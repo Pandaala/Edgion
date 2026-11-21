@@ -1854,10 +1854,15 @@ fn controller_dns_slices_feed_only_controller_mode_external_names() {
         "default",
         "backend",
         &ports,
-        &["203.0.113.7".parse().unwrap(), BLOCKED_CIDR_TEST_IP.parse().unwrap()],
+        &["203.0.113.7", BLOCKED_CIDR_TEST_IP, "224.0.0.1"].map(|ip| ip.parse().unwrap()),
         edgion_common::dns::endpoint_slices::DnsSliceOrigin::Controller,
     )
     .remove(0);
+    assert_eq!(
+        controller_slice.endpoints.len(),
+        3,
+        "all candidates must reach conf_sync"
+    );
     let mut ordinary = (*owned_slice("conf-sync", "conf-sync", "backend", "10.9.9.9")).clone();
     ordinary.ports = Some(slice_ports(&[("http", 80)]));
     coordinator.replace_endpoint_slices(&HashMap::from([

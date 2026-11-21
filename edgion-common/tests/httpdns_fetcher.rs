@@ -115,27 +115,30 @@ async fn explicit_loopback_allows_hostname_and_revocation_blocks_new_generation(
 }
 
 #[tokio::test]
-async fn loopback_override_never_allows_metadata_or_unspecified_literals() {
+async fn loopback_override_never_allows_metadata_unspecified_or_non_dialable_literals() {
     for allow_loopback in [false, true] {
         let connection = HttpDnsConnection {
             allow_loopback,
             ..local_connection()
         };
         let fetcher = new_fetcher(Some(&connection)).unwrap();
-        for host in [
-            "169.254.169.254",
-            "[fe80::1]",
-            "[::ffff:169.254.169.254]",
-            "0.0.0.0",
-            "[::]",
-            "[::ffff:0.0.0.0]",
+        for (host, reason) in [
+            ("169.254.169.254", "link-local or unspecified"),
+            ("[fe80::1]", "link-local or unspecified"),
+            ("[::ffff:169.254.169.254]", "link-local or unspecified"),
+            ("0.0.0.0", "link-local or unspecified"),
+            ("[::]", "link-local or unspecified"),
+            ("[::ffff:0.0.0.0]", "link-local or unspecified"),
+            ("224.0.0.1", "non-dialable address"),
+            ("[64:ff9b::c000:201]", "non-dialable address"),
+            ("[2002:c000:201::1]", "non-dialable address"),
         ] {
             let error = fetcher
                 .get(&format!("http://{host}/d?secret=hidden"))
                 .await
                 .unwrap_err();
             assert!(
-                matches!(&error, DnsError::Http(message) if message == "HTTP DNS endpoint blocked: link-local or unspecified"),
+                matches!(&error, DnsError::Http(message) if message == &format!("HTTP DNS endpoint blocked: {reason}")),
                 "{host}: {error:?}"
             );
         }

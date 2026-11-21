@@ -113,6 +113,7 @@ fn diagnostic_codes_serialize_as_stable_strings() {
             EdgionErrorCode::BackendAddrBlockedCidrNotAllowed,
             "BackendAddrBlockedCidrNotAllowed",
         ),
+        (EdgionErrorCode::BackendAddrNonDialable, "BackendAddrNonDialable"),
         (
             EdgionErrorCode::BackendDnsResolutionFailed,
             "BackendDnsResolutionFailed",

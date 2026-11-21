@@ -51,6 +51,22 @@ fn normalize_drops_unspecified_addresses() {
 }
 
 #[test]
+fn normalize_drops_non_dialable_and_preserves_global_transition_addresses() {
+    let normalized = normalize_addrs([
+        ip("64:ff9b::808:808"),
+        ip("2002:808:808::1"),
+        ip("100.64.0.1"),
+        ip("224.0.0.1"),
+        ip("64:ff9b::a9fe:1"),
+        ip("2002:7f00:1::1"),
+    ]);
+    assert_eq!(
+        normalized,
+        vec![ip("100.64.0.1"), ip("64:ff9b::808:808"), ip("2002:808:808::1")]
+    );
+}
+
+#[test]
 fn normalize_is_independent_of_answer_order() {
     let a = normalize_addrs([ip("1.1.1.3"), ip("1.1.1.1"), ip("1.1.1.2")]);
     let b = normalize_addrs([ip("1.1.1.2"), ip("1.1.1.3"), ip("1.1.1.1")]);

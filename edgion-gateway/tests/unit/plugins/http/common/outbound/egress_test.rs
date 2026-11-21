@@ -67,13 +67,13 @@ fn configure_egress_defaults_updates_accessors() {
 }
 
 #[tokio::test]
-async fn request_resolver_with_only_configured_cidrs_filters_mixed_answers() {
+async fn relaxed_request_resolver_filters_configured_and_non_dialable_answers() {
     use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
     use edgion_common::dns::{DnsAnswer, DnsCachePolicy, DnsQueryPolicy};
     install();
     let host = "dsl-cidr-policy.invalid";
     let ttl = Duration::from_secs(60);
-    let addrs = [BLOCKED_CIDR_TEST_IP, "10.0.0.1", "127.0.0.1"].map(|ip| ip.parse().unwrap());
+    let addrs = [BLOCKED_CIDR_TEST_IP, "224.0.0.1", "10.0.0.1", "127.0.0.1"].map(|ip| ip.parse().unwrap());
     request_egress_answer_cache()
         .lookup_with(
             &ResolverSpec::System,
@@ -85,7 +85,7 @@ async fn request_resolver_with_only_configured_cidrs_filters_mixed_answers() {
         .await
         .unwrap();
     let resolver =
-        EgressResolver::new_request_influenced(ResolverSpec::System, ResolverAddressPolicy::ConfiguredCidrsOnly, ttl);
+        EgressResolver::new_request_influenced(ResolverSpec::System, ResolverAddressPolicy::AllowPrivateAndLocal, ttl);
     assert_eq!(
         resolver.resolve_socket_addrs(host, 80).await.unwrap(),
         [

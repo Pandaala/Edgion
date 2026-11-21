@@ -309,6 +309,7 @@ fn configured_cidr_refuses_probes_for_every_endpoint_source() {
     let addr = std::net::SocketAddr::new(BLOCKED_CIDR_TEST_IP.parse().unwrap(), 80);
     for dns_derived in [false, true] {
         assert!(refuses_probe_endpoint(addr, dns_derived));
+        assert!(refuses_probe_endpoint("240.0.0.1:80".parse().unwrap(), dns_derived));
         assert!(!refuses_probe_endpoint("10.0.0.1:80".parse().unwrap(), dns_derived));
     }
 }

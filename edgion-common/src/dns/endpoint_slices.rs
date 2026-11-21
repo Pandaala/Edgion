@@ -47,13 +47,13 @@ impl DnsSliceOrigin {
 }
 
 /// Canonical form of a resolved address set: IPv4-mapped IPv6 folded to IPv4,
-/// link-local and unspecified addresses dropped, duplicates removed, IPv4
+/// unsafe addresses dropped, duplicates removed, IPv4
 /// ascending then IPv6 ascending.
 ///
 /// The fixed order is what makes "the answer did not change" a plain equality
 /// check, independent of the resolver's (often rotating) answer order.
 /// Link-local answers (169.254.0.0/16, fe80::/10, e.g. cloud metadata),
-/// answers in the process-wide operator blocked CIDR list (installed only by
+/// non-dialable answers, answers in the process-wide operator blocked CIDR list (installed only by
 /// the Gateway) and unspecified ones (0.0.0.0, ::, which a connect turns into
 /// the local host) are never valid backend endpoints: dropping them before
 /// publication keeps load balancing and active health probes away from them.
@@ -64,7 +64,10 @@ pub fn normalize_addrs(addrs: impl IntoIterator<Item = IpAddr>) -> Vec<IpAddr> {
     let mut out: Vec<IpAddr> = addrs
         .into_iter()
         .map(|ip| ip.to_canonical())
-        .filter(|ip| !ip.is_unspecified() && !matches!(classify_ip(*ip), IpClass::LinkLocal | IpClass::BlockedCidr))
+        .filter(|ip| {
+            let class = classify_ip(*ip);
+            !matches!(class, IpClass::LinkLocal | IpClass::Unspecified) && class.always_blocked_reason().is_none()
+        })
         .collect();
     out.sort_unstable_by_key(|ip| (ip.is_ipv6(), *ip));
     out.dedup();

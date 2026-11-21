@@ -189,6 +189,9 @@ pub enum EdgionErrorCode {
     /// (`outbound_egress_blocked_cidrs`, e.g. vendor cloud metadata endpoints)
     BackendAddrBlockedCidrNotAllowed,
 
+    /// Backend address is unsuitable as a unicast dial destination.
+    BackendAddrNonDialable,
+
     /// DNS resolution failed for ExternalName service hostname
     BackendDnsResolutionFailed,
 
@@ -445,6 +448,7 @@ impl EdgionErrorCode {
             Self::RefDenied => "RefDenied",
             Self::BackendAddrLinkLocalNotAllowed => "BackendAddrLinkLocalNotAllowed",
             Self::BackendAddrBlockedCidrNotAllowed => "BackendAddrBlockedCidrNotAllowed",
+            Self::BackendAddrNonDialable => "BackendAddrNonDialable",
             Self::BackendDnsResolutionFailed => "BackendDnsResolutionFailed",
             Self::BackendUnsupportedKind => "BackendUnsupportedKind",
             Self::StickyBackendUnhealthy => "StickyBackendUnhealthy",

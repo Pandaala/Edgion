@@ -74,6 +74,11 @@ fn observe_block(reason: EgressBlockReason) {
     record_egress_blocked(reason.as_str());
 }
 
+/// Preserve OS interface selection for clients that permit link-local targets.
+pub(crate) fn uncached_local_system_resolver() -> impl Resolve {
+    edgion_common::egress::UncachedLocalSystemResolver::new(Some(observe_block))
+}
+
 /// Gateway resolver wrapper that attaches the canonical Gateway metric hook.
 #[derive(Clone)]
 pub struct EgressResolver {

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::outbound::egress::{
-    egress_dns_cache_ttl, EgressPolicy, EgressResolver, ResolverAddressPolicy,
+    egress_dns_cache_ttl, uncached_local_system_resolver, EgressPolicy, EgressResolver, ResolverAddressPolicy,
 };
 
 /// Per-plugin external-call policy, built once by `resolve_parts` for each config generation.
@@ -115,40 +115,39 @@ static DSL_HTTP_CLIENT_GUARDED: OnceLock<reqwest::Client> = OnceLock::new();
 static DSL_HTTP_CLIENT_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 static DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// DSL destinations come from scripts fed by request data and from upstream
-/// redirects, so they use the request-influenced answer cache.
+/// Relaxed clients without operator CIDRs retain uncached system answers,
+/// including IPv6 scope IDs. The other policies use the request-only cache.
 fn dsl_egress_resolver(block_private_ips: bool) -> Arc<dyn reqwest::dns::Resolve> {
+    if !block_private_ips && !edgion_common::egress::has_blocked_cidrs() {
+        return Arc::new(uncached_local_system_resolver());
+    }
     Arc::new(EgressResolver::new_request_influenced(
         ResolverSpec::System,
         if block_private_ips {
             ResolverAddressPolicy::Standard(EgressPolicy { block_private: true })
         } else {
-            ResolverAddressPolicy::ConfiguredCidrsOnly
+            ResolverAddressPolicy::AllowPrivateAndLocal
         },
         egress_dns_cache_ttl(),
     ))
 }
 
 fn dsl_http_client_config(block_private_ips: bool, follow_redirects: bool) -> OutboundClientConfig {
-    let guarded = block_private_ips || edgion_common::egress::has_blocked_cidrs();
-    let redirect = match (guarded, follow_redirects) {
-        (_, false) => OutboundRedirect::Deny,
-        (false, true) => OutboundRedirect::Limit(DSL_MAX_REDIRECTS),
-        (true, true) => {
-            let policy = reqwest::redirect::Policy::custom(move |attempt| {
-                if block_private_ips && attempt.previous().len() >= DSL_MAX_REDIRECTS {
-                    return attempt.stop();
-                }
-                let raw = attempt.url().host_str().unwrap_or("");
-                // url crate serializes IPv6 hosts with brackets (e.g. "[::1]").
-                let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-                if super::lang::builtins::is_ssrf_blocked_ip_literal(host, block_private_ips) {
-                    return attempt.error("redirect destination blocked by egress policy");
-                }
-                reqwest::redirect::Policy::limited(DSL_MAX_REDIRECTS).redirect(attempt)
-            });
-            OutboundRedirect::Custom(policy)
-        }
+    let redirect = if follow_redirects {
+        OutboundRedirect::Custom(reqwest::redirect::Policy::custom(move |attempt| {
+            if block_private_ips && attempt.previous().len() >= DSL_MAX_REDIRECTS {
+                return attempt.stop();
+            }
+            let raw = attempt.url().host_str().unwrap_or("");
+            // url crate serializes IPv6 hosts with brackets (e.g. "[::1]").
+            let host = raw.trim_matches(|c: char| c == '[' || c == ']');
+            if super::lang::builtins::is_ssrf_blocked_ip_literal(host, block_private_ips) {
+                return attempt.error("redirect destination blocked by egress policy");
+            }
+            reqwest::redirect::Policy::limited(DSL_MAX_REDIRECTS).redirect(attempt)
+        }))
+    } else {
+        OutboundRedirect::Deny
     };
 
     OutboundClientConfig {
@@ -156,7 +155,7 @@ fn dsl_http_client_config(block_private_ips: bool, follow_redirects: bool) -> Ou
         // Do not allow Pod-injected proxy environment variables to reroute DSL egress.
         disable_proxy: true,
         redirect,
-        dns_resolver: guarded.then(|| dsl_egress_resolver(block_private_ips)),
+        dns_resolver: Some(dsl_egress_resolver(block_private_ips)),
         ..Default::default()
     }
 }
@@ -165,8 +164,8 @@ fn dsl_http_client_config(block_private_ips: bool, follow_redirects: bool) -> Ou
 ///
 /// Selection is keyed by the per-plugin private-address policy and whether the
 /// payload is replayable. Opaque Body requests never follow redirects; String
-/// and Nil requests retain the existing ten-hop policy. Guarded clients also
-/// classify resolved addresses at dial time.
+/// and Nil requests retain the existing ten-hop policy. Every client classifies
+/// resolved addresses at dial time.
 ///
 /// All four clients are process-global so connection pools are reused.
 pub(crate) fn dsl_http_client(block_private_ips: bool, follow_redirects: bool) -> &'static reqwest::Client {

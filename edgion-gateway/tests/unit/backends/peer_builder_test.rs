@@ -436,3 +436,24 @@ fn operator_blocked_cidr_has_its_own_status_and_ignores_loopback_exceptions() {
     let picked = first_safe_inet_addr(&[blocked, ip("93.184.216.34")], 443, false).unwrap();
     assert!(matches!(picked, SocketAddr::Inet(a) if a.ip() == ip("93.184.216.34")));
 }
+
+#[test]
+fn non_dialable_backends_preserve_their_reason_and_cluster_ranges_stay_selectable() {
+    for allow_loopback in [true, false] {
+        for rejected in ["224.0.0.1", "64:ff9b::a00:1", "2002:7f00:1::1"] {
+            let addr = SocketAddr::Inet(std::net::SocketAddr::new(ip(rejected), 80));
+            assert_eq!(
+                validate_endpoint_backend_addr(&addr, allow_loopback),
+                Err(EdgionErrorCode::BackendAddrNonDialable)
+            );
+            assert_eq!(
+                first_safe_inet_addr(&[ip(rejected)], 80, allow_loopback),
+                Err(EdgionErrorCode::BackendAddrNonDialable)
+            );
+        }
+        for allowed in ["100.64.0.1", "64:ff9b::808:808"] {
+            let picked = first_safe_inet_addr(&[ip("240.0.0.1"), ip(allowed)], 80, allow_loopback).unwrap();
+            assert!(matches!(picked, SocketAddr::Inet(a) if a.ip() == ip(allowed)));
+        }
+    }
+}

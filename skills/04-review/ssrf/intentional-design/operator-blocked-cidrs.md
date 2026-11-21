@@ -26,7 +26,8 @@ Current mechanism (`edgion-common/src/egress.rs`):
 - `classify_ip` consults the installed list through `classify_ip_with`. Loopback
   and link-local keep their built-in classes, so their reasons and exceptions
   (`allowLoopbackUpstream`, integration-testing loopback) never change; any other
-  covered address, IPv4-mapped forms included, becomes `IpClass::BlockedCidr`.
+  covered address, including either the well-known NAT64 or 6to4 address or its
+  embedded IPv4, becomes `IpClass::BlockedCidr`.
 - `IpClass::BlockedCidr` is rejected under every policy: `egress_block_reason`
   (reason `blocked_cidr`, independent of `block_private` / `allow_loopback`),
   `classify_backend_addr` (`BlockedBackendReason::BlockedCidr` →
@@ -80,13 +81,11 @@ that the address be hard-coded into `classify_builtin` contradicts this decision
   filters controller-origin DNS slices while constructing selectable endpoints.
 - Kafka broker dials and Elasticsearch LinkSys do not use this classifier.
   L4 routes retain their protocol-specific unsafe-address statuses.
-- Hot path: one `OnceLock::get` plus, when installed, one radix lookup per
-  classification; no parsing or lock on the request path.
+- The request path reads the installed matcher and queries the original address.
+  Well-known NAT64 and 6to4 candidates can also require an embedded IPv4 lookup.
 - Limit: the IP-literal `dial_url` path rejects listed addresses through
   `validate_endpoint_backend_addr`, which records no egress metric (same as
   loopback / link-local on that path).
-- Not covered here: NAT64 / 6to4 embedded IPv4, CGNAT and reserved ranges are a
-  separate deferred task (see below); operators can list them meanwhile.
 
 ## Verification and re-evaluation
 
@@ -108,12 +107,11 @@ Verified 2026-11-12 on branch `feature-10-28`:
   HTTP DNS resolver to map `deu-blocked.invalid` to the same IP and requires the
   same trace-correlated denial.
 
-Re-evaluate if a vendor changes or adds a metadata endpoint, if the classifier
-gains built-in CGNAT / NAT64 / reserved handling, if the list becomes hot-reloadable
+Re-evaluate if a vendor changes or adds a metadata endpoint, if an additional transition prefix becomes supported, if the list becomes hot-reloadable
 or Controller-side, or if a new egress path bypasses `classify_ip`.
 
 ## Resolution references
 
 - `common-01` — egress classifier misses well-known cloud metadata addresses;
-  promoted 2026-11-06, implemented 2026-11-12. Remaining ranges:
-  [`tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md`](../../../../tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md).
+  promoted 2026-11-06, implemented 2026-11-12. The shared range rules from item 5
+  are documented in [Built-in address policy](../mandatory-design/upstream-address-safety.md#built-in-address-policy-common-01).

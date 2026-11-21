@@ -2217,7 +2217,7 @@ impl Vm {
 }
 
 /// Check literal destinations before sending or following a redirect.
-/// Configured CIDRs always apply. The strict mode also blocks loopback,
+/// Configured CIDRs and non-dialable destinations always apply. The strict mode also blocks loopback,
 /// link-local, private, unique-local and unspecified addresses.
 /// Hostnames are not resolved by this helper. Guarded clients use the shared
 /// `EgressResolver` to classify their resolved addresses at dial time.
@@ -2237,7 +2237,7 @@ pub(crate) fn is_ssrf_blocked_ip_literal(host: &str, block_private_ips: bool) ->
         IpClass::Loopback | IpClass::LinkLocal | IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified => {
             block_private_ips
         }
-        IpClass::BlockedCidr => true,
+        IpClass::BlockedCidr | IpClass::NonDialable => true,
         IpClass::Global => false,
     }
 }

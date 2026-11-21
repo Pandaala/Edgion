@@ -145,7 +145,15 @@ fn remote_target_policy_covers_origins_and_ip_classes() {
         guard_remote_target(&Url::parse("http://0.0.0.0/token").unwrap(), &registry, permissive),
         Err(RemoteTargetError::Blocked("unspecified"))
     );
-    for target in ["http://10.0.0.1/token", "http://[fd00::1]/token"] {
+    assert_eq!(
+        guard_remote_target(&Url::parse("http://224.0.0.1/token").unwrap(), &registry, permissive),
+        Err(RemoteTargetError::Blocked("non_dialable"))
+    );
+    for target in [
+        "http://10.0.0.1/token",
+        "http://100.64.0.1/token",
+        "http://[fd00::1]/token",
+    ] {
         let target = Url::parse(target).unwrap();
         assert_eq!(guard_remote_target(&target, &registry, permissive), Ok(()));
         assert_eq!(

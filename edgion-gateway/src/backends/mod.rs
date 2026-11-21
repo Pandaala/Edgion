@@ -841,17 +841,22 @@ fn build_peer_from_lb_selection(
     Ok(peer)
 }
 
+pub(crate) fn unsafe_upstream_reason(status: EdgionErrorCode) -> &'static str {
+    match status {
+        EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
+        EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+        EdgionErrorCode::BackendAddrBlockedCidrNotAllowed => "unsafe blocked-cidr upstream",
+        EdgionErrorCode::BackendAddrNonDialable => "non-dialable upstream",
+        _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
+    }
+}
+
 fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr, status: EdgionErrorCode) {
     let (ip, port) = addr
         .as_inet()
         .map(|addr| (Some(addr.ip().to_string()), Some(addr.port())))
         .unwrap_or((None, None));
-    let reason = match status {
-        EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
-        EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
-        EdgionErrorCode::BackendAddrBlockedCidrNotAllowed => "unsafe blocked-cidr upstream",
-        _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
-    };
+    let reason = unsafe_upstream_reason(status);
     // Backfill the placeholder pushed by `begin_upstream_attempt`. Fall back to
     // pushing a fresh entry if no placeholder exists (defensive — should not happen
     // on the normal `try_get_peer` path).

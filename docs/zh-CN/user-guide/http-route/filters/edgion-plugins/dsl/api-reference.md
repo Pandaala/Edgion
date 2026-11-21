@@ -1609,8 +1609,9 @@ if values["id"] != nil {
 
 **限制**：
 - 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）会抛出错误。
-- 无论是否启用私网拦截，Gateway 的 `outbound_egress_blocked_cidrs` 都作用于 IP 字面量、DNS 解析结果和重定向目标。
-- 当 `httpBlockPrivateIps: true` 时，会拦截回环、私有、链路本地和未指定地址。直接 IP 字面量在发送前检查；域名会在 DNS 解析后，对实际用于连接的地址执行检查，重定向跳转也采用相同规则。仍建议用网络层出站控制作为纵深防御。
+- 当 `httpBlockPrivateIps: false` 且 Gateway 封禁列表为空时，域名查询绕过 Edgion DNS 缓存，保留操作系统返回的 IPv6 地址接口作用域。开启私网拦截或 Gateway 封禁列表非空时，DSL 使用专用 DNS 应答缓存。缓存中的 IP 地址不携带接口作用域。
+- 无论是否启用私网拦截，IP 字面量、DNS 解析结果和重定向目标均拒绝不可拨号地址和 Gateway `outbound_egress_blocked_cidrs` 中的地址。见[出站地址规则](../../../../../ops-guide/configuration/gateway-config.md#出站封禁-cidr)。
+- 当 `httpBlockPrivateIps: true` 时，会拦截回环、私有（含 `100.64.0.0/10`）、链路本地和未指定地址。直接 IP 字面量在发送前检查；域名会在 DNS 解析后，对实际用于连接的地址执行检查，重定向跳转也采用相同规则。仍建议用网络层出站控制作为纵深防御。
 - 只有第三个参数接受不透明 `Body`，通常写作 `req.body`。运行时在调用开始时取得不可变逻辑快照，从内存、溢写文件和修改分段中拉取流式发送原始字节，不会先完整物化请求体。
 - 不透明 `Body` 大小上限为 `min(httpMaxRequestBodyBytes, 网关物理请求 body 上限)`。配置默认 1 MiB，可显式提高到最多 32 MiB。从快照实际拉取的字节计入累计 `maxBodyScanPasses` 预算。
 - 不透明 `Body` 调用的调用方 Header 不得包含 `Content-Length` 或 `Transfer-Encoding`，由运行时唯一控制请求分帧。空的不透明 `Body` 发送 `Content-Length: 0`；`nil` 不附加请求体。

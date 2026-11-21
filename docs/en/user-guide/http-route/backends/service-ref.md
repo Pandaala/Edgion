@@ -116,7 +116,7 @@ If the resolver fails, the last good addresses are kept for up to 5 minutes; a
 name that no longer exists (authoritative empty answer) is withdrawn at once. The
 operating-system resolver cannot tell a missing name from an outage, so with it a
 removed name is kept for those 5 minutes too. Link-local and unspecified answers
-such as `169.254.169.254` or `0.0.0.0`, and answers in the Gateway's
+such as `169.254.169.254` or `0.0.0.0`, non-dialable addresses, and answers in the Gateway's
 [`outbound_egress_blocked_cidrs`](../../../ops-guide/configuration/gateway-config.md#outbound-egress-blocked-cidrs),
 are never used. The Gateway drops the
 endpoints of a deleted Service, or one whose hostname changed, immediately; a

@@ -195,10 +195,16 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 
 ### 出站封禁 CIDR
 
-`gateway.outbound_egress_blocked_cidrs` 在 Gateway 内置拦截之外，为后端和接入出站策略的客户端追加拒绝连接的目的地址段。内置拦截包括回环 `127.0.0.0/8` / `::1`（沿用现有的回环例外）和链路本地
-`169.254.0.0/16` / `fe80::/10`，后者已覆盖常见的云元数据地址 `169.254.169.254`。本字段针对的是
-位于链路本地**之外**的云元数据与平台端点：这些地址在别的网络里可能是正常业务地址，内置分类器
-无法替你判断。
+Gateway 使用内置策略检查目的地址。回环地址（`127.0.0.0/8`、`::1`）遵循调用方的回环策略。
+标准出站客户端和后端拒绝链路本地地址（`169.254.0.0/16`、`fe80::/10`），其中包括常见的云元数据地址 `169.254.169.254`。
+
+| 目标地址 | 内置策略 |
+|---|---|
+| IPv4 共享地址空间（`100.64.0.0/10`） | 跟随私网拦截策略。Service 可以使用此网段的 Pod 后端。 |
+| `0.0.0.0/8` 中的非零地址、组播 `224.0.0.0/4`、保留段 `240.0.0.0/4`（含受限广播地址） | 作为不可拨号地址拒绝。全零地址仍按调用方的未指定地址策略处理。 |
+| NAT64 知名前缀 `64:ff9b::/96` 和 6to4 前缀 `2002::/16` | NAT64 的 IPv4 目的地址和 6to4 的 IPv4 隧道端点均须为全球可达的单播地址。通过检查后仍使用原始 IPv6 地址建立连接。 |
+
+可使用 `gateway.outbound_egress_blocked_cidrs` 追加部署需要拒绝的目的地址，例如链路本地网段之外的厂商元数据地址。
 
 ```yaml
 gateway:
@@ -214,19 +220,19 @@ gateway:
   Kubernetes ConfigMap 以及 standalone 安装包）列出了上面的端点。只有当某个地址在你的网络中是
   合法目的地时才删除对应条目；元数据服务使用 `169.254.169.254` 或其他链路本地地址的厂商，
   已被内置拦截覆盖。
-- **只能追加**：该列表只能增加拦截，不能放开任何内置地址段。即使条目覆盖了回环或链路本地地址，
-  这两类地址仍按内置规则处理。列表中的地址无论 `outbound_egress_block_private`、
-  `target.blockPrivate`、`allowLoopbackUpstream` 如何设置都会被拒绝。
+- **优先级**：对原生或 IPv4-mapped 形式的回环和链路本地地址，即使 CIDR 覆盖了它们，仍使用调用方原有的规则。
+  例如，将 `127.0.0.0/8` 加入列表后，后端的 `allowLoopbackUpstream` 回环例外仍然生效。
+  其余类别的目标地址一旦命中列表，即使允许私网或回环也会被拒绝。
 - **生效范围**：HTTP/gRPC 和 L4 后端、RequestMirror、DirectEndpoint、AllEndpointStatus、主动健康探针，
   以及接入出站策略的客户端，包括 webhook、ForwardAuth、OIDC、AI 提供方、DSL HTTP 调用、Wasm 外呼和下载、
   GeoIP 更新及 HTTP DNS。Gateway 在负载均衡前过滤 DNS 派生的 Service 端点，包括 Controller 发布的 DNS 切片。
   Controller 不读取该配置。Kafka broker 使用 SDK 拨号，Elasticsearch LinkSys 使用独立的客户端配置；
   这两个连接器的目的地址限制需要通过网络层实施。
 - **格式**：每个条目必须使用 `地址/前缀长度` 形式（只写地址会被拒绝）；IPv4-mapped 的 IPv6 目的地址
-  会命中对应的 IPv4 条目。任一条目非法则启动失败。修改需重启 Gateway；没有对应的环境变量或 CLI 参数。
-- **可观测性**：HTTP 后端地址检查可在访问日志中记录 `BackendAddrBlockedCidrNotAllowed`。
+  会命中对应的 IPv4 条目。对于 NAT64 知名前缀和 6to4，原始 IPv6 地址或嵌入的 IPv4 地址均可命中列表。任一条目非法则启动失败。修改需重启 Gateway；没有对应的环境变量或 CLI 参数。
+- **可观测性**：HTTP 后端地址检查可在访问日志中记录列表命中的 `BackendAddrBlockedCidrNotAllowed` 或内置不可拨号地址的 `BackendAddrNonDialable`。
   L4 路由沿用原有的不安全上游状态。选址前过滤的 DNS 答案没有对应的请求诊断。
-  接入指标的出站解析器每过滤一个命中地址，就增加一次 `edgion_outbound_egress_blocked_total{reason="blocked_cidr"}`。
+  接入指标的出站解析器每过滤一个命中地址，就增加一次 `edgion_outbound_egress_blocked_total{reason="blocked_cidr"}`。内置不可拨号地址使用 `reason="non_dialable"`。
   托管出站 URL 的 IP 字面量被后端地址检查拒绝时，该计数器不会递增。
 
 这是纵深防御。针对这些地址的 Kubernetes `NetworkPolicy`（或主机防火墙）出站拒绝规则仍是主要控制手段。

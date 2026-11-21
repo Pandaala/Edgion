@@ -213,10 +213,10 @@ forward_auth / webhook, wasm guest callouts, ldap_auth dial-time LDAP
 connections, Redis seed/reconnect/Sentinel/Cluster dials, OTLP exporter/probe dials, and openid_connect IdP clients (default factory and SAN-pinning
 branches; IP-literal URLs are classified before send because reqwest skips
 custom DNS for literals). Upstream dialing goes through `classify_backend_addr`.
-DSL `http.call` is a documented design tradeoff (F-018): the default-off
-`httpBlockPrivateIps` path keeps an IP-literal-only pre-send check plus a
-per-hop redirect guard; when the flag is on, the guarded client also installs
-`EgressResolver`. See
+DSL `http.call` checks literals, DNS answers and replayable redirects in both modes.
+Private blocking or an installed CIDR list selects the request-influenced answer cache.
+Otherwise the system lookup filters socket addresses in place, retaining their IPv6
+interface scope. The original F-018 literal-only tradeoff was superseded. See
 [dsl-engine-security-model.md](../02-gateway/dsl-engine-security-model.md)
 and the decision rules under [skills/04-review/ssrf/](../../04-review/ssrf/)
 (7 files). Service-backendRef targets are defended by RBAC/NetworkPolicy,
@@ -248,7 +248,8 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   single-flight, stale-while-revalidate/stale-on-error, short negative
   entries). Instances: the shared egress cache behind `EgressResolver`s with
   operator-configured destinations, the Gateway request-influenced egress cache
-  for DSL `http.call` (`request_egress_answer_cache()`), and the Gateway
+  for DSL `http.call` with private blocking or a nonempty Gateway CIDR list
+  (`request_egress_answer_cache()`), and the Gateway
   upstream cache (`upstream_dns_cache()` in
   `edgion-gateway/src/backends/discovery/dns_cache.rs`) for AI and ExternalJump
   (RegionRoute, DynamicExternalUpstream) resolution and UDP `system`-mode
@@ -258,8 +259,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   through `ResolverSpec`; do not embed another resolver library or hand-roll
   lookups.
 - **Deliberate non-adopters** (OS/system resolver via their client library —
-  not gaps): DSL `http.call` (per the F-018 tradeoff above),
-  request_mirror, elasticsearch, health probes, the ext_proc tonic channel.
+  not gaps): request_mirror, elasticsearch, health probes, the ext_proc tonic channel.
   ldap_auth and openid_connect are no longer in this list: ldap_auth resolves
   through `EgressResolver` (`ResolverSpec::System`) and runs the `edgion-ldap`
   bind session over the admitted stream; openid_connect installs the same resolver on both IdP

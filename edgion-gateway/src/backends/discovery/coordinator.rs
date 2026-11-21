@@ -1764,8 +1764,8 @@ fn normalize_section(
                 if family.is_some_and(|family| family.is_ok_and(|family| !family.allows(ip))) {
                     continue;
                 }
-                // The Controller cannot apply this Gateway's local deny list.
-                if controller_dns && crate::util::net::classify_ip(ip) == crate::util::net::IpClass::BlockedCidr {
+                // Revalidate controller DNS results against this Gateway's unconditional blocks.
+                if controller_dns && crate::util::net::classify_ip(ip).always_blocked_reason().is_some() {
                     continue;
                 }
                 let socket = SocketAddr::new(ip, port.get());

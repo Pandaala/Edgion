@@ -30,6 +30,17 @@ fn dsl_policy_allows_public() {
     assert!(!is_ssrf_blocked_ip_literal("2001:db8::1"));
 }
 
+#[test]
+fn dsl_non_dialable_literals_are_rejected_in_both_modes() {
+    for strict in [false, true] {
+        for address in ["224.0.0.1", "64:ff9b::a00:1", "2002:7f00:1::1"] {
+            assert!(super::is_ssrf_blocked_ip_literal(address, strict), "{address}");
+        }
+        assert_eq!(super::is_ssrf_blocked_ip_literal("100.64.0.1", strict), strict);
+        assert!(!super::is_ssrf_blocked_ip_literal("64:ff9b::808:808", strict));
+    }
+}
+
 // str-wrapper behavior — DSL-specific, not covered by classify_ip.
 #[test]
 fn ipv6_zone_id_stripped() {

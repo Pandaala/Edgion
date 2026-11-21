@@ -335,13 +335,18 @@ configuration knob or become a fifth failure-policy shape.
 
 ## 8. SSRF guard — literal precheck plus dial-time resolution
 
+Both modes reject non-dialable targets and Gateway-configured blocked CIDRs.
+See the [shared address policy](../../04-review/ssrf/mandatory-design/upstream-address-safety.md#built-in-address-policy-common-01).
+
 When `httpBlockPrivateIps: true` is set on the plugin config, `http.call` rejects:
-- IPv4 loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), unspecified (0.0.0.0)
+- IPv4 loopback, private (10/8, 172.16/12, 192.168/16), shared (100.64/10), link-local (169.254/16), unspecified (0.0.0.0)
 - IPv6 loopback (`::1`), unique local (`fc00::/7`), link-local (`fe80::/10`), and `::ffff:`-mapped IPv4 forms of the above
 
-Direct IP literals are rejected before a connection is attempted. Hostnames are
-resolved through the canonical `EgressResolver`, which classifies the exact addresses
-returned to reqwest for dialing. reqwest does not independently re-resolve those names,
+Both modes precheck IP literals and check each resolved dial candidate. With private
+blocking off and an empty Gateway CIDR list, DSL filters the OS resolver's socket
+addresses directly, preserving the IPv6 scope ID supplied for a hostname. With private
+blocking enabled or a configured CIDR list, DSL uses its request-influenced answer
+cache, which stores IPs without scope IDs. reqwest does not independently re-resolve those names,
 so the check has no DNS-rebinding TOCTOU window. The DSL resolver uses metric-only
 rejection reporting because its destination is request-derived; emitting one WARN per
 blocked address would allow log amplification.

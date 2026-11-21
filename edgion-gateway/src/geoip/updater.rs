@@ -197,6 +197,7 @@ fn classify_literal_destination(url: &str) -> Result<(), String> {
         IpClass::Loopback => Some("loopback"),
         IpClass::LinkLocal => Some("link_local"),
         IpClass::BlockedCidr => Some("blocked_cidr"),
+        IpClass::NonDialable => Some("non_dialable"),
         IpClass::Unspecified => Some("unspecified"),
         IpClass::Private | IpClass::UniqueLocal if default_block_private() => Some("private"),
         IpClass::Private | IpClass::UniqueLocal | IpClass::Global => None,

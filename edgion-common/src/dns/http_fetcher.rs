@@ -117,6 +117,9 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
                 IpClass::BlockedCidr => {
                     return Err(DnsError::Http("HTTP DNS endpoint blocked: blocked CIDR".into()));
                 }
+                IpClass::NonDialable => {
+                    return Err(DnsError::Http("HTTP DNS endpoint blocked: non-dialable address".into()));
+                }
                 // Exhaustive on purpose: a new class must be a conscious
                 // decision here. HTTPDNS endpoints are operator-configured
                 // and may legitimately be private.

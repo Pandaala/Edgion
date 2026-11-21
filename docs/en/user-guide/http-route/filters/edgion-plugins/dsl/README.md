@@ -13,7 +13,7 @@ DSL is well-suited for scenarios such as pre-authorization checks, dynamic heade
 ## Features at a Glance
 
 - **Sandboxed execution**: Scripts cannot access the file system or environment variables; the runtime environment is fully controlled.
-- **Outbound HTTP calls**: Scripts can call external HTTP/HTTPS services via `http.call()`, including raw pull-streaming of the opaque `req.body`, with configurable request/response limits, timeouts, and optional SSRF protection (`httpBlockPrivateIps`).
+- **Outbound HTTP calls**: Scripts can call external HTTP/HTTPS services via `http.call()`, including raw pull-streaming of the opaque `req.body`, with configurable request/response limits and timeouts. Destination checks always apply. Enable `httpBlockPrivateIps` to restrict private and local addresses.
 - **Bytecode pre-compilation**: Supports both `source` (configuration-time compilation) and `bytecode` (pre-compiled Base64) loading modes. Bytecode mode skips compilation overhead.
 - **Configurable resource limits**: Independently limit execution steps, loop iterations, call depth, and string length.
 - **Storage-transparent request bodies**: Inspect or mutate an opaque `req.body` through bounded operations without materializing disk spills into one string.

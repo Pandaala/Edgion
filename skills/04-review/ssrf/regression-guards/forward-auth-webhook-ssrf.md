@@ -106,10 +106,9 @@ enforcement points implementing one policy.
 
 Policy (both enforcement points implement the same one):
 
-- Loopback and link-local (including cloud metadata `169.254.169.254`) are **always** rejected —
-  same as the Service-target guard.
-- `target.blockPrivate: true` (per-resource, opt-in) additionally rejects RFC1918 and unique-local
-  addresses. Default is `false` (private allowed), matching the Service-target stance in §1.1.
+- Production URL targets reject loopback, link-local, unspecified and non-dialable
+  addresses as well as configured blocked CIDRs. Private-address blocking additionally
+  rejects RFC1918, shared IPv4 space and IPv6 unique-local addresses.
 - The gateway-local default for `blockPrivate` when a resource omits it is
   `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE` (default `false`); an explicit
   `target.blockPrivate` on the resource always wins over that default.
@@ -119,15 +118,11 @@ Policy (both enforcement points implement the same one):
   its own policy on every use, so sharing an answer never shares an egress decision (common-02,
   [DNS answer cache identity and lifecycle](../../backends/regression-guards/dns-answer-cache-identity-and-lifecycle.md)).
 
-Rejections increment `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` —
-but only on the **hostname** path: `filter_addrs` in `egress.rs` records all three reasons via
-`EgressResolver`. On the **IP-literal** path, `dial_url` in `client.rs` records only `reason="private"`
-(the `blockPrivate` check); the loopback/link-local rejection there flows through
-`validate_endpoint_backend_addr` (`edgion-gateway/src/backends/peer_builder.rs`), the shared backend
-guard that predates this metric and never touches it. So the metric has full reason coverage for a
-hostname target but is blind to loopback/link-local rejections when `target.url` is an IP literal —
-"two enforcement points implement one policy" is true for the blocking behavior, not for its
-observability.
+The egress resolver counts each rejected DNS answer. For literals, the URL policy
+counts private and unspecified destinations. The earlier backend admission check
+rejects loopback, link-local, non-dialable addresses and configured CIDRs before
+the URL metric is emitted. See the [connector egress policy](../../../../docs/en/ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection)
+for the metric reasons and configuration.
 
 A test (`edgion-gateway/src/plugins/http/common/outbound/egress.rs` unit tests, plus the client-level
 literal tests) pins that the hostname path and the IP-literal path agree, since they are reached by

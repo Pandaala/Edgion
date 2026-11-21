@@ -510,6 +510,7 @@ fn guard_remote_target(target: &Url, registry_origin: &Origin, policy: EgressPol
         IpClass::Loopback => "loopback",
         IpClass::LinkLocal => "link_local",
         IpClass::BlockedCidr => "blocked_cidr",
+        IpClass::NonDialable => "non_dialable",
         IpClass::Unspecified => "unspecified",
         IpClass::Private | IpClass::UniqueLocal if policy.block_private => "private",
         IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return Ok(()),

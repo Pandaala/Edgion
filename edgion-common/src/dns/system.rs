@@ -1,8 +1,9 @@
-//! System resolver backend (OS/libc via tokio::net::lookup_host).
+//! System resolver backend (OS/libc on Tokio's blocking pool).
 
 use super::DnsQueryPolicy;
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
+use tokio_util::task::AbortOnDropHandle;
 
 /// Deadline for one OS resolver lookup. `getaddrinfo` has no caller deadline of
 /// its own (only `resolv.conf` timeouts multiplied by search-list expansion),
@@ -12,22 +13,29 @@ use std::time::Duration;
 /// successful lookup (Kubernetes `ndots` expansion) is not turned into a failure.
 const SYSTEM_RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Keep the OS socket addresses intact for transports that dial scoped IPv6.
+pub(crate) async fn lookup_system_sockets<A>(address: A) -> std::io::Result<A::Iter>
+where
+    A: ToSocketAddrs + Send + 'static,
+    A::Iter: Send + 'static,
+{
+    // Cancellation or timeout aborts a queued job. A libc lookup already in
+    // progress finishes on its blocking thread.
+    let lookup = AbortOnDropHandle::new(tokio::task::spawn_blocking(move || address.to_socket_addrs()));
+    tokio::time::timeout(SYSTEM_RESOLVE_TIMEOUT, lookup)
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "system DNS lookup timed out"))??
+}
+
 /// Resolve a domain via the OS resolver, returning all addresses (deduped, order preserved).
 pub async fn resolve_system(domain: &str, policy: DnsQueryPolicy) -> std::io::Result<Vec<IpAddr>> {
-    // `domain` may already be a literal IP (including an unbracketed IPv6
-    // literal like `::1`, which the `"{domain}:0"` trick below cannot parse
-    // via `lookup_host` — it would be mis-split on the literal's own colons).
+    // Literal addresses do not require an OS lookup.
     if let Ok(ip) = domain.parse::<IpAddr>() {
         return Ok(policy.select(vec![ip]));
     }
-    // lookup_host requires a port; use a placeholder and discard it.
-    let addr_str = format!("{}:0", domain);
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    let resolved = tokio::time::timeout(SYSTEM_RESOLVE_TIMEOUT, tokio::net::lookup_host(&addr_str))
-        .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "system DNS lookup timed out"))??;
-    for sa in resolved {
+    for sa in lookup_system_sockets(format!("{domain}:0")).await? {
         let ip = sa.ip();
         // Linear dedup; the shared answer cap applies after family selection.
         if seen.insert(ip) {

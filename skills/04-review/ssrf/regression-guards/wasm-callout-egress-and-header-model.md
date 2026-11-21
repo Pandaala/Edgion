@@ -13,8 +13,9 @@ knowledge_type: regression-guards
 
 - **`EgressResolver`** (`dns_resolver`) → classifies the exact IPs reqwest is
   about to connect to, closing the DNS-rebinding / TOCTOU window on an
-  allowlisted **hostname** origin (loopback, link-local incl. 169.254.169.254,
-  and — when `outbound_egress.block_private` is on — RFC1918/ULA are dropped).
+  allowlisted **hostname** origin. The resolver drops loopback, link-local,
+  unspecified, non-dialable and operator-blocked addresses. Private-address
+  blocking also drops RFC1918, shared IPv4 space and ULA.
   This is the same guard the webhook / forward_auth path uses.
 - **`OutboundRedirect::Deny`** → no redirect-based escape, and no
   same-host `https`→`http` downgrade that would forward a header.
@@ -48,9 +49,9 @@ redaction guard.
 
 ## Accepted tradeoffs (fix suggestions here should be CLOSED unless a new scenario is shown)
 
-**1. The Gateway-local blocked CIDRs take precedence over an allowlisted literal.**
-The callout checks the final request URL for `BlockedCidr` before sending. The
-following trust exception applies only to addresses outside that class.
+**1. Allowlisted literals are checked for non-dialable addresses and configured CIDRs.**
+The callout rejects `NonDialable` and `BlockedCidr` on the final request URL
+before sending. The following trust exception applies to the remaining classes.
 reqwest skips the custom DNS resolver for IP literals, so an operator who
 allowlists `http://169.254.169.254:80` or an RFC1918 literal reaches it. This is
 **operator self-harm**: the operator explicitly put that exact IP in
@@ -80,5 +81,5 @@ not added. Per-callout timeout + the 8-dispatch / 4-round caps + the global
   branch previously followed redirects with no egress guard; the callout used the
   plain shared client with no `EgressResolver`. Both now route through the
   hardened builder. `read_guest` now bounds-checks `len` against guest memory
-  before allocating (was an unbounded pre-alloc). See [[dsl-http-call-ip-literal-only]]
-  for the sibling DSL decision on IP-literal-only guards.
+  before allocating (was an unbounded pre-alloc). The [DSL per-hop guard](dsl-http-call-redirect-per-hop.md)
+  describes the corresponding checks on literals and DNS answers for DSL clients.
