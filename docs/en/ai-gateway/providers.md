@@ -123,6 +123,10 @@ preserved for cache prewarming. Native JSON/SSE, tools, signatures, cache contro
 and opaque extensions pass through. Stateless explicit model mapping changes only
 the model token.
 
+Native usage accounting accepts any nonempty `stop_reason` of up to 64 decoded
+UTF-8 bytes, including new provider values. SSE accounting also requires reported
+usage and a complete event sequence ending in `message_stop`.
+
 All effective anthropic-beta values and the query are preserved. Missing
 anthropic-version defaults to `2023-06-01`; provider observation is certified for
 that version only. Other versions pass through off, or become sticky unknown with

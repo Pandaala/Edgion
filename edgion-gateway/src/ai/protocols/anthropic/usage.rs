@@ -431,19 +431,8 @@ impl JsonStreamSelectiveSink for Selector {
             Key::Type if role == Role::Message => self.message_typed = s == "message",
             Key::Type if role == Role::Iteration => self.frames[self.depth - 1].iteration_message = s == "message",
             Key::Stop => {
-                self.stop = matches!(
-                    s,
-                    "end_turn"
-                        | "max_tokens"
-                        | "stop_sequence"
-                        | "tool_use"
-                        | "pause_turn"
-                        | "refusal"
-                        | "model_context_window_exceeded"
-                );
-                if !self.stop {
-                    self.stop_invalid = true;
-                }
+                self.stop = !s.is_empty();
+                self.stop_invalid = s.is_empty();
             }
             Key::Model if role == Role::Iteration => {
                 self.current_iteration_model = Some(s.to_owned());

@@ -193,7 +193,7 @@ async fn unknown_usage_is_sticky_and_invalid_streams_do_not_teach_success() {
     for body in [
         normal() + "data: {",
         normal().replace("event: message_stop", "event: mismatch"),
-        normal().replace("\"stop_reason\":\"tool_use\"", "\"stop_reason\":\"future\""),
+        normal().replace("\"tool_use\"", "null"),
         frame(
             "message_start",
             r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}"#,
@@ -215,7 +215,14 @@ async fn unknown_usage_is_sticky_and_invalid_streams_do_not_teach_success() {
 }
 #[tokio::test]
 async fn native_json_stop_reasons_are_success_and_provider_error_is_failure() {
-    for reason in ["end_turn", "tool_use", "pause_turn", "max_tokens", "refusal"] {
+    for reason in [
+        "end_turn",
+        "tool_use",
+        "pause_turn",
+        "max_tokens",
+        "refusal",
+        "future_stop",
+    ] {
         let shared = run(
             &format!(r#"{{"type":"message","stop_reason":"{reason}","usage":{{"input_tokens":5,"output_tokens":7}}}}"#),
             false,
@@ -305,15 +312,50 @@ async fn provider_error_remains_failed_after_later_normal_terminal() {
 }
 
 #[tokio::test]
-async fn later_unknown_stop_reason_cannot_reuse_an_earlier_valid_stop() {
-    let wire = normal().replace(
-        "event: message_stop",
-        &(frame(
-            "message_delta",
-            r#"{"type":"message_delta","delta":{"stop_reason":"future_stop"}}"#,
-        ) + "event: message_stop"),
-    );
-    assert!(run(&wire, true, false).await.observation_unavailable());
+async fn reject_preserves_a_stream_with_a_new_stop_reason() {
+    let shared = Arc::new(AiUsageShared::with_reported_only(AiUsageObservation::Provider));
+    let quota = Arc::new(QuotaAccumulator::new(1));
+    let mut processor = MessagesProcessor::new(shared.clone(), Some(quota), true, true, "m".into());
+    let mut sink = ResponseBodySink::new();
+    let mut session = MockPluginSession::new();
+    let wire = normal().replace("tool_use", &"x".repeat(64));
+    let mut frames = wire.split_inclusive("\n\n").peekable();
+    while let Some(frame) = frames.next() {
+        let bytes = Bytes::copy_from_slice(frame.as_bytes());
+        let mut chunk = Some(bytes.clone());
+        processor
+            .on_chunk(
+                &mut chunk,
+                frames.peek().is_none(),
+                ResponseStreamKind::Sse,
+                &mut sink,
+                &mut session,
+            )
+            .await;
+        assert_eq!(chunk, Some(bytes));
+        assert!(!sink.is_terminated());
+        assert!(sink.peek_extra().is_empty());
+    }
+    assert_eq!(shared.reported_tokens(), Some((13, 7)));
+    assert!(shared.permits_provider_success());
+}
+
+#[tokio::test]
+async fn later_malformed_stop_reason_cannot_reuse_an_earlier_valid_stop() {
+    for reason in [
+        r#""""#.to_owned(),
+        "false".to_owned(),
+        format!("\"{}\"", "x".repeat(65)),
+    ] {
+        let wire = normal().replace(
+            "event: message_stop",
+            &(frame(
+                "message_delta",
+                &format!(r#"{{"type":"message_delta","delta":{{"stop_reason":{reason}}}}}"#),
+            ) + "event: message_stop"),
+        );
+        assert!(run(&wire, true, false).await.observation_unavailable());
+    }
     let wire = normal().replace(
         r#""type":"message","model":"m""#,
         r#""type":"future_message","model":"m""#,

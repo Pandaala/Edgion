@@ -99,6 +99,9 @@ count_tokens、files、batches 等端点。要求显式 model 和非负整数 ma
 零值原样保留，可用于缓存预热。原生 JSON/SSE、工具、签名、缓存控制和扩展字段原样传递；
 无状态请求的显式模型映射只修改 model 值。
 
+原生用量记账接受解码后不超过 64 个 UTF-8 字节的非空 `stop_reason`，包括厂商新增的值。
+SSE 记账还要求上游报告用量，并以 `message_stop` 完成事件序列。
+
 保留 query 和所有有效 anthropic-beta 值；缺省 anthropic-version 使用
 `2023-06-01`。目前仅对该版本支持厂商用量观测。其他版本在 off 下透传，在可选
 provider 观测下透传并保持 unknown；要求核算的策略会在上游发送前拒绝。

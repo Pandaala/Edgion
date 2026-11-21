@@ -67,7 +67,12 @@ but remain subject to canonical decoder poison/length/framing limits.
 Start placeholders are insufficient for final SSE usage. Require validated
 message_delta output, valid stop metadata and message_stop, and preserve actual
 source EOS/delivery distinctions. Normal tool_use/pause_turn/max_tokens/refusal
-stops are successful message completion. A native error latches provider failure;
+stops are successful message completion. For native accounting, any nonempty
+stop reason within the 64 decoded-byte capture limit supplies terminal metadata.
+Enumerating provider values here previously invalidated reported usage for new
+reasons and could terminate an otherwise valid Reject stream before EOS
+(`gw-ai3-03`). The Chat translator owns the mapping to OpenAI finish reasons.
+A native error latches provider failure;
 a later message_stop cannot overwrite it. Missing/malformed/oversized/encoded/
 partial data remains unknown, with no content character billing.
 
@@ -77,6 +82,11 @@ preserves bytes. Client API is captured before AiProxy's own early failures in
 existing lazy AI state; ordinary requests allocate no AI state. The supporting
 pg_upstream_peer error site delegates to the AI renderer. Generic transport,
 physical body-cap and 504 deadline errors retain their HTTP contract.
+
+For `gw-ai3-03`, all 39 native Anthropic protocol unit tests passed locally.
+JSON retained usage for a new reason. An under-limit Reject stream preserved
+each frame for a 64-byte reason and reported 13 input and 7 output tokens.
+A later empty, boolean or 65-byte reason still invalidated observation.
 
 ## Native request UTF-8 admission (ARCH-012)
 
