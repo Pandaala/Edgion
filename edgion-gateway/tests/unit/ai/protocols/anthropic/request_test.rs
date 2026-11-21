@@ -1,4 +1,48 @@
 use super::*;
+
+#[test]
+fn native_message_array_and_nested_block_budgets_classify_conservatively() {
+    use serde_json::json;
+
+    for count in [4096, 4097] {
+        let text = json!({"type":"text","text":"a"});
+        let nested = json!({"type":"tool_result","content":[text]});
+        for messages in [
+            vec![json!({"role":"user","content":"a"}); count],
+            // The outer tool_result and its nested text each consume one block.
+            vec![
+                json!({"content":vec![text.clone(); count - 2]}),
+                json!({"content":[nested]}),
+            ],
+        ] {
+            let body =
+                serde_json::to_vec(&json!({"model":"m","max_tokens":7,"stream":true,"messages":messages})).unwrap();
+            let result = metadata(&body).unwrap();
+            assert_eq!((result.binding, result.composite), (count > 4096, count > 4096));
+            assert_eq!(
+                (result.model.as_str(), result.streaming, result.output_bound),
+                ("m", true, 7)
+            );
+        }
+    }
+}
+
+#[test]
+fn native_item_limit_preserves_parse_and_depth_errors() {
+    use serde_json::json;
+
+    let mut deep = json!({"type":"text"});
+    for _ in 0..17 {
+        deep = json!({"type":"tool_result","content":[deep]});
+    }
+    for block in [deep, json!({"type":42})] {
+        let body = serde_json::to_vec(&json!({"model":"m","max_tokens":1,"messages":[{"content":[block]}]})).unwrap();
+        assert!(matches!(metadata(&body), Err(AiProxyError::MalformedBody)));
+    }
+    let invalid = format!(r#"{{"model":"m","max_tokens":1,"messages":[{}?]}}"#, "{},".repeat(4097));
+    assert!(matches!(metadata(invalid.as_bytes()), Err(AiProxyError::MalformedBody)));
+}
+
 #[test]
 fn native_zero_and_extensions_are_borrowed_and_model_rewrite_is_local() {
     let body = Bytes::from(format!(

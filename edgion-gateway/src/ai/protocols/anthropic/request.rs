@@ -75,18 +75,32 @@ fn kind(raw: Option<&RawValue>) -> Result<Option<Cow<'_, str>>, AiProxyError> {
         })
         .transpose()
 }
+const INSPECTION_ITEM_LIMIT: usize = 4096;
+
+enum InspectionError {
+    ItemLimit,
+    Invalid(AiProxyError),
+}
+
+impl From<AiProxyError> for InspectionError {
+    fn from(error: AiProxyError) -> Self {
+        Self::Invalid(error)
+    }
+}
+
 /// A sequence visitor retains one borrowed item at a time, never an array/AST.
 fn each<'de, T: Deserialize<'de>>(
     raw: &'de RawValue,
-    f: &mut impl FnMut(T) -> Result<(), AiProxyError>,
-) -> Result<(), AiProxyError> {
+    f: &mut impl FnMut(T) -> Result<(), InspectionError>,
+) -> Result<(), InspectionError> {
     struct Items<'a, F, T> {
         f: &'a mut F,
+        limit_hit: &'a mut bool,
         marker: std::marker::PhantomData<T>,
     }
     impl<'de, F, T> Visitor<'de> for Items<'_, F, T>
     where
-        F: FnMut(T) -> Result<(), AiProxyError>,
+        F: FnMut(T) -> Result<(), InspectionError>,
         T: Deserialize<'de>,
     {
         type Value = ();
@@ -97,21 +111,32 @@ fn each<'de, T: Deserialize<'de>>(
             let mut count = 0usize;
             while let Some(value) = seq.next_element::<T>()? {
                 count += 1;
-                if count > 4096 {
+                if count > INSPECTION_ITEM_LIMIT {
+                    *self.limit_hit = true;
                     return Err(serde::de::Error::custom("native metadata inspection limit"));
                 }
-                (self.f)(value).map_err(|_| serde::de::Error::custom("invalid native metadata"))?;
+                (self.f)(value).map_err(|error| {
+                    *self.limit_hit = matches!(error, InspectionError::ItemLimit);
+                    serde::de::Error::custom("invalid native metadata")
+                })?;
             }
             Ok(())
         }
     }
     let mut de = serde_json::Deserializer::from_str(raw.get());
-    de.deserialize_seq(Items {
+    // Serde erases visitor errors. Keep the budget signal across nested visitors.
+    let mut limit_hit = false;
+    let parsed = de.deserialize_seq(Items {
         f,
+        limit_hit: &mut limit_hit,
         marker: std::marker::PhantomData,
-    })
-    .map_err(|_| AiProxyError::MalformedBody)?;
-    de.end().map_err(|_| AiProxyError::MalformedBody)
+    });
+    if limit_hit {
+        return Err(InspectionError::ItemLimit);
+    }
+    parsed
+        .and_then(|()| de.end())
+        .map_err(|_| AiProxyError::MalformedBody.into())
 }
 fn advisor(tool: &Item<'_>) -> Result<bool, AiProxyError> {
     Ok(kind(tool.kind)?.is_some_and(|v| v.starts_with("advisor_")))
@@ -121,9 +146,12 @@ fn inspect_block(
     result: &mut MessagesMetadata,
     depth: usize,
     remaining: &mut usize,
-) -> Result<(), AiProxyError> {
-    if depth > 16 || *remaining == 0 {
-        return Err(AiProxyError::UnsupportedParameter);
+) -> Result<(), InspectionError> {
+    if depth > 16 {
+        return Err(AiProxyError::UnsupportedParameter.into());
+    }
+    if *remaining == 0 {
+        return Err(InspectionError::ItemLimit);
     }
     *remaining -= 1;
     let ty = kind(block.kind)?;
@@ -171,6 +199,18 @@ pub(crate) fn metadata(body: &[u8]) -> Result<MessagesMetadata, AiProxyError> {
         binding: false,
         composite: false,
     };
+    match inspect_capabilities(&fields, &mut result) {
+        Ok(()) => {}
+        Err(InspectionError::ItemLimit) => {
+            result.binding = true;
+            result.composite = true;
+        }
+        Err(InspectionError::Invalid(error)) => return Err(error),
+    }
+    Ok(result)
+}
+
+fn inspect_capabilities(fields: &Fields<'_>, result: &mut MessagesMetadata) -> Result<(), InspectionError> {
     if let Some(container) = fields.container.filter(|v| v.get() != "null") {
         result.binding = container.get().starts_with('"') || item(container)?.id.is_some_and(|v| v.get() != "null");
     }
@@ -208,19 +248,16 @@ pub(crate) fn metadata(body: &[u8]) -> Result<MessagesMetadata, AiProxyError> {
             })?;
         }
     }
-    let mut remaining = 4096;
+    let mut remaining = INSPECTION_ITEM_LIMIT;
     if let Some(messages) = fields.messages {
         each::<Item<'_>>(messages, &mut |message| {
             if let Some(content) = message.content.filter(|v| v.get().starts_with('[')) {
-                each::<Item<'_>>(content, &mut |block| {
-                    inspect_block(block, &mut result, 0, &mut remaining)?;
-                    Ok(())
-                })?;
+                each::<Item<'_>>(content, &mut |block| inspect_block(block, result, 0, &mut remaining))?;
             }
             Ok(())
         })?;
     }
-    Ok(result)
+    Ok(())
 }
 pub(crate) fn rewrite_model(body: &Bytes, model: &str) -> Result<Option<Bytes>, AiProxyError> {
     let fields = fields(body)?;

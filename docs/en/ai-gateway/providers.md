@@ -123,6 +123,13 @@ preserved for cache prewarming. Native JSON/SSE, tools, signatures, cache contro
 and opaque extensions pass through. Stateless explicit model mapping changes only
 the model token.
 
+The gateway inspects up to 4096 entries per metadata array and 4096 content
+blocks across the conversation, including blocks nested in tool results.
+Above either limit it applies state-bound routing and marks usage observation
+unavailable. A compatible route can still forward the conversation. Token quota,
+lowest-usage selection, or an eligible credential with a TPM limit requires
+accounting and causes rejection before dispatch.
+
 Native usage accounting accepts any nonempty `stop_reason` of up to 64 decoded
 UTF-8 bytes, including new provider values. SSE accounting also requires reported
 usage and a complete event sequence ending in `message_stop`.

@@ -945,11 +945,7 @@ fn native_admission_route() -> Arc<crate::routes::http::match_unit::HttpRouteRul
     })
 }
 
-#[tokio::test]
-async fn messages_invalid_utf8_is_fixed_400_before_request_plan_independent_of_policy() {
-    use crate::plugins::runtime::traits::ai_session::{AiSessionCapability, MockAiSessionCapability};
-    use crate::plugins::runtime::traits::session::MockPluginSession;
-    use crate::EdgionHttpContext;
+fn native_admission_store() -> AiBackendStore {
     use edgion_resources::resources::edgion_backend::EdgionBackend;
     let mut declared: EdgionBackend = serde_json::from_value(serde_json::json!({
         "metadata":{"name":"provider","namespace":"tenant-b"},
@@ -969,6 +965,15 @@ async fn messages_invalid_utf8_is_fixed_400_before_request_plan_independent_of_p
     });
     let store = AiBackendStore::new();
     store.full_set(&HashMap::from([("tenant-b/provider".into(), Arc::new(declared))]));
+    store
+}
+
+#[tokio::test]
+async fn messages_invalid_utf8_is_fixed_400_before_request_plan_independent_of_policy() {
+    use crate::plugins::runtime::traits::ai_session::{AiSessionCapability, MockAiSessionCapability};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+    let store = native_admission_store();
     let runtime = store.snapshot().get_by_key("tenant-b/provider").unwrap();
     assert_eq!(runtime.provider, AiProvider::Anthropic);
     assert_eq!(runtime.resolve_model("m").unwrap().canonical_name, "m");
@@ -1051,6 +1056,79 @@ fn canonical_messages_preserves_sliced_native_multibyte_bytes() {
     assert_eq!(canonical.body.as_ptr(), witness.as_ptr());
     assert_eq!(canonical.body.len(), witness.len());
     assert_eq!(canonical.body, witness);
+}
+
+#[tokio::test]
+async fn long_messages_require_state_binding_and_optional_accounting_at_admission() {
+    use crate::plugins::runtime::traits::ai_session::{AiSessionCapability, MockAiSessionCapability};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+
+    let store = native_admission_store();
+    let route = native_admission_route();
+    let turns = r#"{"role":"user","content":"q"},{"role":"assistant","content":"a"},"#.repeat(2048);
+    for (model, selection, admit) in [
+        ("m", AiBackendSelection::Weighted, true),
+        ("alias", AiBackendSelection::Weighted, false),
+        ("m", AiBackendSelection::LowestUsage, false),
+    ] {
+        let body = Bytes::from(format!(
+            r#"{{"model":"{model}","max_tokens":1,"messages":[{turns}{{"role":"user","content":"q"}}]}}"#
+        ));
+        let mut cfg = config();
+        cfg.api = AiApi::AnthropicMessages;
+        cfg.inject_usage_tracking = false;
+        cfg.backend_selection.selection_type = selection;
+        let proxy = AiProxy::from_config(&cfg, "test/native/#0").unwrap();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(route.clone());
+        assert!(ctx.capture_ai_client_api(AiApi::AnthropicMessages));
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx);
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_get_path().return_const("/v1/messages".to_string());
+        session.expect_declares_body().return_const(Some(true));
+        session.expect_read_request_body().once().return_once({
+            let body = body.clone();
+            move |_| Ok(body)
+        });
+        session.expect_request_header_map().return_const(http::HeaderMap::new());
+        let mut ai = MockAiSessionCapability::new();
+        ai.expect_capture_ai_client_api().once().return_const(true);
+        if admit {
+            session.expect_get_query().once().return_const(None);
+            ai.expect_set_ai_attempt_plan().once().return_once(move |plan| {
+                let AiAttemptPlan::Ready(plan) = plan else {
+                    panic!("eligible long Messages request must receive a ready plan")
+                };
+                assert!(plan.continuation);
+                assert!(plan.observation_unavailable);
+                assert_eq!(plan.request_body, body);
+                true
+            });
+        } else {
+            ai.expect_set_ai_attempt_plan().never();
+            session.expect_set_response_header().once().returning(|_, _| Ok(()));
+        }
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn AiSessionCapability>);
+        let result = proxy
+            .run_request_with_store_and_entropy(&store, 0, &mut session, &mut PluginLog::new("AiProxy"))
+            .await;
+        if admit {
+            assert!(matches!(result, PluginRunningResult::GoodNext));
+        } else {
+            let PluginRunningResult::ErrResponse { status, body } = result else {
+                panic!("incompatible long Messages request must reject before dispatch")
+            };
+            assert_eq!(status, 400);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body.unwrap()).unwrap()["error"]["message"],
+                AiProxyError::UnsupportedParameter.fields().1
+            );
+        }
+    }
 }
 
 #[test]

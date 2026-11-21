@@ -40,6 +40,20 @@ downgrade or retry. Inspect file references inside tool_result content under
 independent depth/item bounds. Unresolved credentials and zero-weight backend
 slots count; a declaration does not prove cross-request principal identity.
 
+For `gw-ai3-04`, the native metadata visitor previously collapsed per-array or
+cumulative block budget exhaustion into a malformed-body rejection. At exactly
+4096 entries or blocks classification still uses the inspected values. On
+overflow, stop inspecting and set both binding and composite: an uninspected
+suffix can contain a state reference or another inference participant. Existing
+continuation and required-accounting gates own admission. Full-body JSON syntax
+and required metadata are checked before this walk. Depth and field errors
+encountered during inspection still reject.
+
+Local verification passed all 12 native request parser tests and the AiProxy
+admission regression. With 4097 messages the compatible route retained the
+original body in its ready plan. A model alias and LowestUsage each rejected
+before plan publication. Coverage ends at request planning.
+
 Provider consumption is reported-only. Retain raw cumulative input/output/cache
 components, use checked cache-inclusive normalization and existing watermarks.
 Use the actual JSON/SSE envelope to select metadata; an opaque extension named
