@@ -75,9 +75,10 @@ Options:
 - `skills/04-review/cpu-memory/review-evidence/bidirectional-ref-manager-no-gc-not-memory-leak.md` and
   `controller/regression-guards/reference-manager-canonical-surface.md` cover memory and API naming of the
   existing manager, not the multiplicity and drift risk.
-- `tasks/pending/resource-reference-contract/` defines *which* references are legal (field manifest, grant
-  rules). It does not cover how dependency edges are stored. The two can be done independently, but the
-  manifest there is a natural source for the typed `EdgeClass` list.
+- `skills/01-architecture/00-common/06-resource-reference-contract.md` defines *which* references are legal (default profiles, convenience manifest, grant
+  boundaries) and when a dependency edge is registered. It does not cover how dependency edges are
+  stored. The two can be done independently, but its per-field owning adapters
+  (`edgion-resources/src/resources/refs/`) are a natural source for the typed `EdgeClass` list.
 
 ## Verification (independent)
 

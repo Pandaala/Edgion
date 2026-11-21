@@ -22,7 +22,7 @@ policy still selects TLS, without a client certificate.
 ## Rationale and evidence
 
 - The vendored Gateway API contract in
-  `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`, Gateway
+  `config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml`, Gateway
   `spec.tls.backend`, explicitly separates client details from backend TLS
   selection. See also the
   [upstream TLS architecture](../../../01-architecture/02-gateway/04-tls/02-upstream-tls.md).

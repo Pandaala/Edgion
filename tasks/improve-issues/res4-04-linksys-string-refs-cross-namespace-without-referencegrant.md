@@ -73,11 +73,12 @@ infrastructure connector except CredentialInjector.
 
 - Distinct from `res-01` (Gateway annotation attaches another namespace's whole EdgionPlugins). Here the
   EdgionPlugins/EdgionBackend is in the attacker's own namespace and directly names the victim's LinkSys.
-- `tasks/pending/resource-reference-contract/02-field-manifest.md` lists these fields under "Fixed
-  identities, strings, and selectors" with the instruction to *preserve* the existing explicit
-  `namespace/name` grammar; it does not record a decision that cross-namespace use without a grant is
-  intended, and CredentialInjector shows the opposite rule. The refactor task is the natural place to add
-  the grant query.
+- `skills/01-architecture/00-common/06-resource-reference-contract.md` lists these fields under "Fixed identities" (DSL `linksys_refs[]`, Redis/Webhook LinkSys
+  strings): they keep their own grammar and failure policy. It does not record a decision that
+  cross-namespace use without a grant is intended, and CredentialInjector shows the opposite rule. The
+  owning field adapters in `edgion-resources/src/resources/refs/` (`plugin_fields.rs`,
+  `backend_fields.rs`, and `stream_plugin_fields.rs` for the stream ConnectionRateLimit Redis gate)
+  are the natural place to add the grant query.
 - Checked `skills/01-architecture/05-resources/18-link-sys.md` ("cross-namespace permission come[s] from the
   owning field") and `skills/04-review/link-sys/` pages; none accept ungranted cross-namespace LinkSys use.
 

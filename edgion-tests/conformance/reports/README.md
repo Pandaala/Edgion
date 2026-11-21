@@ -33,11 +33,14 @@ adopted TLS fixture names, Secrets and runner were preserved. Final cleanup
 needed no mutation. An initial readiness check observed an old Controller Pod
 still terminating; fresh verification passed after normal deletion, before tests.
 
-The raw reports are copied byte for byte. Logs, hashes and provenance are in
-`tmp/resource-reference-contract/conformance-repeat-20cfc93e-20261011/execution-manifest.json`.
+The raw reports are copied byte for byte. Logs, hashes and provenance were kept in
+local `tmp/resource-reference-contract/conformance-repeat-20cfc93e-20261011/execution-manifest.json`
+evidence, which is no longer retained.
 This result supplies no Kubernetes CredentialInjector dynamic/ACK evidence or
-broader custom-reference acceptance. The separate F2-B Kubernetes image-packaging
-attempt remains pending, with its failure evidence preserved.
+broader custom-reference acceptance. The separate F2-B Kubernetes execution
+followed later: `CredentialInjectorDynamic` passed on Kubernetes on 2026-10-27
+(source `5e359f300`); see the
+[resource reference contract evidence](../../../skills/01-architecture/00-common/06-resource-reference-contract.md#verification-evidence).
 
 ## Initial Standard v1.6.2 run — 2026-10-11
 
@@ -72,10 +75,12 @@ and `pandaala/edgion-gateway:f2-6f566a8ae5e0`. Runtime image config digests and 
 layer identities matched the recorded builds. After execution, no test Routes,
 ReferenceGrants, BackendTLSPolicies or dedicated instances remained. Existing
 backends, Secrets, runner and two pre-existing TLS fixture names were retained.
-Raw logs, image/schema provenance and independent reviews are retained locally
-under `tmp/resource-reference-contract/f2-run-6f566a8ae5e066a9b780f19022143db64a3eb2b4/`.
-Task-specific reference admission, compatibility and dynamic traffic matrices
-remain separate acceptance work; these profiles do not establish that coverage.
+Raw logs, image/schema provenance and independent reviews were kept locally
+under `tmp/resource-reference-contract/f2-run-6f566a8ae5e066a9b780f19022143db64a3eb2b4/`,
+which is no longer retained. Task-specific reference admission, compatibility and
+dynamic traffic matrices were separate acceptance work (see the
+[resource reference contract evidence](../../../skills/01-architecture/00-common/06-resource-reference-contract.md#verification-evidence)); these profiles do not establish that
+coverage.
 
 ## Why Split-Profile Runs
 

@@ -76,8 +76,9 @@ Ordinary preparation/build failure retains the prior published client for new
 lookups/calls under the existing custom LinkSys lifecycle. Forced refresh retires
 that publication first and remains pending until a replacement publishes. A
 proof failure cannot retire an ordinary zero-live publication through plan_apply.
-Other persistent providers currently have only mechanical candidate adapters;
-their owning TLS migrations remain open in the resource-reference task.
+Etcd, Elasticsearch, Kafka and OTLP candidates have since moved to the same
+prepared actual-owner TLS (`PreparedLinkSysTls` / `PreparedOtlpTls`) under the
+shared [resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md).
 
 The Gateway sets connection/response deadlines and zero Cluster retries. The
 operation deadline includes MOVED and NOSCRIPT fallback; no uncertain command

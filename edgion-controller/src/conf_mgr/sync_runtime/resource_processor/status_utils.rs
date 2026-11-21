@@ -121,6 +121,9 @@ pub mod condition_reasons {
     pub const INVALID_STREAM_PLUGINS_REF: &str = "InvalidStreamPluginsRef";
     /// Gateway-level: edgion.io/edgion-plugins annotation references a missing EdgionPlugins resource.
     pub const INVALID_PLUGINS_REF: &str = "InvalidPluginsRef";
+    /// Gateway-level: `spec.tls.backend.clientCertificateRef` is nonexistent,
+    /// unsupported or malformed (Gateway API standard reason).
+    pub const INVALID_CLIENT_CERTIFICATE_REF: &str = "InvalidClientCertificateRef";
 
     // Listener ResolvedRefs reasons (Gateway API v1.5)
     /// Listener certificate Secret ref invalid or unresolvable.

@@ -23,9 +23,9 @@ use edgion_resources::constants::app::GATEWAY_NAME;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::{EdgionConfigData, Gateway};
 use edgion_resources::resources::gateway::{
-    FrontendCACertificateRef, FrontendCAResolutionError, FrontendCASourceIdentity, FrontendCASourceKind,
-    FrontendMatcherEligibility, FrontendValidationMode, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
-    GatewayTlsMode, Listener as GatewayListener, ListenerStatus, ResolvedFrontendCAReference,
+    ClientCertificateResolutionError, FrontendCACertificateRef, FrontendCAResolutionError, FrontendCASourceIdentity,
+    FrontendCASourceKind, FrontendMatcherEligibility, FrontendValidationMode, GatewayStatus, GatewayStatusAddress,
+    GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener, ListenerStatus, ResolvedFrontendCAReference,
     ResolvedServingCertificateReference, RouteGroupKind, ServingCertificateResolutionError,
     ServingCertificateSourceIdentity,
 };
@@ -39,7 +39,7 @@ use edgion_resources::resources::refs::plugin_attachment_fields::{HttpPluginAtta
 use edgion_resources::resources::refs::plugin_target::PluginTarget;
 use edgion_resources::resources::refs::proxy_protocol_fields::GatewayProxyProtocolField;
 use edgion_resources::{ResourceKind, ResourceMeta};
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::ByteString;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
@@ -564,6 +564,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         g.spec.resolved_attachment_proof = None;
         if let Some(backend) = g.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
             backend.resolved_client_certificate = None;
+            backend.resolved_client_certificate_error = None;
         }
         // Reject the whole Gateway projection for unrepresented upstream fields.
         // Keep the object in the processor so Accepted=False is persisted and
@@ -1001,6 +1002,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .runtime()
             .proxy_protocol_listener_policy
             .conflicting_listener_names(&gateway_policy_key);
+        let backend_client_ref_error = backend_client_certificate_ref_error(gateway, &gateway_ns);
 
         if let Some(listeners) = gateway.spec.listeners.as_mut() {
             for listener in listeners {
@@ -1108,11 +1110,10 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs: merge stream-plugin, HTTP-plugin, and
-        // dns-resolver ref errors into a single shared condition — never emit two
-        // conditions of the same type. Reason precedence keeps the existing
-        // plugin-ref reasons; a dns-resolver-ref denial alone uses the standard
-        // RefNotPermitted reason.
+        // Gateway-level ResolvedRefs: merge stream-plugin, HTTP-plugin,
+        // dns-resolver, PROXY-protocol and backend client-certificate ref errors
+        // into a single shared condition — never emit two conditions of the same
+        // type. The native certificate reference determines the reason whenever it fails.
         {
             let mut parts: Vec<String> = Vec::new();
             if let Some(s) = stream_plugin_ref_error.as_ref() {
@@ -1127,10 +1128,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             if let Some((_, message)) = proxy_reference_error {
                 parts.push(message.clone());
             }
+            if let Some((_, message)) = backend_client_ref_error.as_ref() {
+                parts.push(message.clone());
+            }
             let merged = if parts.is_empty() {
                 None
             } else {
-                let reason = if plugin_ref_error.is_some() {
+                let reason = if let Some((reason, _)) = backend_client_ref_error.as_ref() {
+                    reason
+                } else if plugin_ref_error.is_some() {
                     condition_reasons::INVALID_PLUGINS_REF
                 } else if stream_plugin_ref_error.is_some() {
                     condition_reasons::INVALID_STREAM_PLUGINS_REF
@@ -1703,13 +1709,19 @@ fn resolve_gateway_tls(gateway: &mut Gateway, owner: &ResourceRef, ctx: &Handler
     let (backend, updates) = {
         let references = GatewayTlsRefs::from_gateway(gateway);
         let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-        let backend =
-            references
-                .backend_client()
-                .and_then(|field| match fetch_bound_secret(ctx, owner, field.token()) {
-                    BoundFetchOutcome::Ok(authorized) => Some(authorized.secret),
-                    BoundFetchOutcome::Invalid(_) | BoundFetchOutcome::Pending(_) => None,
-                });
+        // A denied reference reports only RefNotPermitted, never target existence.
+        let backend = references
+            .backend_client()
+            .map(|field| match fetch_bound_secret(ctx, owner, field.token()) {
+                BoundFetchOutcome::Ok(authorized) => Ok(authorized.secret),
+                BoundFetchOutcome::Invalid(error) => Err(ClientCertificateResolutionError::InvalidReference(error)),
+                BoundFetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+                    Err(ClientCertificateResolutionError::NotFound)
+                }
+                BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {
+                    Err(ClientCertificateResolutionError::RefNotPermitted)
+                }
+            });
         let mut updates = Vec::new();
         for (listener_index, listener) in gateway.spec.listeners.as_deref().unwrap_or_default().iter().enumerate() {
             let Some(tls) = listener.tls.as_ref() else { continue };
@@ -1780,7 +1792,13 @@ fn resolve_gateway_tls(gateway: &mut Gateway, owner: &ResourceRef, ctx: &Handler
         (backend, updates)
     };
     if let Some(tls) = gateway.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
-        tls.resolved_client_certificate = backend;
+        let (secret, error) = match backend {
+            Some(Ok(secret)) => (Some(secret), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
+        tls.resolved_client_certificate = secret;
+        tls.resolved_client_certificate_error = error;
     }
     if let Some(listeners) = gateway.spec.listeners.as_mut() {
         for update in updates {
@@ -2446,6 +2464,105 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
     condition_reasons::INVALID_CERTIFICATE_REF
 }
 
+/// Why a resolved `kubernetes.io/tls`-shaped Secret cannot serve as a key pair.
+#[derive(Debug, PartialEq, Eq)]
+enum TlsKeypairSecretProblem {
+    /// No data, missing or empty `tls.crt`/`tls.key`, or unparseable PEM. Reasons
+    /// keep check order: certificate before private key.
+    Malformed(Vec<String>),
+    /// Both PEMs parse, but the private key does not match the certificate.
+    KeyMismatch(String),
+}
+
+/// Validate a listener serving certificate and retain every malformed PEM diagnostic.
+fn check_tls_keypair_secret(secret: &Secret) -> Option<TlsKeypairSecretProblem> {
+    use edgion_resources::constants::secret_keys::tls;
+    let malformed = |reason: String| Some(TlsKeypairSecretProblem::Malformed(vec![reason]));
+    let Some(data) = &secret.data else {
+        return malformed("no data".to_string());
+    };
+    let (Some(cert), Some(key)) = (data.get(tls::CERT), data.get(tls::KEY)) else {
+        return malformed(format!("missing required keys '{}' and/or '{}'", tls::CERT, tls::KEY));
+    };
+    if cert.0.is_empty() || key.0.is_empty() {
+        return malformed("empty certificate or key data".to_string());
+    }
+    let cert_pem_valid = edgion_common::tls_validation::parse_strict_certificate_chain(&cert.0).is_ok();
+    let key_pem_valid = edgion_common::tls_validation::parse_strict_private_key_pem(&key.0).is_ok();
+    let mut reasons = Vec::new();
+    if !cert_pem_valid {
+        reasons.push("invalid certificate PEM data".to_string());
+    }
+    if !key_pem_valid {
+        reasons.push("invalid private key PEM data".to_string());
+    }
+    if !reasons.is_empty() {
+        return Some(TlsKeypairSecretProblem::Malformed(reasons));
+    }
+    // Both PEMs are valid: check that the key matches the certificate.
+    let (Ok(cert_str), Ok(key_str)) = (std::str::from_utf8(&cert.0), std::str::from_utf8(&key.0)) else {
+        return None;
+    };
+    edgion_common::tls_validation::check_key_matches_cert(cert_str, key_str)
+        .err()
+        .map(|error| TlsKeypairSecretProblem::KeyMismatch(error.to_string()))
+}
+
+/// Gateway-level ResolvedRefs contribution of `spec.tls.backend.clientCertificateRef`.
+///
+/// Gateway API requires `RefNotPermitted` for a cross-namespace reference no
+/// ReferenceGrant allows, and `InvalidClientCertificateRef` for a nonexistent,
+/// unsupported or malformed one. A certificate/key mismatch is further content
+/// validation and uses the Edgion `InvalidCertificate` reason. Returns
+/// `(reason, message)`.
+fn backend_client_certificate_ref_error(gateway: &Gateway, gateway_ns: &str) -> Option<(&'static str, String)> {
+    let backend = gateway.spec.tls.as_ref()?.backend.as_ref()?;
+    let reference = backend.client_certificate_ref.as_ref()?;
+    let target = format!(
+        "{}/{}",
+        reference.namespace.as_deref().unwrap_or(gateway_ns),
+        reference.name
+    );
+    let invalid_ref = |detail: &str| {
+        Some((
+            condition_reasons::INVALID_CLIENT_CERTIFICATE_REF,
+            format!("Gateway backend clientCertificateRef {target}: {detail}"),
+        ))
+    };
+    match backend.resolved_client_certificate_error {
+        Some(ClientCertificateResolutionError::RefNotPermitted) => Some((
+            condition_reasons::REF_NOT_PERMITTED,
+            format!(
+                "Gateway backend clientCertificateRef {target} is not permitted by any ReferenceGrant from namespace {gateway_ns}"
+            ),
+        )),
+        Some(ClientCertificateResolutionError::NotFound) => invalid_ref("Secret not found"),
+        Some(ClientCertificateResolutionError::InvalidReference(error)) => {
+            invalid_ref(&format!("invalid reference: {error}"))
+        }
+        None => match backend.resolved_client_certificate.as_ref() {
+            None => invalid_ref("Secret not resolved"),
+            Some(secret) => {
+                use edgion_common::tls_validation::{parse_gateway_client_identity, KeyCertMatchError};
+                use edgion_resources::constants::secret_keys::tls;
+                let Some(data) = &secret.data else { return invalid_ref("no data"); };
+                let (Some(cert), Some(key)) = (data.get(tls::CERT), data.get(tls::KEY)) else {
+                    return invalid_ref("missing required keys 'tls.crt' and/or 'tls.key'");
+                };
+                match parse_gateway_client_identity(&cert.0, &key.0) {
+                    Ok(_) => None,
+                    Err(KeyCertMatchError::CertParse(_)) => invalid_ref("invalid certificate PEM data"),
+                    Err(KeyCertMatchError::KeyParse(_)) => invalid_ref("invalid private key PEM data"),
+                    Err(reason @ KeyCertMatchError::Mismatch(_)) => Some((
+                    condition_reasons::INVALID_CERTIFICATE,
+                    format!("Gateway backend clientCertificateRef {target}: {reason}"),
+                )),
+                }
+            },
+        },
+    }
+}
+
 fn validate_listener_resolved_refs(
     gateway: &Gateway,
     listener: &GatewayListener,
@@ -2530,73 +2647,16 @@ fn validate_listener_resolved_refs(
                     });
                 }
                 Some(secret) => {
-                    use edgion_resources::constants::secret_keys::tls;
-                    if let Some(data) = &secret.data {
-                        if !data.contains_key(tls::CERT) || !data.contains_key(tls::KEY) {
-                            errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                namespace: cert_ns.to_string(),
-                                name: cert_ref.name.clone(),
-                                reason: format!("missing required keys '{}' and/or '{}'", tls::CERT, tls::KEY),
-                            });
-                        } else {
-                            let cert_bytes = data.get(tls::CERT).map(|b| &b.0);
-                            let key_bytes = data.get(tls::KEY).map(|b| &b.0);
-                            let cert_empty = cert_bytes.is_none_or(|b| b.is_empty());
-                            let key_empty = key_bytes.is_none_or(|b| b.is_empty());
-                            if cert_empty || key_empty {
-                                errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                    namespace: cert_ns.to_string(),
-                                    name: cert_ref.name.clone(),
-                                    reason: "empty certificate or key data".to_string(),
-                                });
-                            } else {
-                                let cert_data =
-                                    cert_bytes.expect("cert_bytes is Some: contains_key and non-empty verified above");
-                                let key_data =
-                                    key_bytes.expect("key_bytes is Some: contains_key and non-empty verified above");
-                                let cert_pem_valid =
-                                    edgion_common::tls_validation::parse_strict_certificate_chain(cert_data).is_ok();
-                                let key_pem_valid =
-                                    edgion_common::tls_validation::parse_strict_private_key_pem(key_data).is_ok();
-
-                                if !cert_pem_valid {
-                                    errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                        namespace: cert_ns.to_string(),
-                                        name: cert_ref.name.clone(),
-                                        reason: "invalid certificate PEM data".to_string(),
-                                    });
-                                }
-                                if !key_pem_valid {
-                                    errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                        namespace: cert_ns.to_string(),
-                                        name: cert_ref.name.clone(),
-                                        reason: "invalid private key PEM data".to_string(),
-                                    });
-                                }
-
-                                // Check cert/key matching only when both PEMs are valid
-                                if cert_pem_valid && key_pem_valid {
-                                    if let (Ok(cert_str), Ok(key_str)) =
-                                        (std::str::from_utf8(cert_data), std::str::from_utf8(key_data))
-                                    {
-                                        if let Err(e) =
-                                            edgion_common::tls_validation::check_key_matches_cert(cert_str, key_str)
-                                        {
-                                            errors.push(GatewayResolvedRefsError::SecretInvalid {
-                                                namespace: cert_ns.to_string(),
-                                                name: cert_ref.name.clone(),
-                                                reason: e.to_string(),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
+                    let reasons = match check_tls_keypair_secret(secret) {
+                        None => Vec::new(),
+                        Some(TlsKeypairSecretProblem::Malformed(reasons)) => reasons,
+                        Some(TlsKeypairSecretProblem::KeyMismatch(reason)) => vec![reason],
+                    };
+                    for reason in reasons {
                         errors.push(GatewayResolvedRefsError::SecretInvalid {
                             namespace: cert_ns.to_string(),
                             name: cert_ref.name.clone(),
-                            reason: "no data".to_string(),
+                            reason,
                         });
                     }
                 }

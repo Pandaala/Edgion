@@ -17,7 +17,7 @@
 //! helper in the gateway.
 
 use crate::cert_util::LeafValidity;
-use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::fmt;
 use x509_parser::pem::Pem;
 use x509_parser::prelude::*;
@@ -169,6 +169,10 @@ pub fn parse_strict_private_key_pem(input: &[u8]) -> Result<StrictPrivateKey, Ke
     }
     let der = PrivateKeyDer::from_pem_slice(trimmed.as_bytes())
         .map_err(|_| KeyCertMatchError::KeyParse("private key PEM is invalid".to_string()))?;
+    compile_private_key(der)
+}
+
+fn compile_private_key(der: PrivateKeyDer<'static>) -> Result<StrictPrivateKey, KeyCertMatchError> {
     let format = match &der {
         PrivateKeyDer::Pkcs8(_) => PrivateKeyFormat::Pkcs8,
         PrivateKeyDer::Pkcs1(_) => PrivateKeyFormat::RsaPkcs1,
@@ -229,7 +233,45 @@ pub fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), KeyCe
     let chain = parse_strict_certificate_chain(cert_pem.as_bytes())
         .map_err(|error| KeyCertMatchError::CertParse(format!("strict certificate chain rejected: {error:?}")))?;
     let private_key = parse_strict_private_key_pem(key_pem.as_bytes())?;
-    let (_, cert) = X509Certificate::from_der(&chain.certificates_der[0])
+    check_parsed_pair(&chain.certificates_der[0], &private_key)
+}
+
+/// Parse a Gateway upstream identity on both sides of conf_sync. The first
+/// private-key PEM block is authoritative, allowing OpenSSL EC PARAMETERS
+/// before the key. Bound the whole input before scanning for that block.
+pub fn parse_gateway_client_identity(
+    cert: &[u8],
+    key: &[u8],
+) -> Result<(Vec<CertificateDer<'static>>, StrictPrivateKey), KeyCertMatchError> {
+    let invalid_cert = || KeyCertMatchError::CertParse("invalid certificate PEM data".into());
+    if cert.len() > MAX_CA_BUNDLE_BYTES_PER_REF {
+        return Err(invalid_cert());
+    }
+    let mut chain = Vec::new();
+    for block in CertificateDer::pem_slice_iter(cert) {
+        if chain.len() >= MAX_CA_CERTIFICATES_PER_REF {
+            return Err(invalid_cert());
+        }
+        let der = block.map_err(|_| invalid_cert())?;
+        let (rest, _) = X509Certificate::from_der(&der).map_err(|_| invalid_cert())?;
+        if !rest.is_empty() {
+            return Err(invalid_cert());
+        }
+        chain.push(der);
+    }
+    let leaf = chain.first().ok_or_else(invalid_cert)?;
+    if key.len() > MAX_PRIVATE_KEY_BYTES {
+        return Err(KeyCertMatchError::KeyParse("private key exceeds the byte limit".into()));
+    }
+    let der = PrivateKeyDer::from_pem_slice(key)
+        .map_err(|_| KeyCertMatchError::KeyParse("invalid private key PEM data".into()))?;
+    let private_key = compile_private_key(der)?;
+    check_parsed_pair(leaf, &private_key)?;
+    Ok((chain, private_key))
+}
+
+fn check_parsed_pair(leaf_der: &[u8], private_key: &StrictPrivateKey) -> Result<(), KeyCertMatchError> {
+    let (_, cert) = X509Certificate::from_der(leaf_der)
         .map_err(|e| KeyCertMatchError::CertParse(format!("X.509 parse error: {}", e)))?;
     let cert_pubkey_spki_der = cert.public_key().raw;
 

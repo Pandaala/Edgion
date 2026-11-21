@@ -41,8 +41,12 @@ default, while explicitly invalid source metadata fails even without active TLS.
 Fingerprint preparation serializes a borrowed redacted connection projection,
 hashes actual template/TLS material separately, and shares the masked inherited
 encoder with HTTPDNS. Comparison performs no PEM parsing or TLS audit.
-Complete custom Service identity and EP/Route transport migration remain open in
-tasks/pending/resource-reference-contract/; this is a scoped Webhook boundary.
+Custom Service reference identity is covered by the shared
+[resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md),
+and transport by the [Outbound TLS unification point](../../../01-architecture/00-common/05-unification-points.md#3-outbound-tls-resolution--unified).
+The EP/Route transport migration completed in R7a (`418e353dd`, managed HTTP
+plugins) and R7b (`78d0f168c`, internal HTTPRoute auth); this is a scoped
+Webhook boundary.
 
 Retirement explicitly stops the managed health task without waiting for the last
 external call handle. Caller-held handles are not forcibly revoked. See

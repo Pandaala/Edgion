@@ -107,15 +107,17 @@ TCP/TLS-route connectors (`TransportConnector::new(None)`) only dial plain TCP.
   builds `tls::Connector::new(None)`, whose private `init_ssl_cert_env_vars`
   wrapper calls openssl-probe and may set those variables inside the process, so
   the result can depend on listener construction order.
-  Accepted until the tracked fork fix lands: in the shipped Debian images the probe, the hash directory and the
-  bundle come from the same `update-ca-certificates` set; on RHEL-family hosts
+  Accepted until the tracked fork fix lands: in the shipped Debian images the
+  probe, the hash directory and the bundle come from the same
+  `update-ca-certificates` set; on RHEL-family hosts
   `/etc/ssl/cert.pem` and `/etc/ssl/certs` link into `/etc/pki/tls`, which
   `update-ca-trust` fills from the same extracted set as the bundle. Divergence needs
   certificates dropped into the hash directory without regenerating the bundle, a
   different OS layout, or an operator-set `SSL_CERT_*`. Raise the fix's priority
   if a non-Debian image is shipped or images stop keeping the hash directory and
   bundle in sync. The fix, a Pingora-fork change that makes a configured `ca_file`
-  replace the default store in `Connector::new` (needs a fork release), is tracked
+  replace the default store in `Connector::new` (needs a fork commit and a lockfile
+  advance), is tracked
   in [backend-tls-system-trust-exact-bundle](../../../../tasks/todo/backend-tls-system-trust-exact-bundle.md).
 - **Rejected: per-peer `peer.options.ca` for `System` peers.** It would rebuild a
   ~140-certificate store per new upstream connection.

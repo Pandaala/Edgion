@@ -126,9 +126,9 @@ body/transport boundaries are unchanged. See the
 [descriptor ownership guard](../../04-review/resources/regression-guards/grpc-descriptor-configmap-ownership.md)
 for scoped evidence. The initial result PASS and clean gates were superseded by
 R3c-F1: a second review found eager descriptor copies before validation. The
-corrected candidate requires renewed workspace gates and independent reviews.
-Final acceptance, review and commit status are recorded in
-[progress07](../../../tasks/pending/resource-reference-contract/07-progress.md).
+corrected candidate then passed renewed workspace gates and independent reviews
+and was committed as `ca7bdaf79`. The contract's final acceptance is recorded in
+its [verification evidence](../00-common/06-resource-reference-contract.md#verification-evidence).
 
 ConfigMap events preserve the EP's raw dependency owner key, including omitted
 namespace, and workers fetch the current raw UID/generation. Namespaced EP events
@@ -136,7 +136,10 @@ continue through Route/Gateway workers. HTTP rule ExtensionRef discovery registe
 without reading plugin material: Route Accepted/ResolvedRefs do not mirror EP
 Accepted. Gateway descriptor compilation owns invalid-material rejection. The
 raw-None semantic-target/raw-key mismatch and generic dependency-string status
-reads remain R4 work; this batch proves raw-None EP recovery/notification only.
+reads were left to R4: R4d (`b872bc8c9`) resolved the raw-key half (see
+[reference-target ambiguity](../../04-review/plugin-runtime/intentional-design/edgionplugins-key-scoped-last-known-good.md#edgionplugins-reference-target-ambiguity))
+and R4b the status reads (see the readonly material-status boundary below); this
+batch proves raw-None EP recovery/notification only.
 
 The R3c-F1 cold-copy boundary covers publication source construction, generation
 policy views and direct compilation. It binds the actual owner/entry before the
@@ -162,9 +165,9 @@ an internal ReferenceGrant-store read (same-namespace authorization can bypass
 that query). Actual event/RawStore/worker tests cover creation, same-UID material
 updates, deletion and recreation. Persist-off LinkSys authorization, memory
 binding/expiry and retained-generation behavior remain unchanged. This is
-in-process evidence, not live delivery or global source-identity closure; see
-[coordinator progress](../../../tasks/pending/resource-reference-contract/07-progress.md)
-for final gates, independent reviews and commit status.
+in-process evidence, not live delivery or global source-identity closure. R4b
+was committed as `5225c3e15`; the contract's final acceptance is recorded in its
+[verification evidence](../00-common/06-resource-reference-contract.md#verification-evidence).
 
 ### Live referenced IP conditions
 

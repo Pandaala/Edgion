@@ -64,24 +64,27 @@ planning. Its private fingerprint includes the same masked inherited encoder.
 Absent/disabled Kafka TLS consumes no globals; enabled System TLS still produces
 an explicit verifying connector because rskafka treats None as plaintext. Cold
 construction captures one connector Arc; init, probe recovery and SDK broker
-reconnects retain that connector without reading new global policy. Other
-provider replay gates remain in progress under
-`tasks/pending/resource-reference-contract/`. The intermediate Resources
+reconnects retain that connector without reading new global policy. Etcd and
+OTLP candidates likewise build from prepared actual-owner TLS
+(`PreparedLinkSysTls` / `PreparedOtlpTls`) before replay comparison under the shared
+[resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md). The intermediate Resources
 `BoundOutboundTls` loan pairs actual plugin/provider policy, ordered references
 and same-field material without copies; Common `validate_outbound_tls_field`
 checks actual source identity, cardinality, target name/namespace and exact ConfigMap marker versus
-ordinary Secret marker absence. Its local proof does not prove inherited global
-axes or establish transport/reuse gating until those consumers migrate.
+ordinary Secret marker absence. Its local proof alone does not prove inherited
+global axes or establish transport/reuse gating; each owning consumer adds those
+gates (HTTPDNS, Webhook, Redis, Elasticsearch and Kafka earlier in this section;
+Etcd and OTLP in their own sections below).
 The owning BoundLocalTlsSelection retains active, inactive or absent actual-field
 selection. Its Common validation checks source identity even with no declared
 slots; disabled material stays inert. ValidatedLocalTlsSelection has a private
 constructor and the pure effective resolver borrows only that proof and one
 captured global snapshot. No raw policy or material can replace its local inputs.
 This selection does not enable TLS or authorize a transport: owning adapters must
-preserve scheme/enable/stage gates, and other transport/replay consumers still need
-their separate migration. HTTPDNS absent/disabled policy keeps native system
-trust without global inheritance. These are foundation checks, not proof that
-every client already uses them.
+preserve scheme/enable/stage gates, and each transport/replay consumer migrated
+in its own reviewed batch, completed through R12b (`6b5adb0ae`). HTTPDNS
+absent/disabled policy keeps native system trust without global inheritance.
+These foundation checks alone do not prove that a client uses them.
 Global publication now retains original immutable EGC Arcs in Common's opaque
 GlobalOutboundTlsSnapshot. The inherited verify, selected validation/CA and client
 axes have independent owning proofs; malformed declarations still count toward
@@ -94,7 +97,10 @@ active-local inheritance check does not resolve PEM or emit TLS audit.
 Ready HTTPDNS reuse must pass actual source, local pairing and consumed inherited
 proofs; unchanged failed outcomes without a client retain their fallback. The same
 candidate supplies comparison and construction in Controller and Gateway. Other
-local runtime proofs and replay gates remain open; this is not a full runtime verdict.
+providers' local runtime proofs and replay gates migrated in later batches (see the
+Webhook, Redis, Elasticsearch and Kafka paragraphs earlier in this
+section and the Etcd and OTLP sections below); this paragraph is not a full
+runtime verdict.
 Global setter rebuild equality deliberately includes complete selected Secret
 metadata and raw reference Option distinctions. It always publishes current
 provenance, even when effective values compare equal. Fingerprint equality remains
@@ -116,8 +122,8 @@ inherited proofs precede RV/equality/zero-live planning. One candidate supplies
 its cached fingerprint and captured policy to construction; retries cannot swap
 in a later global snapshot. Absent/disabled local TLS consumes no inherited axes,
 even when endpoint URLs use HTTPS. Config/credential field encoding remains
-provider-specific. Authentication material reference authority is still a
-separate outstanding consumer migration.
+provider-specific. Authentication material reference authority migrated
+separately in R9b (`eac49a77b`).
 
 ## OTLP candidate replay
 

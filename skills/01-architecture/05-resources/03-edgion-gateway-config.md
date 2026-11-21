@@ -83,8 +83,10 @@ updates and delete cleanup. CA and client outcomes remain independent.
 Ordinary Secret copies lose the reserved ConfigMap marker; actual ConfigMaps use
 the shared provenance wrapper. No requested identity is written over fetched
 metadata. Material/key/certificate parsing remains with outbound TLS consumers.
-The owning global policy loan borrows actual policy/material and is separate from
-the still-pending full global preparation and client-reuse migration.
+The owning global policy loan borrows actual policy/material. Outbound TLS
+consumers capture one published `GlobalOutboundTlsSnapshot` during preparation
+instead of reading global policy later; that migration completed through R12b
+(`6b5adb0ae`).
 
 Change/delete events requeue all GatewayClass resources because their parametersRef status depends
 on EdgionGatewayConfig existence; delete also clears Secret registrations.

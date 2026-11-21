@@ -71,9 +71,11 @@ UID/generation, Service and EndpointSlice events, ordinary same-UID Service
 updates with changed resource version and port mapping, coalesced retargeting, deletion,
 recreation and old/current policy notifications. Mirror-only policy exclusion
 remains intact; no mirror behavior is added to these Route kinds. Focused
-Controller verification passed 931 tests. This is in-process evidence; coordinator
-[progress](../../../../tasks/pending/resource-reference-contract/07-progress.md)
-records independent reviews, workspace gates and commit status.
+Controller verification passed 931 tests. This is in-process evidence; independent
+reviews, workspace gates and commit status were recorded in the closed
+resource-reference task (git history at `d4fb7f4ad`), and the contract's live acceptance is
+summarized in its
+[verification evidence](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence).
 
 ## Alternatives and limits
 
@@ -146,5 +148,6 @@ Resources 1601 tests passed plus 27 doctests/10 ignored, and Gateway 2254 plugin
 tests passed/17 ignored. The amended 297 original scoped tests are preserved,
 with 14 additions and unchanged ignores; complete three-crate compiled lists have
 no removals. Raw commands, failures, source/binary hashes and identity comparisons
-are retained in `tmp/resource-reference-contract/r3b-verification-20261008-r1`.
-Workspace gates and independent actual-result review remain separate pending gates.
+were kept in local `tmp/resource-reference-contract/r3b-verification-20261008-r1`
+evidence, which is no longer retained. Workspace gates and independent
+actual-result review then passed, and R3b was committed as `16e7be6dc`.

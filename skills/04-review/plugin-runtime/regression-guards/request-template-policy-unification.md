@@ -82,9 +82,9 @@ template/TLS materials in all four stage arrays before activity gates. Templates
 remain active independently of disabled local TLS. ForwardAuth now shares local
 CA/client acquisition and readonly template/TLS status with Guardrail/AiGuard.
 Readonly status registers no dependencies and preserves present-empty values,
-string_data fallback and non-UTF-8/missing-key errors. This implementation is one
-slice of the open resource-reference contract task; complete transport/global
-TLS preparation and final task verification remain separate work.
+string_data fallback and non-UTF-8/missing-key errors. This implementation was one
+slice of the shared [resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md); transport/global TLS
+preparation and final verification landed as separate slices of that contract.
 
 The errors-only status projection validates borrowed selected values without
 populating a value map (`ARCH-108`). Data retains precedence over string_data,

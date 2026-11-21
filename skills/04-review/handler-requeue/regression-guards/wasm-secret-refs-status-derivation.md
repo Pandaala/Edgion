@@ -65,9 +65,11 @@ in dependency keys and event requeue. October owning-field migration replaces
 Existing `edgion_plugins` Wasm tests exercise usable/unusable auth, OCI type/data,
 exact Grant denial, ConfigMap grant/status and ConfigMap event requeue. New handler
 activity coverage checks supported/unsupported stages, disabled entries, and auth
-or pull independence from disabled TLS. Consult fresh test results in
-`tasks/pending/resource-reference-contract/04-implementation.md`; overall reference
-manifest closure and Common owning material/replay proof remain in progress.
+or pull independence from disabled TLS. Overall reference manifest closure and
+Common owning material/replay proof were completed under the shared
+[resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md). Fresh test results for
+this slice were recorded in the closed resource-reference task (git history at
+`d4fb7f4ad`).
 R4b focused Controller verification passed 935 tests, including canonical-call
 positive/zero controls, stale-edge isolation and actual Secret/ConfigMap worker
 recovery through same-UID updates and delete/recreate. Observer counts concern

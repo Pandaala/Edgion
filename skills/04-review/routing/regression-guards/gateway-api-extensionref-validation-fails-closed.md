@@ -137,25 +137,29 @@ scope, and status corrections.
 Fresh scoped verification on 2026-10-08 passed Resources reference tests (74),
 Resources doctests (24 passed, 10 existing ignored), Controller resource-processor
 tests (918), and readonly Gateway filter/publication/preflight/WAF selections
-(53/23/23/65; filtered sets may overlap). Raw commands and exits are retained in
-`tmp/resource-reference-contract/r3a1-verification-20261008-r1`. This verifies the
-Controller migration and existing Gateway regressions; R3a2 lookup admission and
-whole-task conformance remain open. Independent result review remains pending.
+(53/23/23/65; filtered sets may overlap). Raw commands and exits were kept in
+local `tmp/resource-reference-contract/r3a1-verification-20261008-r1` evidence,
+which is no longer retained. This verifies the
+Controller migration and existing Gateway regressions. At this checkpoint, R3a2
+lookup admission, whole-task conformance and independent result review were still
+pending; see the commit notes below.
 
 The F1 HTTP diagnostic correction subsequently passed 921 focused Controller
 resource-processor tests, including name-specific rule/backend status and
 delegated-child diagnostics with zero plugin dependencies. Correction logs and
-complete identity comparisons are under
-`tmp/resource-reference-contract/r3a1-verification-20261008-r2`; all original
+complete identity comparisons were kept in local
+`tmp/resource-reference-contract/r3a1-verification-20261008-r2` evidence, which is
+no longer retained; all original
 compiled and source test identities are preserved. Both independent Astra result
 reviewers accepted frozen r2 correctness with SCOPED PASS. Its Clippy command
 exited zero with two introduced `question_mark` warnings in test helpers, so it
 was not warning-free. A separately reviewed r3 cleanup replaces only those two
 equivalent early returns. Fresh r3 verification passed the same 921 Controller
 tests with preserved compiled/source identities and ignore attributes; command,
-log and binary hashes are retained in
-`tmp/resource-reference-contract/r3a1-verification-20261008-r3`. Refreshed lint
-gates and independent byte review remain pending. This adds no Gateway
+log and binary hashes were kept in local
+`tmp/resource-reference-contract/r3a1-verification-20261008-r3` evidence, which is
+no longer retained. Refreshed lint
+gates and independent byte review were still pending at this checkpoint. This adds no Gateway
 owner/name validation claim.
 
 R3a1 subsequently committed locally as `05e7debf5`; its pending-gate statements
@@ -167,10 +171,11 @@ log-extension (15), context (eight), native-WAF (38), early-request (11), and
 plugin-store (41) selections. Full compiled identities remain intact (5132 to
 5144; 12 additions), and all 122 original scoped source tests, including the
 four support tests, remain with unchanged ignore attributes. Raw failed attempts,
-commands, exits and stable source/binary hashes are retained under
-`tmp/resource-reference-contract/r3a2-verification-20261008-r1`. Workspace gates,
-independent result reviews and the R3a2 commit remain coordinator-owned pending
-steps. In-process missing/create/update/delete/recreate and policy-capture tests
+commands, exits and stable source/binary hashes were kept in local
+`tmp/resource-reference-contract/r3a2-verification-20261008-r1` evidence, which is
+no longer retained. Workspace gates
+and independent result reviews then passed, and R3a2 was committed as
+`75a5363f5`. In-process missing/create/update/delete/recreate and policy-capture tests
 are not live admission/conformance verification.
 
 ## Resolution references

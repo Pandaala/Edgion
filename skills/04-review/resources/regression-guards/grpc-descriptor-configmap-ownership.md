@@ -42,8 +42,9 @@ This is not a CA reference: converting ConfigMap contents to a Secret wrapper or
 reading ca.crt would grant the wrong material semantics. Protobuf services[] are
 not Kubernetes Service references. No new Gateway API field or CRD change follows.
 HTTPRoute rule ExtensionRef remains the only supported runtime attachment.
-The generic dependency-status scan remains separate R4 work. R3a's scoped
-ExtensionRef migration is recorded in tasks/pending/resource-reference-contract/;
+The generic dependency-status scan was separate R4 work. R3a's scoped
+ExtensionRef migration was one slice of the shared
+[resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md);
 it does not establish descriptor-material or whole-task conformance acceptance.
 
 ## Verification and re-evaluation
@@ -61,8 +62,9 @@ These results do not establish whole-task or live conformance completion.
 
 ## Resolution references
 
-- core-api-group-alias-contract: in-progress unified reference migration, approved
-  current-HEAD GrpcJsonTranscoder inventory addition.
+- `core-api-group-alias-contract` — closed 2026-11-12; resolved by the
+  completed unified [resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md),
+  including its approved GrpcJsonTranscoder inventory addition.
 
 ## R3c Gateway consumption boundary (2026-10-08)
 
@@ -80,23 +82,26 @@ priority; otherwise wrong-stage replaces descriptor-byte compilation diagnostics
 The Resources secondary body pass uses the same rule. Inline diagnostics, enabled
 masks, entry ordinals, request/response bounds and transport ownership are unchanged.
 
-Current in-process evidence: Resources resource tests 1602 and transcoding tests 13;
+Initial-candidate in-process evidence: Resources resource tests 1602 and transcoding tests 13;
 Resources doctests 27 passed/10 ignored; Controller processor tests 929;
 Gateway plugin tests 2260 passed/17 ignored. Raw commands, source/binary hashes and
-identity comparisons are in tmp/resource-reference-contract/r3c-verification-20261008-r1.
+identity comparisons were kept in local
+`tmp/resource-reference-contract/r3c-verification-20261008-r1` evidence, which is
+no longer retained.
 The new worker test drives ConfigMap, EP, HTTPRoute and Gateway queues through exact
 raw-store lookup and process_work_item, including changed bytes/status, deletion,
 recreation, coalesced UID/generation replacement and dependency replacement/removal.
 Namespaced effective Route targets match the current raw EP UID. Route conditions
 remain independent of plugin Accepted; Gateway compilation owns fail-closed material
-validation. Raw-None EP recovery and notification are proved, but semantic target
-lookup versus bare raw keys remains R4; no alias is fabricated. Live conf_sync and
+validation. Raw-None EP recovery and notification are proved; semantic target
+lookup versus bare raw keys was left to R4 and resolved by R4d (`b872bc8c9`); no
+alias is fabricated. Live conf_sync and
 conformance are untested here. The initial candidate's first Astra result PASS and
 14 clean gates (check 47.479 seconds, Clippy 80.239 seconds) are historical and
 superseded by the second review's R3c-F1 BLOCK: upstream derived clones copied
-resolved descriptor bytes before the owning guard. Final acceptance, renewed review
-and commit status are owned by
-[progress07](../../../../tasks/pending/resource-reference-contract/07-progress.md).
+resolved descriptor bytes before the owning guard. The R3c-F1 correction below
+supersedes that candidate; the contract's final acceptance is recorded in its
+[verification evidence](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence).
 
 ### R3c-F1 constructor-copy correction
 
@@ -117,11 +122,13 @@ necessary to exclude an enclosing derived Clone bypass. Opaque raw input retenti
 deserialization and source-equality serialization are input bookkeeping outside
 executable construction; no process-wide zero-copy claim follows.
 
-Fresh corrected verification in
-`tmp/resource-reference-contract/r3c-f1-verification-20261008-r1` passed Resources
+Fresh corrected verification (kept in local
+`tmp/resource-reference-contract/r3c-f1-verification-20261008-r1` evidence, which
+is no longer retained) passed Resources
 1602 resource tests plus 13 transcoding tests, doctests 27/10 ignored, Controller
 929 processor tests, and Gateway 2264 plugin tests/17 ignored. All 253 original
 scoped IDs/assertions and the initial R3c regressions remain; source IDs total 267.
 Complete compiled IDs are Resources 1931, Controller 1751 and Gateway 5158, with
-no baseline removals. The corrected 19-path candidate requires renewed coordinator
-gates and two independent actual-result reviews; earlier PASS does not accept it.
+no baseline removals. The corrected 19-path candidate then passed renewed
+coordinator gates and two independent actual-result reviews and was committed as
+`ca7bdaf79`; the earlier PASS alone did not accept it.

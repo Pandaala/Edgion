@@ -38,15 +38,39 @@ Rules for new code:
   group as core; it does not define the literal string `core` as an alias.
 - `is_core_api_group` (`edgion-resources/src/resources/common/mod.rs`) accepts
   `""` and `"core"` and is only for the finite custom convenience fields below.
-  Native Gateway API fields never use it.
+  Native Gateway API fields never use it. The same alias is also applied inline
+  (not yet through that helper; see the
+  [follow-up todo](../../../tasks/todo/resource-reference-contract-follow-ups.md)):
+  `OwnedTarget::prepare_in_namespace` for custom Secret/ConfigMap fields in
+  `edgion-resources/src/resources/refs/owned.rs`,
+  `PolicyTargetRef::canonical_group` in
+  `edgion-resources/src/resources/refs/targets.rs`, and the EdgionBackend
+  `secret_ref_validation_errors` check in
+  `edgion-resources/src/resources/edgion_backend.rs`.
 - Literal `core` on a native field is structurally admitted by the CRD (it is a
   syntactically valid group) and then rejected at runtime: for a backendRef the
   rule reports `ResolvedRefs=False/InvalidKind` and the slot keeps its weighted
   share as a 500 (see
   [weighted invalid backendRefs](../../04-review/routing/regression-guards/weighted-invalid-backendrefs-retain-traffic-share.md)).
-- Pseudo backend kinds (`ServiceClusterIp`, `ServiceExternalName`,
-  `ServiceEndpointSlice`, `EndpointSlice`) are rejected. An actual
+- Within the core group, native backendRefs accept only exact kind `Service`;
+  pseudo backend kinds (`ServiceClusterIp`, `ServiceExternalName`,
+  `ServiceEndpointSlice`, `EndpointSlice`) are rejected there. Outside the core
+  group, HTTPRoute backendRefs also accept `edgion.io/EdgionBackend` and
+  HTTPRoute delegation, and GRPCRoute backendRefs accept GRPCRoute delegation
+  (`HTTPBackendRef::validated_target` / `GRPCBackendRef::validated_target` in
+  `edgion-resources/src/resources/refs/targets.rs`; see
+  [EdgionBackend](../05-resources/22-edgion-backend.md) and
+  [HTTPRoute](../05-resources/04-http-route.md)). TCP/TLS/UDP backendRefs and
+  `BackendObjectReference` are Service-only. An actual
   `Service.spec.type: ExternalName` selects DNS behavior with kind `Service`.
+  Custom managed-HTTP Service targets (LinkSys webhook, ForwardAuth/Guardrail,
+  AiGuard) still accept `ServiceClusterIp` and `ServiceEndpointSlice` (also
+  spelled `EndpointSlice`) as transport modes of a core Service identity
+  (`managed_http_service_target` in
+  `edgion-resources/src/resources/refs/targets.rs`; see
+  [webhook](../03-controller-gateway-link/webhook.md) and
+  [LinkSys schema](../../02-features/03-resources/18-link-sys.md)).
+  `ServiceImport` remains unimplemented on both paths.
 - ExtensionRef always requires exact `edgion.io/EdgionPlugins`; ReferenceGrant
   targets for core objects use group `""`.
 
@@ -116,8 +140,13 @@ group/kind input and no alias. Examples: `Gateway.spec.gatewayClassName`; EGC
 `dnsResolver.linkSysRef`; DSL `linksys_refs[]` (name is also the DSL alias;
 `rateLimitPolicies[].namespace` is a Redis counter namespace); Redis/Webhook
 LinkSys strings; log output `output::LinkSysRef`; ConfigData refs (IpList,
-RegionRoute override, Canary/WAF/RequestAccess profiles); Gateway/Route plugin
-and stream-plugin annotations; `edgion.io/dns-resolver-ref` on Gateway and
+RegionRoute `clusterRegionRef` (ClusterRegionSetting), Canary/WAF/RequestAccess
+profiles); GrpcJsonTranscoder
+`descriptor` with `type: configMapRef` (fixed core ConfigMap in the owning
+EdgionPlugins namespace, exact `binaryData[key]`, no cross-namespace or Grant
+capability; see the
+[descriptor ownership guard](../../04-review/resources/regression-guards/grpc-descriptor-configmap-ownership.md));
+Gateway/Route plugin and stream-plugin annotations; `edgion.io/dns-resolver-ref` on Gateway and
 Service (actual owner is the Grant source); `${secretRef:ns/name:key}` templates;
 dedicated Service `gateway-service-ref` + UID; `EDGION_GATEWAY_SCOPE`/UID;
 ACME storage and generated EdgionTls outputs (write destinations, not lookups);
@@ -127,7 +156,9 @@ apiserver; see the Controller DNS resolver).
 
 Controller and Gateway keep **different** malformed EndpointSlice fallbacks
 (Controller ignores a missing label and defaults namespace to `default`;
-Gateway falls back to `slice.name`). Do not harmonize without an impact review.
+Gateway falls back to `slice.name` for a missing label and keeps a
+namespace-less, unqualified Service key when the slice namespace is absent).
+Do not harmonize without an impact review.
 
 ## Grant policy boundaries
 
@@ -139,13 +170,95 @@ Gateway falls back to `slice.name`). Do not harmonize without an impact review.
   backend client certificates and route backends are Grant-gated; revocation
   takes effect on the next generation without restarts.
 
+## Related pages and exclusions
+
+- EGC `outboundTls` administrative selection authority:
+  [EdgionGatewayConfig](../05-resources/03-edgion-gateway-config.md).
+- EdgionPlugins missing/unique/ambiguous source contract:
+  [reference-target ambiguity](../../04-review/plugin-runtime/intentional-design/edgionplugins-key-scoped-last-known-good.md#edgionplugins-reference-target-ambiguity).
+- Admin API namespace admission:
+  [URL/body identity](../../04-review/admin-api/regression-guards/update-namespaced-reject-body-name-mismatch.md).
+- LinkSys TLS CA fields are Secret-only. A well-formed non-Secret CA kind is
+  reported invalid by OTLP and skipped by every other provider
+  (`LinkSysCaSlot::UnsupportedSkipped` in
+  `edgion-resources/src/resources/refs/link_sys_fields.rs`); neither path
+  queries a store for that kind. LinkSys has no ConfigMap CA support.
+- Classified exclusions, which are not reference fields under this contract:
+  service-owned conf_sync CA/leaf Secrets and the leader-election Lease
+  bootstrap/ownership protocols; generic `ObjectMeta.ownerReferences`; unused
+  EndpointSlice `endpoints[].targetRef`; Controller etcd bootstrap material
+  (TLS reads local PEM files and auth uses inline config credentials, without
+  resource references or synthetic Secrets); external OCI references, files,
+  DNS/network addresses and request/header/session identifiers; the Gateway
+  listener `tls.options` key `edgion.io/cert-provider` (a provider selector,
+  not a named object reference); and the EdgionTls metadata annotation
+  `edgion.io/expose-client-cert` (a boolean). Namespace label selectors keep
+  their own policy and watch path.
+
 ## Verification evidence
 
-The contract was accepted on 2026-11-05 after unit/workspace gates, Standard
-v1.6.2 conformance (HTTP Core 37, Extended 30, GRPC Core 15, TLS Core 20), live
-Kubernetes admission and Grant lifecycle traffic checks, and FS-mode dynamic
-scenarios. The ACME `AcmeGatewayRefOwnership` dynamic scenario is FS-only; the
-Kubernetes exclusion and its re-evaluation trigger live in
-`edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv`. The etcd
-source mode has no live integration harness; its parity rests on the shared
-typed ingest path and unit coverage.
+Each item carries its own revision and mode; none is a single whole-product run.
+
+- Standard v1.6.2 conformance (HTTP Core 37 / Extended 30, GRPC Core 15, TLS
+  Core 20) on product `6f566a8ae` (2026-10-11), which predates the weighted
+  correction below. See the
+  [conformance reports](../../../edgion-tests/conformance/reports/README.md).
+- Kubernetes API-server admission (34/34) and targeted runtime / Grant lifecycle
+  checks on `5e359f300` (2026-10-27): 22 of 23 runtime checks passed; the
+  failing weighted case is the one corrected below. The selected Kubernetes
+  dynamic scenarios (`CredentialInjectorDynamic`, `RequestMirrorReferenceGrant`,
+  `PmdRefFlap`, `BtlspRefFlap`) passed 4/4 in the same run.
+- Weighted invalid-backendRef correction: verified on `d01698e3e` plus the
+  scoped working-tree fix, then committed in `b69df5592` together with unrelated
+  changes; Kubernetes `PartiallyInvalid` passed 4/4 (see
+  [weighted invalid backendRefs](../../04-review/routing/regression-guards/weighted-invalid-backendrefs-retain-traffic-share.md)).
+- Source-mode parity on `d4fb7f4ad` (2026-11-12): FS file loader, FS Admin API
+  and etcd Admin API, plus API-server-defaulted objects (server-side dry-run)
+  replayed through the etcd Admin API. This is not a Kubernetes source-mode run.
+  Fixtures covered Gateway listener `certificateRefs` (omitted, explicit, literal
+  `core`, cross-namespace with and without a Grant), HTTPRoute backendRefs
+  (including a mixed weighted invalid share), ExtensionRef, and the
+  CredentialInjector Secret group (omitted, empty, `core`). The defaulted replay
+  covered only the Gateway and 11 HTTPRoutes, and the dry-run step itself was
+  not retained. Conditions, traffic and TLS outcomes were identical across all
+  variants; raw differences were limited to normalization and defaulting plus
+  per-process attachment-proof identities.
+- Native frontend-CA / backend client-certificate Grant matrix: FS mode only,
+  Secret CA only, default frontend validation only (no `perPort`, no ConfigMap
+  CA). The first run on `d4fb7f4ad` matched the expected traffic and
+  authorization outcomes on inspection in all eight Grant phases, and exposed a
+  Gateway-level `ResolvedRefs` status gap for
+  `spec.tls.backend.clientCertificateRef`. A rerun on `d4fb7f4ad` plus the then
+  uncommitted Gateway status fix showed Gateway `ResolvedRefs=False/RefNotPermitted`
+  exactly in the phases without a matching client-certificate Grant (P0, P2, P4,
+  P6) and `True` otherwise, with traffic unchanged (see the
+  [backend client-certificate status guard](../../04-review/status/regression-guards/gateway-backend-client-certificate-resolved-refs.md)).
+  The driver has no assertions; outcomes were checked by inspection.
+- `AcmeGatewayRefOwnership` passed in FS mode; its Kubernetes run is a recorded
+  harness exception in
+  `edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv`.
+
+Limits: the 2026-11-12 runs were manual one-off drivers whose evidence stayed
+local and is not retained in the repository. etcd has a leader-failover script
+(`edgion-tests/integration/scripts/integration/etcd_leader/run_etcd_leader_failover.sh`),
+but the resource integration and dynamic suites have no etcd-mode run
+(`run_integration.sh` has no etcd mode). No full `cargo test --all` and no
+conformance rerun followed the weighted correction. Reference-module changes
+after the `5e359f300` Kubernetes run, including the route-field change
+`6bd9196fb` (2026-11-05), have no Kubernetes live run; the 2026-11-12 FS/etcd
+runs exercise them only where their fixtures apply (for example route fields).
+`d4fb7f4ad` itself changed Gateway plugin-attachment failure policy (invalid
+attachment slots become fail-closed sentinels); its unit and integration
+verification is recorded in
+[gw-core-02b](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md#malformed-gateway-level-and-egc-global-references-fail-closed-gw-core-02b),
+but no independent review of that change is recorded. The contract task closed
+on 2026-11-12. Unmet documentation, permanent dynamic-scenario and
+alias-consolidation items are tracked in the
+[follow-up todo](../../../tasks/todo/resource-reference-contract-follow-ups.md).
+
+## Resolution references
+
+- `core-api-group-alias-contract` — closed 2026-11-12. The standard versus
+  Edgion-extension question is answered by [Group semantics](#group-semantics):
+  empty group is Kubernetes core, and literal `core` is a finite Edgion custom
+  convenience that native Gateway API fields reject.

@@ -46,7 +46,8 @@ This does not unbind a socket or change the startup-only listener lifecycle (ARC
 2. **Resolve the backend client certificate**: resolve
    `spec.tls.backend.clientCertificateRef`, register it in SecretRefManager, and populate
    `resolvedClientCertificate` for conf_sync. Cross-namespace references require a
-   ReferenceGrant.
+   ReferenceGrant. The resolution outcome is kept on a schema-hidden, non-serialized
+   field that `update_status` consumes in the same pass.
 3. **Resolve listener TLS certificates**: iterate over each Listener's `tls.certificateRefs`:
    - Register the reference relationship in SecretRefManager (Secret changes will automatically requeue this Gateway)
    - If it is a cross-namespace reference, also register it in CrossNsRefManager
@@ -76,6 +77,12 @@ This does not unbind a socket or change the startup-only listener lifecycle (ARC
 - **Gateway-level Conditions**:
   - `Accepted`: True when there are no validation_errors
   - `ListenersNotValid`: True when there is a port conflict within the same Gateway
+  - `ResolvedRefs`: one merged condition for plugin, stream-plugin, DNS-resolver,
+    inbound PROXY and backend client-certificate references. An unpermitted
+    `spec.tls.backend.clientCertificateRef` sets `RefNotPermitted`; an invalid,
+    nonexistent or malformed one sets `InvalidClientCertificateRef`; a key that does
+    not match its certificate sets `InvalidCertificate`. See the
+    [backend client-certificate status guard](../../04-review/status/regression-guards/gateway-backend-client-certificate-resolved-refs.md).
 - **Listener-level** (each Listener independently):
   - `Accepted`: True when there are no validation_errors
   - `Conflicted`: True when Listener ports conflict within the same Gateway (not detected across Gateways)

@@ -84,10 +84,25 @@ pub(super) struct PreparedGatewayIdentity {
 impl PreparedGatewayIdentity {
     pub fn new(secret: &Secret) -> Self {
         Self {
-            identity: build_client_cert_key_from_secret(secret),
+            identity: build_gateway_client_identity(secret),
             fingerprint: secret_data_fingerprint(secret),
         }
     }
+}
+
+fn build_gateway_client_identity(secret: &Secret) -> Result<Arc<CertKey>, EdgionErrorCode> {
+    let data = secret.data.as_ref().ok_or(EdgionErrorCode::Unknown)?;
+    let cert = data.get(CERT).ok_or(EdgionErrorCode::Unknown)?;
+    let key = data.get(KEY).ok_or(EdgionErrorCode::Unknown)?;
+    let (chain, key) = edgion_common::tls_validation::parse_gateway_client_identity(&cert.0, &key.0)
+        .map_err(|_| EdgionErrorCode::Unknown)?;
+    let certs = chain
+        .iter()
+        .map(|der| X509::from_der(der))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| EdgionErrorCode::Unknown)?;
+    let key = PKey::private_key_from_der(key.der.secret_der()).map_err(|_| EdgionErrorCode::Unknown)?;
+    Ok(Arc::new(CertKey::new(certs, key)))
 }
 
 fn evaluate_sans(sans: &[SubjectAltName], extract: impl FnOnce() -> Vec<String>) -> BackendSanValidationResult {

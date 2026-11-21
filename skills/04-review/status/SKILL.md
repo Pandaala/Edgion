@@ -26,5 +26,6 @@ before applying a decision to current code.
 - [Canonical parent status ownership](regression-guards/canonical-parent-status-ownership.md)
 
 - [EdgionBackend partial pools keep ResolvedRefs false](regression-guards/ai-backend-partial-pool-keeps-resolvedrefs-false.md)
+- [Gateway backend client certificate drives Gateway ResolvedRefs](regression-guards/gateway-backend-client-certificate-resolved-refs.md)
 
 - [Native status sidecar cleanup](regression-guards/native-status-sidecar-cleanup.md)

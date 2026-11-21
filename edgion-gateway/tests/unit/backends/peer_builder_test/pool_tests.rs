@@ -193,10 +193,8 @@ fn pool_isolation_composes_gateway_rotation_and_policy_precedence() {
                     ),
                     (KEY, &key.serialize_pem()),
                 ]),
-                secret(&[
-                    (CERT, &chain),
-                    (KEY, &rcgen::KeyPair::generate().unwrap().serialize_pem()),
-                ]),
+                // Rotate only the key PEM bytes while keeping a usable identity.
+                secret(&[(CERT, &chain), (KEY, &format!("{}\n", key.serialize_pem()))]),
             ] {
                 store.update_from_gateway(
                     gateway.0,
@@ -208,6 +206,24 @@ fn pool_isolation_composes_gateway_rotation_and_policy_precedence() {
                     peer(policy_identity.clone(), Some(gateway.0)).reuse_hash()
                 );
             }
+            let mismatched = secret(&[
+                (CERT, &chain),
+                (KEY, &rcgen::KeyPair::generate().unwrap().serialize_pem()),
+            ]);
+            store.update_from_gateway(
+                gateway.0,
+                &super::tests::gateway_identity_owner("test", "pool-isolation-gateway", mismatched),
+            );
+            assert!(create_tls_peer(
+                SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+                &EffectiveBackendTlsPolicy::from_policy(Arc::new(base.clone())),
+                Some(gateway.0),
+            )
+            .is_err());
+            assert_eq!(
+                explicit.reuse_hash(),
+                peer(policy_identity, Some(gateway.0)).reuse_hash()
+            );
             store.remove(gateway.0);
             assert_eq!(anonymous.reuse_hash(), peer(base, Some(gateway.0)).reuse_hash());
         },

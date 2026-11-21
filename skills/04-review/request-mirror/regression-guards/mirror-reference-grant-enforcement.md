@@ -182,5 +182,6 @@ Resources 1601 tests passed plus 27 doctests/10 ignored, and Gateway 2254 plugin
 tests passed/17 ignored. The amended 297 original scoped tests are preserved,
 with 14 additions and unchanged ignores; complete three-crate compiled lists have
 no removals. Raw commands, failures, source/binary hashes and identity comparisons
-are retained in `tmp/resource-reference-contract/r3b-verification-20261008-r1`.
-Workspace gates and independent actual-result review remain separate pending gates.
+were kept in local `tmp/resource-reference-contract/r3b-verification-20261008-r1`
+evidence, which is no longer retained. Workspace gates and independent
+actual-result review then passed, and R3b was committed as `16e7be6dc`.

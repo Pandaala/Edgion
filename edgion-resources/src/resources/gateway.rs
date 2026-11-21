@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::common::Condition;
 use super::proxy_protocol::ResolvedInboundProxyProtocol;
+use super::refs::ReferenceError;
 
 /// Gateway API listener cardinality bound. Kubernetes admission normally
 /// enforces this; FS/etcd and forged conf-sync objects must enforce it too.
@@ -280,6 +281,19 @@ pub struct GatewayBackendTLS {
     )]
     #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
+    /// Controller-only outcome of resolving `client_certificate_ref`. Gateway
+    /// status consumes it in the same processing pass; it is never transported.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_client_certificate_error: Option<ClientCertificateResolutionError>,
+}
+
+/// Why the Controller could not resolve `spec.tls.backend.clientCertificateRef`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientCertificateResolutionError {
+    InvalidReference(ReferenceError),
+    RefNotPermitted,
+    NotFound,
 }
 
 /// Gateway-level frontend TLS — client certificate validation config

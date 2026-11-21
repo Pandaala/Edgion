@@ -77,4 +77,6 @@ rather than suppressing unrelated current defects.
 
 This contract does not change workqueue processing, etcd lease/CAS behavior,
 endpoint discovery, message bounds, egress classification or Gateway API fields.
-The reference-unification task's whole-runtime and conformance gates remain open.
+The reference-unification task closed on 2026-11-12; its runtime and
+conformance evidence, with revisions and limits, is summarized in the
+[resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence).

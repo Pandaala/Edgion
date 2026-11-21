@@ -87,8 +87,13 @@ The canonical HTTP factory's owning-selection entry rejects raw TLS substitution
 and shares existing native TLS application and configuration auditing. Query config
 copies only query fields and never clones connection/Secret material to discard.
 Public direct fetcher construction validates the same full actual-owner candidate.
-Other providers, plugin transports and reference-annotation ownership remain open
-under tasks/pending/resource-reference-contract/; this is not a full-task verdict.
+Reference identity, including reference-annotation ownership, is covered by the
+shared [resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md);
+other providers' and plugin transports by the
+[Outbound TLS unification point](../../../01-architecture/00-common/05-unification-points.md#3-outbound-tls-resolution--unified).
+Managed HTTP plugin and internal HTTPRoute auth transports migrated in R7a
+(`418e353dd`) and R7b (`78d0f168c`); OIDC, LDAP, ExtProc and Wasm transports in
+R11c.1-R11c.4 (through `3cd8d681c`). This HTTPDNS guard covers neither.
 
 ## Alternatives and limits
 
@@ -112,8 +117,8 @@ Common/Controller/Gateway library checking passed. Controller DNS tests passed 1
 Gateway store tests passed 37 and the existing real HTTPDNS transport tests passed
 14. These cover both incoming source/pairing replay gates, repeated failed reuse,
 repair, direct actual-owner construction and comparison-only zero audit. Layout
-and reference-contract drift checks passed; agent-doc validation still has three
-current-HEAD dangling gRPC task links tracked in the reference task. These scoped
+and reference-contract drift checks passed; agent-doc validation then reported three
+dangling gRPC task links, tracked in the reference task at the time. These scoped
 results do not establish live conformance, all-provider runtime coverage or
 whole-task completion.
 

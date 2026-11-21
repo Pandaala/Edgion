@@ -158,8 +158,12 @@ policy. TLS/client construction failure must never select an unconfigured client
   captured snapshot and inherited encoder before persistent reuse. Enabled local
   TLS or implicit rediss selects transport; disabled refs stay inert. One resolved
   result emits validated PEM roots and client identity for redis-rs
-  across reconnect. The reference task has completed the scoped owning transport
-  and replay migrations through R12b; fresh live acceptance remains open.
+  across reconnect. The shared reference contract completed the scoped owning
+  transport and replay migrations through R12b. The contract's live evidence and
+  its limits are recorded in its
+  [verification evidence](06-resource-reference-contract.md#verification-evidence);
+  it includes no live LinkSys TLS transport run (Redis/ES/Kafka/etcd/OTLP with
+  custom CA or mTLS).
   Redis and Elasticsearch now share PreparedLinkSysTls's immutable actual-owner,
   reference-topology, captured-default and whole-selection orchestration; their
   closed adapters retain distinct transport/inheritance decisions. ES uses the

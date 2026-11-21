@@ -121,5 +121,6 @@ New deterministic tests exercise actual event queues for Secret repair and Grant
 revocation, declaration/locality inheritance, malformed/forged fields, exact TLS
 identity failure, and both Gateway sealing paths. The prior test counts above are
 historical evidence, not a fresh result for this change. Focused verification and
-whole-repository gates are recorded by the active resource-reference task. Neither
-these tests nor the internal decoder constitute live Kubernetes conformance.
+whole-repository gates were recorded in the closed resource-reference task (git
+history at `d4fb7f4ad`). Neither these tests nor the internal decoder constitute
+live Kubernetes conformance.

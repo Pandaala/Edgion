@@ -80,10 +80,12 @@ renewal.
 ## Notes
 - Checked `skills/04-review/acme/*`. `secret-reference-target-identity.md` covers the *account* Secret
   and states that it "does not ... prove a credential disclosure or cross-namespace bypass". No page
-  covers the output destination. `acme-service-shape.md` is about service structure.
-- `tasks/pending/resource-reference-contract/02-field-manifest.md:285` lists
-  `storage.secretName/secretNamespace` as a "Core Secret write destination" whose fencing must be
-  preserved. It does not discuss authorization of the destination, so this is new analysis.
+  covers the output destination's authorization. `acme-service-shape.md` is about service structure.
+- `skills/01-architecture/00-common/06-resource-reference-contract.md` ("Fixed identities") lists ACME storage outputs as write destinations, not lookups.
+  It does not discuss authorization of the destination, so this is new analysis. Any fix must still
+  preserve the existing target-Secret UID/resourceVersion preconditions in
+  `create_or_update_cert_secret` and the ACME Lease fencing (see
+  `skills/04-review/acme/regression-guards/acme-scheduler-fencing-recovery.md`).
 - The `CLAUDE.md` SSA-force rule (every `Patch::Apply` must be forced) is why this cannot be fixed by
   dropping `force`. The ownership check has to happen before the apply.
 
@@ -93,7 +95,7 @@ Verdict: CONFIRMED. Severity P1 kept.
 - `AcmeOutputRefs::certificate()` (`edgion-resources/src/resources/refs/acme_fields.rs:186-200`) takes `spec.storage.secret_namespace` verbatim; the only field use in the whole tree is that line (grep), so no handler or ReferenceGrant check guards the write destination.
 - `create_or_update_cert_secret` (`edgion-controller/src/services/acme/service.rs:1813-1886`) calls `validate_certificate_metadata`, which only re-compares name/namespace with the same target (`acme_fields.rs:137-154,217-219`), then force-applies over the existing Secret, copying its `uid`/`resourceVersion`. No `edgion.io/managed-by` / `acme-resource` ownership check precedes the overwrite.
 - Controller ClusterRole grants create/update/patch/delete on all Secrets (`cicd/deploy/kubernetes/controller/rbac.yaml:31-37`), so the confused-deputy write is authorized cluster-wide; `kubernetes.io/tls` Secrets in the system namespace (e.g. conf_sync leaf certs) are reachable targets.
-- No `skills/04-review/acme/*` page covers the output destination; `secret-reference-target-identity.md` is about the account Secret only.
+- No `skills/04-review/acme/*` page covers the output destination's authorization; `secret-reference-target-identity.md` is about the account Secret only.
 
 ## Re-verification (feature-10-28)
 

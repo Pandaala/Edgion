@@ -97,8 +97,10 @@ consumer: fixing only the front-end gates left it consuming inactive policy.
 Historical filtering at LinkSys preparation fixed that defect. The current owning
 selection preserves that gate and proves actual source/material before replay;
 the scoped plugin-client migrations through R11 and obsolete-entry retirement in
-R12b are complete. Fresh live/admission/conformance acceptance remains open in the
-reference task; these source results do not establish it.
+R12b are complete. Live/admission/conformance acceptance of the contract is
+recorded separately in its
+[verification evidence](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence); these source results do not
+establish it.
 
 ### Controller OAuth2 owning transport
 

@@ -64,10 +64,13 @@ Gateway publication tests. Current-binary Kubernetes PartiallyInvalid passed 4/4
 24 requests per mixed-invalid path yielded 12 HTTP 200 and 12 HTTP 500; the
 all-invalid and zero-weight controls yielded 24 HTTP 500 and 24 HTTP 200,
 respectively. The same-name/different-name core probe also recovered its 1:1
-failure share. Evidence and preparation failures remain separately recorded under
-`tmp/resource-reference-contract/k8s-weighted-fix-20261027/` and the reference
-task's progress record. These bounded checks do not establish full source-mode
-parity or a new Standard conformance result.
+failure share. Evidence and preparation failures were recorded separately in local
+`tmp/resource-reference-contract/k8s-weighted-fix-20261027/` evidence, which is no
+longer retained, and in the closed reference task's progress record (git history
+at `d4fb7f4ad`). These bounded checks do not establish source-mode parity (FS/etcd
+parity and its limits are recorded separately in the contract's
+[verification evidence](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence))
+or a new Standard conformance result.
 
 ## Native HTTP error boundary
 

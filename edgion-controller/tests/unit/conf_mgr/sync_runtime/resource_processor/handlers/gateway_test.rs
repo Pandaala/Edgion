@@ -1491,6 +1491,7 @@ async fn gateway_backend_client_certificate_is_resolved_and_registered() {
     gw.metadata.name = Some("my-gateway".to_string());
     gw.spec.tls = Some(GatewaySpecTLS {
         backend: Some(GatewayBackendTLS {
+            resolved_client_certificate_error: None,
             client_certificate_ref: Some(SecretObjectReference {
                 group: None,
                 kind: None,
@@ -1906,6 +1907,7 @@ fn attachment_proof_excludes_private_key_and_metadata_noise() {
     let first = build_gateway_attachment_proof(&gateway, "boot-a", 10);
     gateway.spec.tls = Some(GatewaySpecTLS {
         backend: Some(GatewayBackendTLS {
+            resolved_client_certificate_error: None,
             client_certificate_ref: Some(SecretObjectReference {
                 group: None,
                 kind: None,
@@ -3116,6 +3118,7 @@ fn native_gateway_scrubs_forged_material_in_inactive_passthrough_and_overcap_fie
         let mut gateway = native_tls_gateway();
         gateway.spec.tls = Some(GatewaySpecTLS {
             backend: Some(GatewayBackendTLS {
+                resolved_client_certificate_error: None,
                 client_certificate_ref: None,
                 resolved_client_certificate: Some(Secret::default()),
             }),
@@ -3684,4 +3687,377 @@ async fn shared_admission_ignores_unconstructible_class_and_recovers_through_pub
     ));
     // Conditions are not a generic Ready prerequisite; only class/target shape
     // and the published constructor inputs above establish constructibility.
+}
+
+fn backend_client_identity_secret(namespace: &str, name: &str, data: &[(&str, Vec<u8>)]) -> Secret {
+    Secret {
+        metadata: kube::api::ObjectMeta {
+            namespace: Some(namespace.to_string()),
+            name: Some(name.to_string()),
+            ..Default::default()
+        },
+        type_: Some("kubernetes.io/tls".to_string()),
+        data: Some(
+            data.iter()
+                .map(|(key, value)| (key.to_string(), ByteString(value.clone())))
+                .collect(),
+        ),
+        ..Default::default()
+    }
+}
+
+fn backend_client_identity_pem_pair() -> (Vec<u8>, Vec<u8>) {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["gateway-client.example.com".to_string()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    (cert.pem().into_bytes(), key.serialize_pem().into_bytes())
+}
+
+/// Process one Gateway generation through parse + update_status and return the
+/// Gateway-level ResolvedRefs condition.
+async fn gateway_backend_client_resolved_refs(
+    runtime: &Arc<ControllerRuntime>,
+    reference: serde_json::Value,
+) -> edgion_resources::resources::common::Condition {
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+        "metadata": {"name": "edge", "namespace": "gw-ns", "generation": 3},
+        "spec": {"gatewayClassName": "test",
+            "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}],
+            "tls": {"backend": {"clientCertificateRef": reference}}}
+    }))
+    .unwrap();
+    let handler = GatewayHandler::new(None, None);
+    let errors = handler.validate(&gateway, &ctx);
+    let ProcessResult::Continue(mut gateway) = handler.parse(gateway, &ctx).await else {
+        panic!("Gateway parse must retain the object for status reporting");
+    };
+    handler.update_status(&mut gateway, &ctx, &errors);
+    gateway
+        .status
+        .unwrap()
+        .conditions
+        .unwrap()
+        .into_iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .expect("Gateway-level ResolvedRefs condition")
+}
+
+#[tokio::test]
+async fn backend_client_certificate_cross_namespace_grant_drives_gateway_resolved_refs() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let cert = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../edgion-common/tests/fixtures/gateway-client-cert.pem"
+    ))
+    .to_vec();
+    let key = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../edgion-common/tests/fixtures/gateway-client-ec.pem"
+    ))
+    .to_vec();
+    runtime.secret_store.update(
+        HashMap::from([(
+            "certs/client".to_string(),
+            backend_client_identity_secret("certs", "client", &[("tls.crt", cert), ("tls.key", key)]),
+        )]),
+        &HashSet::new(),
+    );
+    let reference = serde_json::json!({"name": "client", "namespace": "certs"});
+
+    let denied = gateway_backend_client_resolved_refs(&runtime, reference.clone()).await;
+    assert_eq!(denied.status, "False");
+    assert_eq!(denied.reason, "RefNotPermitted");
+    assert!(denied.message.contains("certs/client"), "{}", denied.message);
+
+    runtime.ref_grant_store.upsert(
+        "certs/allow".into(),
+        Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "allow", "namespace": "certs"},
+                "spec": {"from": [{"group": "gateway.networking.k8s.io", "kind": "Gateway", "namespace": "gw-ns"}],
+                         "to": [{"group": "", "kind": "Secret", "name": "client"}]}
+            }))
+            .unwrap(),
+        ),
+    );
+    let granted = gateway_backend_client_resolved_refs(&runtime, reference.clone()).await;
+    assert_eq!(granted.status, "True", "{}", granted.message);
+    assert_eq!(granted.reason, "ResolvedRefs");
+
+    runtime.ref_grant_store.remove("certs/allow");
+    let revoked = gateway_backend_client_resolved_refs(&runtime, reference).await;
+    assert_eq!(revoked.status, "False");
+    assert_eq!(revoked.reason, "RefNotPermitted");
+}
+
+#[tokio::test]
+async fn backend_client_certificate_unresolvable_misconfigured_or_unusable_sets_resolved_refs_false() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let (cert, key) = backend_client_identity_pem_pair();
+    let (_, other_key) = backend_client_identity_pem_pair();
+    runtime.secret_store.update(
+        HashMap::from([
+            (
+                "gw-ns/no-key".to_string(),
+                backend_client_identity_secret("gw-ns", "no-key", &[("tls.crt", cert.clone())]),
+            ),
+            (
+                "gw-ns/garbage".to_string(),
+                backend_client_identity_secret(
+                    "gw-ns",
+                    "garbage",
+                    &[("tls.crt", b"not a certificate".to_vec()), ("tls.key", key.clone())],
+                ),
+            ),
+            (
+                "gw-ns/mismatched".to_string(),
+                backend_client_identity_secret(
+                    "gw-ns",
+                    "mismatched",
+                    &[("tls.crt", cert.clone()), ("tls.key", other_key)],
+                ),
+            ),
+            (
+                "gw-ns/valid".to_string(),
+                backend_client_identity_secret("gw-ns", "valid", &[("tls.crt", cert), ("tls.key", key)]),
+            ),
+        ]),
+        &HashSet::new(),
+    );
+
+    // Nonexistent, unsupported or malformed references use the standard reason;
+    // a key that does not match its certificate uses the implementation-specific one.
+    for (reference, reason, detail) in [
+        (
+            serde_json::json!({"name": "absent"}),
+            "InvalidClientCertificateRef",
+            "gw-ns/absent: Secret not found",
+        ),
+        (
+            serde_json::json!({"name": "no-key"}),
+            "InvalidClientCertificateRef",
+            "gw-ns/no-key: missing required keys",
+        ),
+        (
+            serde_json::json!({"name": "valid", "group": "core"}),
+            "InvalidClientCertificateRef",
+            "gw-ns/valid: invalid reference: ",
+        ),
+        (
+            serde_json::json!({"name": "valid", "kind": "ConfigMap"}),
+            "InvalidClientCertificateRef",
+            "gw-ns/valid: invalid reference: ",
+        ),
+        (
+            serde_json::json!({"name": "garbage"}),
+            "InvalidClientCertificateRef",
+            "gw-ns/garbage: invalid certificate PEM data",
+        ),
+        (
+            serde_json::json!({"name": "mismatched"}),
+            "InvalidCertificate",
+            "gw-ns/mismatched: ",
+        ),
+    ] {
+        let condition = gateway_backend_client_resolved_refs(&runtime, reference.clone()).await;
+        assert_eq!(condition.status, "False", "{reference}: {}", condition.message);
+        assert_eq!(condition.reason, reason, "{reference}: {}", condition.message);
+        assert!(condition.message.contains(detail), "{reference}: {}", condition.message);
+    }
+
+    let valid = gateway_backend_client_resolved_refs(&runtime, serde_json::json!({"name": "valid"})).await;
+    assert_eq!(valid.status, "True", "{}", valid.message);
+    assert_eq!(valid.reason, "ResolvedRefs");
+}
+
+#[test]
+fn backend_client_certificate_reason_outranks_extension_errors_in_one_condition() {
+    use edgion_resources::resources::gateway::ClientCertificateResolutionError;
+    use edgion_resources::resources::refs::ReferenceError;
+
+    for (error, expected_reason, detail) in [
+        (
+            ClientCertificateResolutionError::RefNotPermitted,
+            "RefNotPermitted",
+            "is not permitted by any ReferenceGrant",
+        ),
+        (
+            ClientCertificateResolutionError::InvalidReference(ReferenceError::UnsupportedTarget),
+            "InvalidClientCertificateRef",
+            "invalid reference: unsupported reference target",
+        ),
+    ] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let mut gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"missing"}}"#);
+        gateway.spec.resolved_inbound_proxy_protocol = ResolvedInboundProxyProtocol::Invalid {
+            code: ProxyProtocolConfigErrorCode::ReferenceNotFound,
+            listener_names: vec!["http".to_string()],
+            reference: Some(
+                edgion_resources::resources::proxy_protocol::BoundedProxyProtocolReferenceIdentity::new(
+                    "default".to_string(),
+                    "missing".to_string(),
+                )
+                .unwrap(),
+            ),
+        };
+        gateway
+            .metadata
+            .annotations
+            .get_or_insert_with(Default::default)
+            .insert("edgion.io/edgion-plugins".into(), "missing-plugin".into());
+        gateway.spec.tls = Some(GatewaySpecTLS {
+            backend: Some(GatewayBackendTLS {
+                client_certificate_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "client".to_string(),
+                    namespace: Some("certs".to_string()),
+                }),
+                resolved_client_certificate: None,
+                resolved_client_certificate_error: Some(error),
+            }),
+            frontend: None,
+        });
+
+        GatewayHandler::new(None, None).update_status(&mut gateway, &ctx, &[]);
+        let conditions = gateway.status.unwrap().conditions.unwrap();
+        let resolved: Vec<_> = conditions
+            .iter()
+            .filter(|condition| condition.type_ == "ResolvedRefs")
+            .collect();
+        assert_eq!(resolved.len(), 1, "one merged Gateway-level ResolvedRefs condition");
+        assert!(
+            resolved[0]
+                .message
+                .contains("EdgionPlugins not found: default/missing-plugin"),
+            "{}",
+            resolved[0].message
+        );
+        assert_eq!(resolved[0].status, "False");
+        assert_eq!(resolved[0].reason, expected_reason, "{}", resolved[0].message);
+        assert!(
+            resolved[0].message.contains(detail) && resolved[0].message.contains("certs/client"),
+            "{}",
+            resolved[0].message
+        );
+        assert!(
+            resolved[0].message.contains("default/missing"),
+            "PROXY reference error must stay in the merged message: {}",
+            resolved[0].message
+        );
+    }
+}
+
+#[test]
+fn tls_keypair_secret_check_classifies_and_orders_problems() {
+    use super::{check_tls_keypair_secret, TlsKeypairSecretProblem};
+
+    let (cert, key) = backend_client_identity_pem_pair();
+    let (_, other_key) = backend_client_identity_pem_pair();
+    let secret = |data: Option<Vec<(&str, Vec<u8>)>>| Secret {
+        data: data.map(|entries| {
+            entries
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), ByteString(value)))
+                .collect()
+        }),
+        ..Default::default()
+    };
+    let malformed = |reasons: &[&str]| {
+        Some(TlsKeypairSecretProblem::Malformed(
+            reasons.iter().map(|reason| reason.to_string()).collect(),
+        ))
+    };
+    let missing = "missing required keys 'tls.crt' and/or 'tls.key'";
+
+    assert_eq!(check_tls_keypair_secret(&secret(None)), malformed(&["no data"]));
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![("tls.crt", cert.clone())]))),
+        malformed(&[missing])
+    );
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![("tls.key", key.clone())]))),
+        malformed(&[missing])
+    );
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![("tls.crt", Vec::new()), ("tls.key", key.clone())]))),
+        malformed(&["empty certificate or key data"])
+    );
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![
+            ("tls.crt", b"bad".to_vec()),
+            ("tls.key", key.clone())
+        ]))),
+        malformed(&["invalid certificate PEM data"])
+    );
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![
+            ("tls.crt", cert.clone()),
+            ("tls.key", b"bad".to_vec())
+        ]))),
+        malformed(&["invalid private key PEM data"])
+    );
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![
+            ("tls.crt", b"bad".to_vec()),
+            ("tls.key", b"bad".to_vec())
+        ]))),
+        malformed(&["invalid certificate PEM data", "invalid private key PEM data"]),
+        "certificate problems are reported before key problems"
+    );
+    assert!(matches!(
+        check_tls_keypair_secret(&secret(Some(vec![("tls.crt", cert.clone()), ("tls.key", other_key)]))),
+        Some(TlsKeypairSecretProblem::KeyMismatch(_))
+    ));
+    assert_eq!(
+        check_tls_keypair_secret(&secret(Some(vec![("tls.crt", cert), ("tls.key", key)]))),
+        None
+    );
+}
+
+#[test]
+fn listener_serving_secret_reports_every_malformed_reason_in_order() {
+    let runtime = ControllerRuntime::default();
+    let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "edge", "namespace": "gw-ns"},
+        "spec": {"gatewayClassName": "test", "listeners": [
+            {"name": "https", "protocol": "HTTPS", "port": 443, "tls": {"certificateRefs": [{"name": "bad"}]}}
+        ]}
+    }))
+    .unwrap();
+    let mut listener = gateway.spec.listeners.as_ref().unwrap()[0].clone();
+    listener.tls.as_mut().unwrap().resolved_certificate_refs = Some(vec![ResolvedServingCertificateReference {
+        index: 0,
+        source: ServingCertificateSourceIdentity {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            namespace: "gw-ns".to_string(),
+            name: "bad".to_string(),
+        },
+        secret: Some(Secret {
+            data: Some(BTreeMap::from([
+                ("tls.crt".to_string(), ByteString(b"bad".to_vec())),
+                ("tls.key".to_string(), ByteString(b"bad".to_vec())),
+            ])),
+            ..Default::default()
+        }),
+        error: None,
+    }]);
+
+    let messages: Vec<String> = validate_listener_resolved_refs(&gateway, &listener, &runtime)
+        .iter()
+        .map(|error| error.message())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "Secret 'gw-ns/bad' invalid: invalid certificate PEM data",
+            "Secret 'gw-ns/bad' invalid: invalid private key PEM data",
+        ]
+    );
 }

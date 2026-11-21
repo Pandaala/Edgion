@@ -51,3 +51,33 @@ fn shared_san_configuration_has_independent_results_and_rejects_panics() {
     assert!(!panicked.passed);
     assert_eq!(panicked.reason, "backend SAN validation panicked");
 }
+
+#[test]
+fn gateway_identity_loads_ec_key_with_leading_parameters() {
+    let secret = Secret {
+        data: Some(std::collections::BTreeMap::from([
+            (
+                CERT.into(),
+                k8s_openapi::ByteString(
+                    include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../edgion-common/tests/fixtures/gateway-client-cert.pem"
+                    ))
+                    .to_vec(),
+                ),
+            ),
+            (
+                KEY.into(),
+                k8s_openapi::ByteString(
+                    include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../edgion-common/tests/fixtures/gateway-client-ec.pem"
+                    ))
+                    .to_vec(),
+                ),
+            ),
+        ])),
+        ..Default::default()
+    };
+    assert!(PreparedGatewayIdentity::new(&secret).identity.is_ok());
+}

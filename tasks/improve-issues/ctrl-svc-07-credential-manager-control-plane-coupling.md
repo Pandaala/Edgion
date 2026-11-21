@@ -77,8 +77,8 @@ Options:
 - Checked `skills/04-review/security/intentional-design/credential-copy-retention.md` (copy
   ownership, not availability), `link-sys/regression-guards/credential-source-single-active-memory.md`
   (memory-store shape), `skills/01-architecture/05-resources/18-link-sys.md`. None evaluates the
-  control-plane/data-plane availability coupling. Related: `tasks/pending/resource-reference-contract/`
-  mentions CredentialSource references only.
+  control-plane/data-plane availability coupling. Related: `skills/01-architecture/00-common/06-resource-reference-contract.md`
+  covers CredentialSource references only (OAuth2 Secret/TLS refs and generated credential Secrets).
 - The leader-failover window claim follows from the per-process memory store; its exact length
   depends on initial-processing order and should be measured before choosing option 2.
 

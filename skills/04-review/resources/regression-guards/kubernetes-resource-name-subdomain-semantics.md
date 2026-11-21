@@ -73,12 +73,15 @@ tests acquire through actual owner tokens, distinguish readonly from dependency
 registration, and observe zero reads/edges for invalid owners. HTTP tests compile
 backend-bearing routes and retain the long owner's attribution.
 
-Test source alone is not an execution result. Fresh commands, preservation evidence,
-independent reviews and acceptance belong to the
-[resource-reference task progress](../../../../tasks/pending/resource-reference-contract/07-progress.md).
+Test source alone is not an execution result. Fresh commands, preservation evidence
+and independent reviews were recorded in the closed resource-reference task (git
+history at `d4fb7f4ad`); the contract's live acceptance is summarized in its
+[verification evidence](../../../01-architecture/00-common/06-resource-reference-contract.md#verification-evidence).
 Unit/material pairing and cold route compilation do not establish live admission,
-conf_sync, traffic, certificate usability, TLS handshakes or conformance. Those
-remain separate F2 acceptance obligations. Revisit this rule if Kubernetes changes
+conf_sync, traffic, certificate usability, TLS handshakes or conformance; those
+were separate F2 acceptance checks. The 2026-10-27 Kubernetes run on `5e359f300`
+passed long-name admission (34/34 admission cases overall) and the long-name
+HTTP/TLS runtime cases. Revisit this rule if Kubernetes changes
 name semantics, a new caller validates real DNS names, or a field gains an explicit
 independent product grammar.
 
