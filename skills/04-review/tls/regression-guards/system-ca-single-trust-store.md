@@ -109,8 +109,8 @@ TCP/TLS-route connectors (`TransportConnector::new(None)`) only dial plain TCP.
   builds `tls::Connector::new(None)`, whose private `init_ssl_cert_env_vars`
   wrapper calls openssl-probe and may set those variables inside the process, so
   the result can depend on listener construction order.
-  The current trust layout is accepted pending the
-  [tracked Pingora fork change](../../../../tasks/todo/backend-tls-system-trust-exact-bundle.md).
+  The current trust layout is accepted pending a
+  [decision on the proposed Pingora fork change](../../../../tasks/block/backend-tls-system-trust-exact-bundle.md).
   In the shipped Debian images, the probe, the hash directory and the bundle come from the same
   `update-ca-certificates` set; on RHEL-family hosts `/etc/ssl/cert.pem` and
   `/etc/ssl/certs` link into `/etc/pki/tls`, which `update-ca-trust` fills from the
