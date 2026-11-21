@@ -17,12 +17,13 @@ static int fixture_resolve(const char *node, const char *service,
 #endif
     if (!original) return EAI_SYSTEM;
 
+    int warmup = node && strcmp(node, "warmup.oidc-egress.test") == 0;
     int mixed = node && strcmp(node, "mixed.oidc-egress.test") == 0;
     int blocked = node && (
         strcmp(node, "blocked.oidc-egress.test") == 0 ||
         strcmp(node, "blocked-jwks.oidc-egress.test") == 0 ||
         strcmp(node, "blocked-token.oidc-egress.test") == 0);
-    if (!mixed && !blocked) return original(node, service, hints, result);
+    if (!warmup && !mixed && !blocked) return original(node, service, hints, result);
 
     /* Unspecified addresses are reachable traps in the scenario but must be
      * removed by EgressResolver. Mixed resolution retains loopback only in
@@ -36,6 +37,7 @@ static int fixture_resolve(const char *node, const char *service,
     options.ai_flags |= AI_NUMERICHOST;
     options.ai_flags &= ~AI_ADDRCONFIG;
     options.ai_family = AF_UNSPEC;
+    if (warmup) return original("127.0.0.1", service, &options, result);
     *result = NULL;
     struct addrinfo **tail = result;
     for (unsigned i = 0; i < 2; i++) {

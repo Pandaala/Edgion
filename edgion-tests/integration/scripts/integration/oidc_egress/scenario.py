@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 ADMIN_TOKEN = "oidc-egress-integration-admin-token-0123456789"
 ROUTE_HOST = "oidc-egress.example.com"
 IDP_HOST = "mixed.oidc-egress.test"
+WARMUP_HOST = "warmup.oidc-egress.test"
 BLOCKED_DISCOVERY_HOST = "blocked.oidc-egress.test"
 BLOCKED_JWKS_HOST = "blocked-jwks.oidc-egress.test"
 BLOCKED_TOKEN_HOST = "blocked-token.oidc-egress.test"
@@ -240,7 +241,7 @@ class Scenario:
             "basicConstraints=CA:FALSE\n"
             "keyUsage=digitalSignature,keyEncipherment\n"
             "extendedKeyUsage=serverAuth\n"
-            f"subjectAltName=DNS:{IDP_HOST}\n"
+            f"subjectAltName=DNS:{IDP_HOST},DNS:{WARMUP_HOST}\n"
         )
         self.run([
             "openssl", "x509", "-req", "-in", str(certs / "server.csr"),
@@ -439,7 +440,7 @@ class Scenario:
         self.resource("Secret", "oidc-egress-ca", type="Opaque", data={
             "ca.crt": base64.b64encode((certs / "ca.crt").read_bytes()).decode(),
         })
-        self.plugin_resource("initial-default-full", san=False)
+        self.plugin_resource("initial-default-full", san=False, discovery_host=WARMUP_HOST)
 
     def plugin_resource(self, phase, san, discovery_host=IDP_HOST):
         validation = {"caCertificateRefs": [{"kind": "Secret", "name": "oidc-egress-ca"}]}
@@ -574,7 +575,7 @@ metrics:
         for value in sensitive:
             require(value.encode() not in public, f"{phase}: sensitive detail in public response")
 
-    def assert_transport_isolation(self, phase, metric_before, expected_drops):
+    def assert_transport_isolation(self, phase, metric_before, minimum_drops):
         require(
             self.proxy_trap.count() == self.proxy_baseline,
             f"{phase}: Gateway contacted proxy-environment trap",
@@ -588,7 +589,9 @@ metrics:
         delta = metric_value(after, metric, reason="unspecified") - metric_value(
             metric_before, metric, reason="unspecified"
         )
-        require(delta == expected_drops, f"{phase}: expected {expected_drops} DNS drops, got {delta}")
+        # The resolver filters the raw answers on every connection attempt,
+        # including cache hits. Connection reuse can change how often it runs.
+        require(delta >= minimum_drops, f"{phase}: expected at least {minimum_drops} DNS drops, got {delta}")
         return int(delta)
 
     def exercise_full_flow(self, phase, san):
@@ -700,9 +703,8 @@ metrics:
         self.start_fixture_servers(certs)
         self.create_base_resources(certs)
         self.start_processes()
-        # Gateway readiness does not wait for the initial plugin's background
-        # discovery prewarm. Its DNS resolution records a rejected candidate, so
-        # let it reach the IdP before the first phase snapshots the drop metric.
+        # Observe startup discovery on its allowed-only hostname before applying
+        # the first measured generation.
         initial_discovery = "/oidc/initial-default-full/.well-known/openid-configuration"
         wait_for(
             "initial discovery prewarm",
