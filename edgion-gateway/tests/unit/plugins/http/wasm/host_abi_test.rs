@@ -640,6 +640,60 @@ fn callout_preflight_rejects_high_pair_count_without_retained_state_change() {
     assert!(state.frame.pending_callouts.is_empty());
 }
 
+/// wasm-03: the retention budget admits tens of thousands of small pairs, so
+/// the callout header map needs its own count cap before any copy. Pseudo
+/// headers count toward it.
+#[test]
+fn callout_header_pair_cap_accepts_exact_limit_and_rejects_next_pair_atomically() {
+    let (mut store, instance) = instantiate_callout_guest();
+    let dispatch = instance
+        .get_typed_func::<(i32, i32, i32), i32>(&mut store, "dispatch_custom_headers")
+        .unwrap();
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
+    let headers_ptr = 1024;
+    let token_ptr = 512;
+
+    let at_cap = encode_raw_map(&vec![(&b"x-cap"[..], &[][..]); MAX_CALLOUT_REQUEST_HEADER_PAIRS]);
+    memory.write(&mut store, headers_ptr, &at_cap).unwrap();
+    assert_eq!(
+        dispatch
+            .call(&mut store, (headers_ptr as i32, at_cap.len() as i32, token_ptr as i32))
+            .unwrap(),
+        STATUS_OK
+    );
+    assert_eq!(
+        store.data().frame.pending_callouts[0].headers.len(),
+        MAX_CALLOUT_REQUEST_HEADER_PAIRS
+    );
+    let retained_bytes = store.data().frame.retained_bytes;
+
+    let mut over_cap: Vec<(&[u8], &[u8])> = vec![(b"x-cap", b""); MAX_CALLOUT_REQUEST_HEADER_PAIRS - 1];
+    over_cap.push((b":path", b"/"));
+    over_cap.push((b":method", b"GET"));
+    let over_cap = encode_raw_map(&over_cap);
+    memory.write(&mut store, headers_ptr, &over_cap).unwrap();
+    memory.write(&mut store, token_ptr, &[0xA5; 4]).unwrap();
+    assert_eq!(
+        dispatch
+            .call(
+                &mut store,
+                (headers_ptr as i32, over_cap.len() as i32, token_ptr as i32)
+            )
+            .unwrap(),
+        STATUS_BAD_ARGUMENT
+    );
+
+    let mut token = [0u8; 4];
+    memory.read(&store, token_ptr, &mut token).unwrap();
+    assert_eq!(token, [0xA5; 4]);
+    let state = store.data();
+    assert_eq!(state.frame.retained_bytes, retained_bytes);
+    assert_eq!(state.frame.retained_ops, 1);
+    assert_eq!(state.frame.pending_callouts.len(), 1);
+    assert_eq!(state.frame.callouts_dispatched, 1);
+    assert_eq!(state.last_callout_token, 1);
+}
+
 /// `begin_phase` must clear the staged request body between phases so a
 /// stale buffer-mode body never leaks into a later phase's `HostState`.
 #[test]

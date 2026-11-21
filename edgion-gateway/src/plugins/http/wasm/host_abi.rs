@@ -47,8 +47,8 @@ pub const STATUS_UNIMPLEMENTED: i32 = 12;
 pub const MAX_CALLOUTS_PER_REQUEST: u32 = 8;
 
 pub use super::limits::{
-    MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_HEADER_WRITES_PER_PHASE, MAX_RETAINED_ABI_BYTES,
-    MAX_RETAINED_ABI_OPS,
+    MAX_CALLOUT_REQUEST_HEADER_PAIRS, MAX_GUEST_MEMORY_BYTES, MAX_GUEST_TABLE_ELEMENTS, MAX_HEADER_WRITES_PER_PHASE,
+    MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS,
 };
 
 /// Aggregate request-body mutation work allowed in one request-body hook,
@@ -1190,6 +1190,11 @@ fn profile_callout_allocation(
     body_size: usize,
 ) -> Result<CalloutAllocationProfile, i32> {
     let profile = scan_serialized_map(header_bytes)?;
+    // reqwest appends each pair through the panicking `HeaderMap::append`, and
+    // the retention budget admits far more pairs than a map can hold.
+    if profile.pair_count > MAX_CALLOUT_REQUEST_HEADER_PAIRS {
+        return Err(STATUS_BAD_ARGUMENT);
+    }
     // Retain the conservative raw-header allowance even though decoding now
     // borrows those bytes, preserving the existing admission boundary.
     let raw_guest_copies = upstream_bytes

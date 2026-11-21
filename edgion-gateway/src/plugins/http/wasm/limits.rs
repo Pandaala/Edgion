@@ -41,6 +41,18 @@ pub const MAX_RETAINED_ABI_OPS: usize = 200_000;
 /// or an HTTP/1 upstream response.
 pub const MAX_HEADER_WRITES_PER_PHASE: usize = 1024;
 
+/// Per-call cap on the header pairs a guest passes to `proxy_http_call`,
+/// pseudo-headers included.
+///
+/// The callout request is built with reqwest, whose `RequestBuilder::header`
+/// and default-header merge in `Client::execute` use the panicking
+/// `http::HeaderMap::append` / `entry`. The map cannot grow past 24,576
+/// distinct names, or past 6,554 names once crafted hash collisions put it in
+/// its displacement-danger state. The retention budgets above admit tens of
+/// thousands of small pairs, so they cannot bound names on their own. 1024
+/// matches the callout response header bound (`validate_response_headers`).
+pub const MAX_CALLOUT_REQUEST_HEADER_PAIRS: usize = 1024;
+
 /// Max guest linear-memory size (bytes) enforced by the Store `ResourceLimiter`
 /// in `WasmVmManager::new_vm`. The pooling allocator's default per-instance
 /// memory cap is effectively the full wasm32 4 GiB, so without this an

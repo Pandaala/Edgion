@@ -11,7 +11,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use super::host_abi::{CalloutResponse, PendingCallout};
+use super::host_abi::{CalloutResponse, PendingCallout, MAX_CALLOUT_REQUEST_HEADER_PAIRS};
 use super::vm_manager::VmLease;
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::observe::metrics::registry::record_wasm_callout;
@@ -219,6 +219,11 @@ async fn execute_callout_with_client_and_permits(
 }
 
 fn build_callout_request(callout: PendingCallout, client: &reqwest::Client) -> Result<(u32, reqwest::Request), ()> {
+    // Dispatch already enforces this cap; it keeps every caller clear of the
+    // panicking `HeaderMap::append` behind `RequestBuilder::header`.
+    if callout.headers.len() > MAX_CALLOUT_REQUEST_HEADER_PAIRS {
+        return Err(());
+    }
     let token = callout.token;
     let url = format!("{}{}", callout.origin, callout.path);
     // Request hot path: the guest-supplied method / URL (query may carry

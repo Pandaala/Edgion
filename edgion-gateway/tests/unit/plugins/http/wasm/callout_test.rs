@@ -313,6 +313,32 @@ async fn expired_request_and_waiting_cancellation_do_not_consume_network_capacit
     drop(held);
 }
 
+/// wasm-03: reqwest appends guest headers through the panicking
+/// `HeaderMap::append`, which fails past 24,576 distinct names. The builder
+/// must fail the callout instead of reaching that limit.
+#[test]
+fn request_builder_rejects_header_pairs_over_cap_without_panicking() {
+    let client = test_client();
+    let distinct = |count: usize| {
+        (0..count)
+            .map(|index| (format!("x-h{index}"), String::new()))
+            .collect::<Vec<_>>()
+    };
+
+    let mut over_limit = callout("https://example.test".to_string(), 500);
+    over_limit.headers = distinct(25_000);
+    assert!(build_callout_request(over_limit, &client).is_err());
+
+    let mut over_cap = callout("https://example.test".to_string(), 500);
+    over_cap.headers = distinct(MAX_CALLOUT_REQUEST_HEADER_PAIRS + 1);
+    assert!(build_callout_request(over_cap, &client).is_err());
+
+    let mut at_cap = callout("https://example.test".to_string(), 500);
+    at_cap.headers = distinct(MAX_CALLOUT_REQUEST_HEADER_PAIRS);
+    let (_, req) = build_callout_request(at_cap, &client).expect("callout at the header cap should build");
+    assert_eq!(req.headers().len(), MAX_CALLOUT_REQUEST_HEADER_PAIRS);
+}
+
 #[test]
 fn response_header_snapshot_rejects_bytes_and_count_before_copying() {
     let mut headers = reqwest::header::HeaderMap::new();

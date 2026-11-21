@@ -306,6 +306,7 @@ Notes:
 Semantics and guardrails:
 
 - **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
+- Each callout accepts up to 1,024 request header pairs, including pseudo-headers. Each occurrence of a repeated name counts. If the count check fails, dispatch returns `BAD_ARGUMENT` (2) synchronously and queues no callout.
 - **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_http_call` synchronously.
 - **Request and tick phases**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Callouts from `on_tick` use the owning plugin's authorization and root-context callbacks — see [Timers](#shared-data-and-timers).
 - **Pause required**: request-header dispatch followed by Continue applies `failOpen` and discards the execution (`callout requires pause`). Tick callouts have no Pause action and are delivered after the hook returns.

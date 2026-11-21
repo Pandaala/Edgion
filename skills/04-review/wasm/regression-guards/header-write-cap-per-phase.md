@@ -26,8 +26,23 @@ bounds guest-controlled header writes in `host_abi.rs`:
   (`resolve_callouts_on` in `callout.rs` never calls `begin_phase`), so their writes
   accumulate against the same cap. The guest has no ABI call that starts a new phase.
 
-The callout request header path (`proxy_http_call`, finding wasm-03) is a separate
-bound and is not covered here.
+## Callout request headers
+
+For wasm-03, the ABI retention budget alone admitted more small headers than
+reqwest could append to a request without panicking. Request and tick callouts
+share the same dispatch handler. After scanning the borrowed serialized map,
+`profile_callout_allocation` checks `MAX_CALLOUT_REQUEST_HEADER_PAIRS` (1,024)
+before decoding owned strings. This limit counts every pair in one call,
+including pseudo-headers and repeated names. A count rejection returns
+`STATUS_BAD_ARGUMENT` before writing the token, charging the frame or queuing
+the callout. Earlier dispatch and byte-budget checks retain their precedence.
+
+`build_callout_request` also checks the retained header count before appending
+through reqwest. The ABI boundary test covers acceptance at the cap and atomic
+rejection of the next pair. The builder test covers the same boundary and
+rejection of a large distinct-name vector. Revisit the capacity margin if the
+shared callout client gains configurable default headers or the HTTP map's
+growth limits change.
 
 ## Rationale and evidence
 

@@ -263,6 +263,7 @@ requestPlugins:
 语义与护栏：
 
 - **寻址**：`upstream` 参数是目标 **origin URL**（`https://auth.internal:8443`），不是 Envoy 的 cluster 名。dispatch 的 header map 里的 `:path`、`:method`、`:authority` 伪头驱动外呼请求（`:authority` 作为 `Host` 发送）。
+- 每次 callout 最多接受 1,024 对请求头，伪头也计入，同名请求头按出现次数计数。数量检查失败时，dispatch 同步返回 `BAD_ARGUMENT`（2），本次 callout 不会入队。
 - **允许列表**：origin 必须（规范化后）精确匹配 `calloutAllowlist` 的某一项。没有允许列表 = 没有 callout。被拒绝的 dispatch 同步返回 `INTERNAL_FAILURE`。
 - **请求 + tick 阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`。`on_tick` 内的 callout 使用所属插件的授权，回调投递到 root context，见[定时器](#shared-data-与定时器)。
 请求头 callout 要求返回 Action::Pause，且目标 origin 已由 calloutAllowlist 授权。dispatch 后返回 Continue 会按 failOpen 处理并丢弃实例。body/响应阶段不能 dispatch；tick 使用所属插件的授权。
