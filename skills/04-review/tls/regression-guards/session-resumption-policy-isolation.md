@@ -77,12 +77,15 @@ server block; Traefik/Go isolate by per-`tls.Config` ticket keys.
   (`edgion_tls_session_context_tracks_effective_client_auth_policy`,
   `gateway_session_context_encodes_every_policy_input`) only cover the inputs they
   enumerate, so extend them with the digest.
-- Residuals (tracked in `tasks/todo/downstream-tls-session-ticket-keys-and-lifetime.md`):
-  resumption does not re-run X.509 verification, so client-certificate expiry or
-  revocation under an unchanged policy is only bounded by session lifetime
-  (TLS 1.2 2 h, TLS 1.3 up to 7 days auth timeout); TLS 1.2 abbreviated
-  handshakes keep the original key-exchange group after a curve-policy change;
-  ticket keys are per process (no cross-replica resumption, no rotation control).
+- [Client leaf expiry under an unchanged policy](../intentional-design/client-certificate-expiry-on-resumption.md)
+  is an accepted session lifetime tradeoff.
+- Downstream listeners use BoringSSL's automatically rotated, per-`SSL_CTX`
+  ticket keys. A replica change or restart costs a full handshake. Revisit if
+  operators need cross-replica resumption or coordinated key rotation.
+- Tightening `downstreamTls.ecdhCurves` constrains new key exchanges. A TLS
+  1.2 abbreviated handshake reuses the original master secret, so an existing
+  session can resume until expiry. Revisit if a curve removal must invalidate
+  previously negotiated sessions immediately.
 - Rejected: disabling tickets for mTLS hosts only (leaves other identities
   mutually resumable), per-policy ticket keys (no TLS 1.2 cache coverage),
   `SSL_CTX` per policy (Pingora listener restructuring).
@@ -112,5 +115,5 @@ server block; Traefik/Go isolate by per-`tls.Config` ticket keys.
 
 ## Resolution references
 
-- gw-infra-01 — 2026-11-06, fixed (scope B: per-SSL session id context; ticket-key
-  ownership and session lifetime deferred).
+- gw-infra-01 — 2026-11-06, fixed by the per-SSL session ID context. The
+  subsequent review accepted the resumption limits described above.

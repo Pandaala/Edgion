@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Client certificate expiry after a full handshake](intentional-design/client-certificate-expiry-on-resumption.md)
 - [Outbound SAN fallback reason ownership](intentional-design/outbound-san-fallback-reason-ownership.md)
 
 - [EdgionTls last-known-good follows the resource key](intentional-design/last-known-good-follows-resource-key.md)
