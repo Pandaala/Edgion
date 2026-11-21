@@ -15,6 +15,9 @@ pub enum BlockedBackendReason {
     Localhost,
     /// 169.254.0.0/16 (incl. cloud metadata 169.254.169.254) or fe80::/10
     LinkLocal,
+    /// Operator-configured `outbound_egress_blocked_cidrs` (e.g. vendor cloud
+    /// metadata endpoints outside link-local)
+    BlockedCidr,
 }
 
 fn parse_ip_literal(domain: &str) -> Option<IpAddr> {
@@ -32,7 +35,8 @@ fn parse_ip_literal(domain: &str) -> Option<IpAddr> {
 /// Returns `Some(reason)` if the address falls into a blocked category, `None` if allowed.
 ///
 /// Blocked categories protect against SSRF to host-local loopback and cloud metadata
-/// services (AWS/GCP/Azure IMDS at `169.254.169.254`, plus the broader link-local segment).
+/// services (AWS/GCP/Azure IMDS at `169.254.169.254`, plus the broader link-local segment),
+/// plus any address in the operator-configured `outbound_egress_blocked_cidrs` list.
 ///
 /// Deliberately **not** blocked:
 /// - RFC1918 private ranges (10/8, 172.16/12, 192.168/16) — common K8s cluster traffic
@@ -51,6 +55,7 @@ pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendR
     match classify_ip(ip) {
         IpClass::Loopback => Some(BlockedBackendReason::Localhost),
         IpClass::LinkLocal => Some(BlockedBackendReason::LinkLocal),
+        IpClass::BlockedCidr => Some(BlockedBackendReason::BlockedCidr),
         IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified | IpClass::Global => None,
     }
 }

@@ -514,6 +514,60 @@ fn outbound_egress_parses_from_yaml() {
 }
 
 #[test]
+fn outbound_egress_blocked_cidrs_default_empty_and_come_from_config_file_only() {
+    assert!(GatewayConfig::default().outbound_egress_blocked_cidrs.is_empty());
+    let yaml = "gateway:\n  outbound_egress_blocked_cidrs:\n    - \"100.100.100.200/32\"\n";
+    let mut base: EdgionGatewayConfig = yaml_serde::from_str(yaml).unwrap();
+    assert_eq!(base.gateway.outbound_egress_blocked_cidrs, vec!["100.100.100.200/32"]);
+    // `#[arg(skip)]` and not merged: a CLI-parsed struct cannot clear it.
+    EdgionGatewayConfig::merge(&mut base, &EdgionGatewayConfig::default());
+    assert_eq!(base.gateway.outbound_egress_blocked_cidrs, vec!["100.100.100.200/32"]);
+}
+
+#[test]
+fn shipped_gateway_configs_block_vendor_metadata_endpoints() {
+    use edgion_common::egress::{classify_ip_with, compile_blocked_cidrs, IpClass};
+    let vendor = [
+        "100.100.100.200",
+        "fd00:ec2::254",
+        "fd20:ce::254",
+        "fd00:c1::a9fe:a9fe",
+        "168.63.129.16",
+    ];
+    for path in [
+        "config/edgion-gateway.yaml",
+        "cicd/deploy/standalone/edgion-gateway.yaml",
+        "cicd/deploy/standalone/packaging/config/edgion-gateway.yaml",
+        "cicd/deploy/kubernetes/gateway/configmap.yaml",
+    ] {
+        let (config, _) = deserialize_process_config(&channel_fixture_yaml(path)).unwrap();
+        let matcher = compile_blocked_cidrs(&config.gateway.outbound_egress_blocked_cidrs)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{path} must ship the vendor list"));
+        for address in vendor {
+            assert_eq!(
+                classify_ip_with(address.parse().unwrap(), Some(&matcher)),
+                IpClass::BlockedCidr,
+                "{path}: {address}"
+            );
+        }
+        for address in ["10.0.0.1", "fd00::1", "8.8.8.8"] {
+            assert_ne!(
+                classify_ip_with(address.parse().unwrap(), Some(&matcher)),
+                IpClass::BlockedCidr,
+                "{path}: {address}"
+            );
+        }
+    }
+    // The Kubernetes integration config carries only the DynamicExternalUpstream probe address.
+    let (config, _) = deserialize_process_config(&channel_fixture_yaml(
+        "edgion-tests/k8s/kubernetes/gateway/configmap.yaml",
+    ))
+    .unwrap();
+    assert_eq!(config.gateway.outbound_egress_blocked_cidrs, vec!["203.0.113.200/32"]);
+}
+
+#[test]
 fn wasm_oci_cache_fields_parse_and_default() {
     let cfg = GatewayConfig::default();
     assert_eq!(cfg.wasm_oci_cache_ttl_secs, 86_400);

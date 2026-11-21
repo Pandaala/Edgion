@@ -258,3 +258,24 @@ fn test_classify_ip_ipv4_mapped_normalized_first() {
     // so it reaches the unspecified arm rather than being classified as v4.
     assert_eq!(classify_ip("::".parse::<IpAddr>().unwrap()), IpClass::Unspecified);
 }
+
+#[test]
+fn test_operator_blocked_cidr_is_a_distinct_backend_reason() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    for address in [
+        BLOCKED_CIDR_TEST_IP.to_string(),
+        format!("::ffff:{BLOCKED_CIDR_TEST_IP}"),
+    ] {
+        let ip: std::net::IpAddr = address.parse().unwrap();
+        assert_eq!(classify_ip(ip), IpClass::BlockedCidr, "{address}");
+        let addr = PingoraSocketAddr::Inet(std::net::SocketAddr::new(ip, 80));
+        assert_eq!(
+            classify_backend_addr(&addr),
+            Some(BlockedBackendReason::BlockedCidr),
+            "{address}"
+        );
+    }
+    // Neighbours outside the configured /32 keep their built-in class.
+    assert_eq!(classify_ip("203.0.113.201".parse().unwrap()), IpClass::Global);
+}

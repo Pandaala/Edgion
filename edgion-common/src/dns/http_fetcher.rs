@@ -114,7 +114,13 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
                         "HTTP DNS endpoint blocked: link-local or unspecified".into(),
                     ));
                 }
-                _ => {}
+                IpClass::BlockedCidr => {
+                    return Err(DnsError::Http("HTTP DNS endpoint blocked: blocked CIDR".into()));
+                }
+                // Exhaustive on purpose: a new class must be a conscious
+                // decision here. HTTPDNS endpoints are operator-configured
+                // and may legitimately be private.
+                IpClass::Loopback | IpClass::Private | IpClass::UniqueLocal | IpClass::Global => {}
             }
         }
         let mut resp = self

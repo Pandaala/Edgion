@@ -587,6 +587,13 @@ impl EdgionGatewayCli {
             outbound_egress_block_private,
             Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
         );
+        // The operator blocked-CIDR list is consulted by the shared address
+        // classifier, so it is installed here, before any outbound client or
+        // backend dial exists. An invalid entry fails startup.
+        crate::plugins::http::common::outbound::egress::configure_egress_blocked_cidrs(
+            &config.gateway.outbound_egress_blocked_cidrs,
+        )
+        .map_err(|error| anyhow!("Invalid outbound_egress_blocked_cidrs: {error}"))?;
 
         crate::plugins::http::wasm::admission::initialize(config.gateway.wasm_limits).map_err(anyhow::Error::msg)?;
 

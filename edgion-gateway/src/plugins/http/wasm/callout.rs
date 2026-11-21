@@ -247,6 +247,7 @@ fn build_callout_request(callout: PendingCallout, client: &reqwest::Client) -> R
     }
 
     let mut req = req.build().map_err(|_| ())?;
+    super::admit_configured_destination(req.url()).map_err(|_| ())?;
     sync_outbound_body_framing(&mut req).map_err(|_| ())?;
     Ok((token, req))
 }

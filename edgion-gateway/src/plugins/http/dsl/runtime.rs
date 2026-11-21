@@ -13,7 +13,9 @@ use edgion_resources::resources::edgion_plugins::RateLimitAlgorithm;
 use std::time::Duration;
 
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
-use crate::plugins::http::common::outbound::egress::{egress_dns_cache_ttl, EgressPolicy, EgressResolver};
+use crate::plugins::http::common::outbound::egress::{
+    egress_dns_cache_ttl, EgressPolicy, EgressResolver, ResolverAddressPolicy,
+};
 
 /// Per-plugin external-call policy, built once by `resolve_parts` for each config generation.
 ///
@@ -115,44 +117,48 @@ static DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT: OnceLock<reqwest::Client> = OnceLock
 
 /// DSL destinations come from scripts fed by request data and from upstream
 /// redirects, so they use the request-influenced answer cache.
-fn dsl_egress_resolver() -> Arc<dyn reqwest::dns::Resolve> {
+fn dsl_egress_resolver(block_private_ips: bool) -> Arc<dyn reqwest::dns::Resolve> {
     Arc::new(EgressResolver::new_request_influenced(
         ResolverSpec::System,
-        EgressPolicy { block_private: true },
+        if block_private_ips {
+            ResolverAddressPolicy::Standard(EgressPolicy { block_private: true })
+        } else {
+            ResolverAddressPolicy::ConfiguredCidrsOnly
+        },
         egress_dns_cache_ttl(),
     ))
 }
 
-fn build_dsl_http_client(block_private_ips: bool, follow_redirects: bool) -> reqwest::Client {
-    let redirect = match (block_private_ips, follow_redirects) {
+fn dsl_http_client_config(block_private_ips: bool, follow_redirects: bool) -> OutboundClientConfig {
+    let guarded = block_private_ips || edgion_common::egress::has_blocked_cidrs();
+    let redirect = match (guarded, follow_redirects) {
         (_, false) => OutboundRedirect::Deny,
         (false, true) => OutboundRedirect::Limit(DSL_MAX_REDIRECTS),
         (true, true) => {
-            let policy = reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= DSL_MAX_REDIRECTS {
+            let policy = reqwest::redirect::Policy::custom(move |attempt| {
+                if block_private_ips && attempt.previous().len() >= DSL_MAX_REDIRECTS {
                     return attempt.stop();
                 }
                 let raw = attempt.url().host_str().unwrap_or("");
                 // url crate serializes IPv6 hosts with brackets (e.g. "[::1]").
                 let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-                if super::lang::builtins::is_ssrf_blocked_ip_literal(host) {
-                    return attempt.error("redirect to private/loopback IP blocked");
+                if super::lang::builtins::is_ssrf_blocked_ip_literal(host, block_private_ips) {
+                    return attempt.error("redirect destination blocked by egress policy");
                 }
-                attempt.follow()
+                reqwest::redirect::Policy::limited(DSL_MAX_REDIRECTS).redirect(attempt)
             });
             OutboundRedirect::Custom(policy)
         }
     };
 
-    build_outbound_client(OutboundClientConfig {
+    OutboundClientConfig {
         pool_max_idle_per_host: Some(4),
         // Do not allow Pod-injected proxy environment variables to reroute DSL egress.
         disable_proxy: true,
         redirect,
-        dns_resolver: block_private_ips.then(dsl_egress_resolver),
+        dns_resolver: guarded.then(|| dsl_egress_resolver(block_private_ips)),
         ..Default::default()
-    })
-    .expect("DSL HTTP client construction uses only fixed pool, redirect, proxy, and system-resolver options")
+    }
 }
 
 /// Returns the process-global shared reqwest client for DSL http.call.
@@ -164,10 +170,18 @@ fn build_dsl_http_client(block_private_ips: bool, follow_redirects: bool) -> req
 ///
 /// All four clients are process-global so connection pools are reused.
 pub(crate) fn dsl_http_client(block_private_ips: bool, follow_redirects: bool) -> &'static reqwest::Client {
-    match (block_private_ips, follow_redirects) {
-        (false, true) => DSL_HTTP_CLIENT.get_or_init(|| build_dsl_http_client(false, true)),
-        (true, true) => DSL_HTTP_CLIENT_GUARDED.get_or_init(|| build_dsl_http_client(true, true)),
-        (false, false) => DSL_HTTP_CLIENT_NO_REDIRECT.get_or_init(|| build_dsl_http_client(false, false)),
-        (true, false) => DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT.get_or_init(|| build_dsl_http_client(true, false)),
-    }
+    let client = match (block_private_ips, follow_redirects) {
+        (false, true) => &DSL_HTTP_CLIENT,
+        (true, true) => &DSL_HTTP_CLIENT_GUARDED,
+        (false, false) => &DSL_HTTP_CLIENT_NO_REDIRECT,
+        (true, false) => &DSL_HTTP_CLIENT_GUARDED_NO_REDIRECT,
+    };
+    client.get_or_init(|| {
+        build_outbound_client(dsl_http_client_config(block_private_ips, follow_redirects))
+            .expect("DSL HTTP client construction uses only fixed pool, redirect, proxy, and system-resolver options")
+    })
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/plugins/http/dsl/runtime_test.rs"]
+mod tests;

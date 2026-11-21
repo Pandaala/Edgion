@@ -919,3 +919,18 @@ async fn oversized_token_response_is_rejected_at_the_cap() {
 async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
     super::fetch_oci_bytes(spec, crate::plugins::http::wasm::admission::try_prepare()?).await
 }
+
+#[test]
+fn configured_cidr_rejects_initial_registry_origin() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let spec: WasmOciSpec = serde_json::from_value(serde_json::json!({
+        "image": format!("{BLOCKED_CIDR_TEST_IP}/test/module:v1")
+    }))
+    .unwrap();
+    let image = OciImageRef::parse(&spec.image).unwrap();
+    assert_eq!(
+        RegistrySession::new(&image, &spec).err().as_deref(),
+        Some("Wasm destination blocked by configured egress CIDR")
+    );
+}

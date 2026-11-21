@@ -404,6 +404,17 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub outbound_egress_block_private: bool,
 
+    /// Additional outbound destination CIDRs to reject on guarded Gateway egress
+    /// and backend dials, after DNS resolution (e.g. vendor cloud metadata
+    /// endpoints outside link-local such as `100.100.100.200/32` or
+    /// `fd00:ec2::254/128`). Additive only: it never unblocks a built-in range,
+    /// and loopback / link-local addresses keep their built-in handling. Each
+    /// entry uses `address/prefix` notation; an invalid entry fails startup.
+    /// Default empty. Restart-only; set in the gateway config file.
+    #[arg(skip)]
+    #[serde(default)]
+    pub outbound_egress_blocked_cidrs: Vec<String>,
+
     /// Fallback freshness in milliseconds of `EgressResolver` answers in the shared
     /// egress DNS answer cache when the resolver reports no record TTL (`0`
     /// disables caching). Deliberately distinct from
@@ -507,6 +518,7 @@ impl Default for GatewayConfig {
             geoip: crate::geoip::GeoIpConfig::default(),
             fips_policy: None,
             outbound_egress_block_private: false,
+            outbound_egress_blocked_cidrs: Vec::new(),
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
             outbound_http2_max_header_list_size: default_outbound_http2_max_header_list_size(),
             wasm_limits: Default::default(),

@@ -1,4 +1,6 @@
-use super::is_ssrf_blocked_ip_literal;
+fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
+    super::is_ssrf_blocked_ip_literal(host, true)
+}
 
 // DSL policy: one representative per blocked IpClass + an allowed public case.
 // Exhaustive per-segment classification is covered by util::net::classify_ip tests.
@@ -10,6 +12,16 @@ fn dsl_policy_blocks_non_global_classes() {
     assert!(is_ssrf_blocked_ip_literal("10.0.0.1")); // Private
     assert!(is_ssrf_blocked_ip_literal("fc00::1")); // UniqueLocal
     assert!(is_ssrf_blocked_ip_literal("0.0.0.0")); // Unspecified
+}
+
+#[test]
+fn dsl_policy_blocks_operator_blocked_cidr() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    assert!(super::is_ssrf_blocked_ip_literal(BLOCKED_CIDR_TEST_IP, false));
+    assert!(!super::is_ssrf_blocked_ip_literal("10.0.0.1", false));
+    assert!(is_ssrf_blocked_ip_literal(BLOCKED_CIDR_TEST_IP));
+    assert!(is_ssrf_blocked_ip_literal(&format!("::ffff:{BLOCKED_CIDR_TEST_IP}")));
 }
 
 #[test]

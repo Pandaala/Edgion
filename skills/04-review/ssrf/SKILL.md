@@ -13,6 +13,10 @@ before applying a decision to current code.
 
 - [Upstream Address Safety](mandatory-design/upstream-address-safety.md)
 
+## Intentional design
+
+- [Operator-configured egress blocked CIDRs (cloud metadata outside link-local)](intentional-design/operator-blocked-cidrs.md)
+
 ## Regression guards
 
 - [HTTP DNS endpoint egress and bootstrap policy](regression-guards/httpdns-endpoint-egress.md)

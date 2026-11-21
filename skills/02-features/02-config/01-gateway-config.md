@@ -30,6 +30,7 @@ gateway:
   # require_fips: false                    # Require a FIPS build at startup
   # fips_policy: auto                      # auto | "on" | "off"; strings only
   # outbound_egress_block_private: false   # Env can force on: EDGION_OUTBOUND_BLOCK_PRIVATE
+  # outbound_egress_blocked_cidrs: ["100.100.100.200/32"]   # Additive deny list; shipped configs list cloud metadata endpoints
   # outbound_egress_dns_cache_ttl_ms: 5000
   # outbound_http2_max_header_list_size: 16384 # 16KiB default; 16384..=65536; restart required
   # ─── Wasm `source.oci` memory cache + pull tuning (see `### gateway` below) ───
@@ -248,6 +249,7 @@ behavior and are configured per Gateway process; there is no
 | `require_fips` | `bool` | `false` | Require the FIPS module; `EDGION_REQUIRE_FIPS` can force it on. |
 | `fips_policy` | `auto \| on \| off` | `auto` | Downstream approved cipher/curve policy. Quote YAML `"on"`/`"off"`; booleans are invalid. Resolution: env → CLI → file → auto. |
 | `outbound_egress_block_private` | `bool` | `false` | Reject private outbound URL targets by default; loopback/link-local remain blocked. Env can force it on. |
+| `outbound_egress_blocked_cidrs` | `Vec<String>` | `[]` | Additive CIDR deny list compiled at startup (invalid entry fails startup) and installed once into `edgion_common::egress`; `classify_ip` returns `IpClass::BlockedCidr` for non-loopback, non-link-local matches, for backend admission and guarded outbound clients (Kafka and Elasticsearch LinkSys use separate dial paths) (`BackendAddrBlockedCidrNotAllowed`, metric reason `blocked_cidr`). File-only, restart-only; the Controller never installs a list. Shipped configs list vendor metadata endpoints outside link-local. |
 | `outbound_egress_dns_cache_ttl_ms` | `u64` | `5000` | Fallback freshness (no record TTL) of answers in the egress DNS answer caches (the shared instance, and the separate request-influenced instance used by DSL `http.call`); `0` disables caching; env override: `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`. |
 | `outbound_http2_max_header_list_size` | `u32` | `16384` | Process-wide decoded HTTP/2 response-header-list limit for Gateway-initiated reqwest calls. Valid range: `16384..=65536`; changes require a restart. It does not affect Pingora route upstreams. |
 | `wasm_oci_cache_ttl_secs` | `u64` | `86400` (24h) | Idle lifetime of a verified OCI memory-cache entry. Zero is clamped to 1s. |

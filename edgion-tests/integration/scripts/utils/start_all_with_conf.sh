@@ -1411,6 +1411,16 @@ main() {
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
     # Exercise entry path and query identity through the integration access-log API.
     printf '\naccess_log_options:\n  includeRawUri: true\n' >> "$GATEWAY_CONFIG"
+    # Append the TEST-NET-3 address targeted by the DynamicExternalUpstream
+    # blocked-CIDR probe to the shipped outbound_egress_blocked_cidrs list.
+    if ! grep -Eq '^  outbound_egress_blocked_cidrs:$' "${GATEWAY_CONFIG}"; then
+        log_error "Integration blocked-CIDR override requires a block-style gateway.outbound_egress_blocked_cidrs list"
+        exit 1
+    fi
+    awk '
+        { print }
+        /^  outbound_egress_blocked_cidrs:$/ { print "    - \"203.0.113.200/32\"" }
+    ' "${GATEWAY_CONFIG}" > "${GATEWAY_CONFIG}.tmp" && mv "${GATEWAY_CONFIG}.tmp" "${GATEWAY_CONFIG}"
     if [ "${EDGION_TEST_DOWNSTREAM_TLS_OFFLOAD:-0}" = "1" ]; then
         awk '
             /^server:$/ {

@@ -54,8 +54,8 @@ size parsing or blocking lookup.
 
 ## OCI egress boundary
 
-The operator-configured registry origin remains trusted under the existing
-egress policy. Cross-origin bearer-token realms and blob redirects are checked
+The operator-configured registry origin remains trusted for built-in address
+classes. Gateway-configured blocked CIDRs apply to its literal or resolved IP. Cross-origin bearer-token realms and blob redirects are checked
 at dial time: literal IP destinations pass through the shared IP classifier,
 and each redirect hop is revalidated. Blob redirects allow at most three
 followed hops; a fourth target is rejected before network activity.

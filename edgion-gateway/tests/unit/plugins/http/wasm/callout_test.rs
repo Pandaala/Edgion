@@ -397,3 +397,13 @@ async fn expired_request_abandons_tokens_without_guest_callback() {
     )
     .await;
 }
+
+#[test]
+fn callout_request_checks_configured_cidr_for_literal_origin() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let client = test_client();
+    let blocked = format!("http://[::ffff:{BLOCKED_CIDR_TEST_IP}]");
+    assert!(build_callout_request(callout(blocked, 500), &client).is_err());
+    assert!(build_callout_request(callout("http://127.0.0.1".into(), 500), &client).is_ok());
+}

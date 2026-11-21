@@ -1840,6 +1840,8 @@ fn gateway_dns_slices_feed_only_non_controller_external_names() {
 
 #[test]
 fn controller_dns_slices_feed_only_controller_mode_external_names() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
     let coordinator = ServiceDiscoveryCoordinator::new();
     let ports = external_name_service(None)
         .spec
@@ -1852,7 +1854,7 @@ fn controller_dns_slices_feed_only_controller_mode_external_names() {
         "default",
         "backend",
         &ports,
-        &["203.0.113.7".parse().unwrap()],
+        &["203.0.113.7".parse().unwrap(), BLOCKED_CIDR_TEST_IP.parse().unwrap()],
         edgion_common::dns::endpoint_slices::DnsSliceOrigin::Controller,
     )
     .remove(0);

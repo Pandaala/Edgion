@@ -18,18 +18,19 @@ Any path along which the Gateway data plane will establish an upstream connectio
 
 RFC1918 private addresses (`10/8`, `172.16/12`, `192.168/16`) are allowed by default; K8s Service, Pod, cross-cluster gateway, and enterprise internal APIs all rely on these addresses.
 
-### Open gap: vendor metadata endpoints outside link-local (common-01)
+### Vendor metadata endpoints outside link-local (common-01)
 
 The built-in classifier blocks only protocol-defined ranges. Vendor metadata
-endpoints outside them — Alibaba `100.100.100.200`, AWS IPv6 IMDS `fd00:ec2::254`,
-GCP IPv6 `fd20:ce::254` — are currently allowed. This is a real, unresolved
-P2 gap, not a false positive. Decision (2026-11-06): do not hard-code vendor
-addresses into the classifier (they can be legitimate addresses in other
-environments); instead add an operator-configured, additive, default-empty
-blocked-CIDR list. Tracked in
-[`tasks/todo/egress-configurable-blocked-cidrs.md`](../../../../tasks/todo/egress-configurable-blocked-cidrs.md),
-which also owns CGNAT, NAT64/6to4 normalization and reserved-range follow-ups.
-Re-reports of these addresses should point to that task until it lands.
+endpoints outside them (Alibaba `100.100.100.200`, AWS IPv6 IMDS `fd00:ec2::254`,
+GCP IPv6 `fd20:ce::254`, Oracle IPv6 IMDS, Azure WireServer) are blocked through
+the Gateway-local, additive `gateway.outbound_egress_blocked_cidrs` list, which
+the shipped configuration files pre-populate and which every dial path above
+inherits through `classify_ip` (`IpClass::BlockedCidr`,
+`BackendAddrBlockedCidrNotAllowed`). Vendor addresses are deliberately not
+hard-coded into the classifier; see
+[Operator-configured egress blocked CIDRs](../intentional-design/operator-blocked-cidrs.md).
+CGNAT, NAT64/6to4 embedded IPv4 and reserved ranges remain an open P2 gap tracked in
+[`tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md`](../../../../tasks/todo/egress-classifier-cgnat-nat64-reserved-ranges.md).
 
 ## Review Decision
 

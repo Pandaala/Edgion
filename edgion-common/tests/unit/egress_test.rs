@@ -68,6 +68,75 @@ fn classify_all_segments_and_ipv4_mapped_ipv6() {
     }
 }
 
+fn blocked_matcher(cidrs: &[&str]) -> IpRadixMatcher {
+    compile_blocked_cidrs(cidrs).unwrap().unwrap()
+}
+
+#[test]
+fn blocked_cidr_list_only_adds_blocks_and_keeps_builtin_classes() {
+    let matcher = blocked_matcher(&[
+        "100.100.100.200/32",
+        "fd00:ec2::254/128",
+        "10.9.0.0/16",
+        "8.8.8.0/24",
+        "0.0.0.0/8",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "fe80::/10",
+    ]);
+    let cases = [
+        ("100.100.100.200", IpClass::BlockedCidr),
+        ("::ffff:100.100.100.200", IpClass::BlockedCidr),
+        ("100.100.100.201", IpClass::Global),
+        ("fd00:ec2::254", IpClass::BlockedCidr),
+        ("fd00:ec2::253", IpClass::UniqueLocal),
+        ("10.9.1.1", IpClass::BlockedCidr),
+        ("10.8.1.1", IpClass::Private),
+        ("8.8.8.8", IpClass::BlockedCidr),
+        ("0.0.0.0", IpClass::BlockedCidr),
+        // Loopback and link-local keep their built-in classes (and so their
+        // reasons and exceptions) even when the list also covers them.
+        ("127.0.0.1", IpClass::Loopback),
+        ("::ffff:127.0.0.1", IpClass::Loopback),
+        ("169.254.169.254", IpClass::LinkLocal),
+        ("fe80::1", IpClass::LinkLocal),
+    ];
+    for (value, expected) in cases {
+        assert_eq!(classify_ip_with(ip(value), Some(&matcher)), expected, "{value}");
+    }
+    // Without a list every address keeps its built-in class.
+    assert_eq!(classify_ip_with(ip("100.100.100.200"), None), IpClass::Global);
+    assert_eq!(classify_ip_with(ip("fd00:ec2::254"), None), IpClass::UniqueLocal);
+}
+
+#[test]
+fn blocked_cidr_is_rejected_under_every_private_and_loopback_policy() {
+    for block_private in [false, true] {
+        for allow_loopback in [false, true] {
+            assert_eq!(
+                egress_block_reason(IpClass::BlockedCidr, EgressPolicy { block_private }, allow_loopback),
+                Some(EgressBlockReason::BlockedCidr)
+            );
+        }
+    }
+    assert_eq!(EgressBlockReason::BlockedCidr.as_str(), "blocked_cidr");
+}
+
+#[test]
+fn compile_blocked_cidrs_accepts_empty_and_rejects_invalid_entries() {
+    assert!(compile_blocked_cidrs::<&str>(&[]).unwrap().is_none());
+    for invalid in [
+        "100.100.100.200",
+        "100.100.100.200/33",
+        "fd00:ec2::254/129",
+        "not-an-ip/8",
+        "",
+    ] {
+        let error = compile_blocked_cidrs(&[invalid]).unwrap_err();
+        assert!(error.contains("invalid blocked CIDR"), "{invalid:?}: {error}");
+    }
+}
+
 #[test]
 fn filter_enforces_link_local_unspecified_and_private_policy() {
     let input = vec![

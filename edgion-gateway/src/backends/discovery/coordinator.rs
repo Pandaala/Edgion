@@ -1743,6 +1743,7 @@ fn normalize_section(
             _ => return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict),
         };
         let source_identity = slice.identity.as_ref().expect("identified slices are prevalidated");
+        let controller_dns = DnsSliceOrigin::of(&slice.resource) == Some(DnsSliceOrigin::Controller);
         let mut origin_slice_key = None;
         for endpoint in &slice.resource.endpoints {
             // discovery.k8s.io/v1 EndpointConditions: a nil `ready` should be
@@ -1761,6 +1762,10 @@ fn normalize_section(
                     return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict);
                 }
                 if family.is_some_and(|family| family.is_ok_and(|family| !family.allows(ip))) {
+                    continue;
+                }
+                // The Controller cannot apply this Gateway's local deny list.
+                if controller_dns && crate::util::net::classify_ip(ip) == crate::util::net::IpClass::BlockedCidr {
                     continue;
                 }
                 let socket = SocketAddr::new(ip, port.get());

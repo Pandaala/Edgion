@@ -23,6 +23,10 @@ pub(crate) mod test_current_status;
 mod test_allocation_counter;
 
 #[cfg(test)]
+#[path = "../tests/unit/lib_test/test_blocked_cidr.rs"]
+pub(crate) mod test_blocked_cidr;
+
+#[cfg(test)]
 include!("../tests/support/lib_test/25_static_item.rs");
 
 /// Name of the active global memory allocator (selected by the binary's

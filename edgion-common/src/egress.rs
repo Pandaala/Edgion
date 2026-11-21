@@ -7,21 +7,29 @@
 //! dependency.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use crate::dns::{egress_answer_cache, DnsAnswerCache, DnsCachePolicy, DnsError, DnsQueryPolicy, ResolverSpec};
 use crate::test_mode::is_integration_testing_mode;
 
-/// Coarse, policy-free IP segments used by outbound egress decisions.
+/// Coarse IP segments used by outbound egress decisions.
+///
+/// Every class is a fixed address segment except [`IpClass::BlockedCidr`],
+/// which reflects the process-wide operator list installed with
+/// [`install_blocked_cidrs`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IpClass {
     /// 127.0.0.0/8 or ::1.
     Loopback,
     /// 169.254.0.0/16 or fe80::/10.
     LinkLocal,
+    /// Matched the operator-configured blocked CIDR list. Never produced for
+    /// loopback or link-local addresses, which keep their built-in classes.
+    BlockedCidr,
     /// RFC 1918 private IPv4 space.
     Private,
     /// RFC 4193 unique-local IPv6 space.
@@ -32,12 +40,79 @@ pub enum IpClass {
     Global,
 }
 
+/// Process-wide operator-configured blocked CIDRs. Installed at most once, at
+/// Gateway startup before any outbound dial; the Controller never installs it.
+static BLOCKED_CIDRS: OnceLock<IpRadixMatcher> = OnceLock::new();
+
+/// Group label shared by every operator-configured blocked CIDR.
+const BLOCKED_CIDR_GROUP: &str = "blocked-cidr";
+
+/// Compile an operator-configured blocked CIDR list.
+///
+/// Every entry must use `address/prefix` notation. Returns `Ok(None)` for an
+/// empty list. An invalid entry is an error so the owning binary fails startup
+/// instead of silently running with a weaker list.
+pub fn compile_blocked_cidrs<S: AsRef<str>>(cidrs: &[S]) -> Result<Option<IpRadixMatcher>, String> {
+    if cidrs.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = IpRadixMatcher::builder();
+    for cidr in cidrs {
+        let cidr = cidr.as_ref();
+        builder
+            .insert(cidr, BLOCKED_CIDR_GROUP)
+            .map_err(|error| format!("invalid blocked CIDR {cidr:?}: {error}"))?;
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|error| format!("invalid blocked CIDR list: {error}"))
+}
+
+/// Install the process-wide blocked CIDR matcher consulted by [`classify_ip`].
+///
+/// Must run once, before any outbound client is built or any backend is
+/// dialed. A second installation is rejected.
+pub fn install_blocked_cidrs(matcher: IpRadixMatcher) -> Result<(), String> {
+    BLOCKED_CIDRS
+        .set(matcher)
+        .map_err(|_| "egress blocked CIDR list is already installed".to_string())
+}
+
+/// Whether startup installed a non-empty operator list.
+pub fn has_blocked_cidrs() -> bool {
+    BLOCKED_CIDRS.get().is_some()
+}
+
 /// Classify an IP address without making an allow/block decision.
 ///
 /// IPv4-mapped IPv6 is normalized before IPv6 range checks so mapped loopback,
-/// link-local, private, and unspecified addresses cannot bypass policy.
+/// link-local, private, and unspecified addresses cannot bypass policy. The
+/// process-wide blocked CIDR list, when installed, is applied as described in
+/// [`classify_ip_with`].
 #[inline]
 pub fn classify_ip(ip: IpAddr) -> IpClass {
+    classify_ip_with(ip, BLOCKED_CIDRS.get())
+}
+
+/// Classify an IP address against an explicit blocked CIDR matcher.
+///
+/// Loopback and link-local keep their built-in classes, so the list can only
+/// add blocks and never changes their reasons or exceptions. Any other address
+/// covered by `blocked` (IPv4-mapped forms included) is
+/// [`IpClass::BlockedCidr`].
+#[inline]
+pub fn classify_ip_with(ip: IpAddr, blocked: Option<&IpRadixMatcher>) -> IpClass {
+    let class = classify_builtin(ip);
+    match class {
+        IpClass::Loopback | IpClass::LinkLocal => class,
+        _ if blocked.is_some_and(|matcher| matcher.contains(&ip)) => IpClass::BlockedCidr,
+        _ => class,
+    }
+}
+
+#[inline]
+fn classify_builtin(ip: IpAddr) -> IpClass {
     match ip {
         IpAddr::V4(v4) => classify_v4(v4),
         IpAddr::V6(v6) => {
@@ -81,6 +156,7 @@ fn classify_v4(ip: Ipv4Addr) -> IpClass {
 pub enum EgressBlockReason {
     Loopback,
     LinkLocal,
+    BlockedCidr,
     Unspecified,
     Private,
 }
@@ -91,6 +167,7 @@ impl EgressBlockReason {
         match self {
             Self::Loopback => "loopback",
             Self::LinkLocal => "link_local",
+            Self::BlockedCidr => "blocked_cidr",
             Self::Unspecified => "unspecified",
             Self::Private => "private",
         }
@@ -107,9 +184,22 @@ pub struct EgressPolicy {
     pub block_private: bool,
 }
 
+/// Which address restrictions apply to the exact DNS answers used for a dial.
+#[derive(Clone, Copy)]
+pub enum ResolverAddressPolicy {
+    Standard(EgressPolicy),
+    ConfiguredCidrsOnly,
+}
+
+impl From<EgressPolicy> for ResolverAddressPolicy {
+    fn from(policy: EgressPolicy) -> Self {
+        Self::Standard(policy)
+    }
+}
+
 struct Inner {
     spec: ResolverSpec,
-    policy: EgressPolicy,
+    policy: ResolverAddressPolicy,
     cache_policy: DnsCachePolicy,
     allow_loopback: bool,
     observer: Option<EgressBlockObserver>,
@@ -156,7 +246,7 @@ impl EgressResolver {
     /// operator-configured consumers share.
     pub fn with_cache(
         spec: ResolverSpec,
-        policy: EgressPolicy,
+        policy: impl Into<ResolverAddressPolicy>,
         ttl: Duration,
         allow_loopback: bool,
         observer: Option<EgressBlockObserver>,
@@ -165,7 +255,7 @@ impl EgressResolver {
         Self {
             inner: Arc::new(Inner {
                 spec,
-                policy,
+                policy: policy.into(),
                 cache_policy: DnsCachePolicy::new(ttl),
                 allow_loopback,
                 observer,
@@ -211,10 +301,11 @@ pub fn filter_resolved_addrs(addrs: Vec<IpAddr>, policy: EgressPolicy, allow_loo
 /// Filter resolved addresses and notify the optional observer for each drop.
 pub fn filter_resolved_addrs_with_observer(
     addrs: Vec<IpAddr>,
-    policy: EgressPolicy,
+    policy: impl Into<ResolverAddressPolicy>,
     allow_loopback: bool,
     observer: Option<EgressBlockObserver>,
 ) -> Vec<IpAddr> {
+    let policy = policy.into();
     addrs
         .into_iter()
         .filter(|ip| is_ip_allowed_with_observer(*ip, policy, allow_loopback, observer))
@@ -224,22 +315,37 @@ pub fn filter_resolved_addrs_with_observer(
 /// Check one address with the same policy and rejection observation as batch filtering.
 pub fn is_ip_allowed_with_observer(
     ip: IpAddr,
-    policy: EgressPolicy,
+    policy: impl Into<ResolverAddressPolicy>,
     allow_loopback: bool,
     observer: Option<EgressBlockObserver>,
 ) -> bool {
-    let reason = match classify_ip(ip) {
-        IpClass::Loopback if allow_loopback || cfg!(test) || is_integration_testing_mode() => return true,
-        IpClass::Loopback => EgressBlockReason::Loopback,
-        IpClass::LinkLocal => EgressBlockReason::LinkLocal,
-        IpClass::Unspecified => EgressBlockReason::Unspecified,
-        IpClass::Private | IpClass::UniqueLocal if policy.block_private => EgressBlockReason::Private,
-        IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return true,
+    let class = classify_ip(ip);
+    let reason = match policy.into() {
+        ResolverAddressPolicy::Standard(policy) => egress_block_reason(class, policy, allow_loopback),
+        ResolverAddressPolicy::ConfiguredCidrsOnly => {
+            (class == IpClass::BlockedCidr).then_some(EgressBlockReason::BlockedCidr)
+        }
+    };
+    let Some(reason) = reason else {
+        return true;
     };
     if let Some(observe) = observer {
         observe(reason);
     }
     false
+}
+
+/// Map one address class to its egress rejection reason, or `None` when allowed.
+fn egress_block_reason(class: IpClass, policy: EgressPolicy, allow_loopback: bool) -> Option<EgressBlockReason> {
+    match class {
+        IpClass::Loopback if allow_loopback || cfg!(test) || is_integration_testing_mode() => None,
+        IpClass::Loopback => Some(EgressBlockReason::Loopback),
+        IpClass::LinkLocal => Some(EgressBlockReason::LinkLocal),
+        IpClass::BlockedCidr => Some(EgressBlockReason::BlockedCidr),
+        IpClass::Unspecified => Some(EgressBlockReason::Unspecified),
+        IpClass::Private | IpClass::UniqueLocal if policy.block_private => Some(EgressBlockReason::Private),
+        IpClass::Private | IpClass::UniqueLocal | IpClass::Global => None,
+    }
 }
 
 impl Resolve for EgressResolver {

@@ -52,16 +52,19 @@ impl DnsSliceOrigin {
 ///
 /// The fixed order is what makes "the answer did not change" a plain equality
 /// check, independent of the resolver's (often rotating) answer order.
-/// Link-local answers (169.254.0.0/16, fe80::/10, e.g. cloud metadata) and
-/// unspecified ones (0.0.0.0, ::, which a connect turns into the local host)
-/// are never valid backend endpoints: dropping them before publication keeps
-/// load balancing and active health probes away from them. Loopback is kept;
-/// each Gateway's `allowLoopbackUpstream` decides at selection time.
+/// Link-local answers (169.254.0.0/16, fe80::/10, e.g. cloud metadata),
+/// answers in the process-wide operator blocked CIDR list (installed only by
+/// the Gateway) and unspecified ones (0.0.0.0, ::, which a connect turns into
+/// the local host) are never valid backend endpoints: dropping them before
+/// publication keeps load balancing and active health probes away from them.
+/// Loopback is kept; each Gateway's `allowLoopbackUpstream` decides at
+/// selection time.
 pub fn normalize_addrs(addrs: impl IntoIterator<Item = IpAddr>) -> Vec<IpAddr> {
+    use crate::egress::{classify_ip, IpClass};
     let mut out: Vec<IpAddr> = addrs
         .into_iter()
         .map(|ip| ip.to_canonical())
-        .filter(|ip| !ip.is_unspecified() && crate::egress::classify_ip(*ip) != crate::egress::IpClass::LinkLocal)
+        .filter(|ip| !ip.is_unspecified() && !matches!(classify_ip(*ip), IpClass::LinkLocal | IpClass::BlockedCidr))
         .collect();
     out.sort_unstable_by_key(|ip| (ip.is_ipv6(), *ip));
     out.dedup();

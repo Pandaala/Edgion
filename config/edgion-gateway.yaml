@@ -99,6 +99,20 @@ gateway:
   # data, so binding 0.0.0.0 is safe. The admin API (above) stays loopback.
   # probe_listen: "0.0.0.0:12000"
 
+  # Additional outbound destination CIDRs rejected on guarded Gateway egress and
+  # backend dials after DNS resolution. Existing loopback exceptions and
+  # link-local (169.254.0.0/16, fe80::/10) rules keep their precedence. Entries use address/prefix notation; an invalid entry fails
+  # startup. Restart-only. The defaults are cloud metadata / platform endpoints
+  # outside link-local; remove one only if that address is a legitimate
+  # destination in your network. A NetworkPolicy egress deny stays the primary
+  # control. The code default (key omitted) is an empty list.
+  outbound_egress_blocked_cidrs:
+    - "100.100.100.200/32"     # Alibaba Cloud ECS instance metadata
+    - "fd00:ec2::254/128"      # AWS EC2 instance metadata (IPv6)
+    - "fd20:ce::254/128"       # Google Cloud metadata server (IPv6)
+    - "fd00:c1::a9fe:a9fe/128" # Oracle Cloud instance metadata (IPv6, per cloud-init's Oracle datasource)
+    - "168.63.129.16/32"       # Azure platform endpoint (WireServer)
+
 logging:
   #
   log_dir: logs

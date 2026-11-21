@@ -3588,9 +3588,13 @@ async fn cb_reset_handler() -> impl IntoResponse {
 ///   endpoint defaults to `127.0.0.1` (the local test backend), so a scenario
 ///   can point an ExternalName at the loopback backend without a real DNS.
 ///
+/// - An optional `onlyHost` restricts the explicit answer to one name. Other
+///   queries receive the default loopback answer.
+///
 /// Values are used verbatim (no percent-decoding) — tests pass plain IP literals.
 fn parse_dns_query(query: &str) -> (String, Vec<String>) {
     let mut host = String::new();
+    let mut only_host = None;
     let mut ips: Vec<String> = Vec::new();
     for pair in query.split('&').filter(|s| !s.is_empty()) {
         let mut it = pair.splitn(2, '=');
@@ -3598,6 +3602,7 @@ fn parse_dns_query(query: &str) -> (String, Vec<String>) {
         let val = it.next().unwrap_or("");
         match key {
             "host" => host = val.to_string(),
+            "onlyHost" => only_host = Some(val),
             "ip" => {
                 for ip in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                     ips.push(ip.to_string());
@@ -3606,8 +3611,8 @@ fn parse_dns_query(query: &str) -> (String, Vec<String>) {
             _ => {}
         }
     }
-    if ips.is_empty() {
-        ips.push("127.0.0.1".to_string());
+    if ips.is_empty() || only_host.is_some_and(|name| name != host) {
+        return (host, vec!["127.0.0.1".to_string()]);
     }
     (host, ips)
 }

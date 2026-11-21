@@ -232,6 +232,7 @@ pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool,
 /// Rejects:
 /// - Loopback (`127.0.0.0/8`, `::1`) — typical SSRF-to-host
 /// - Link-local (`169.254.0.0/16`, `fe80::/10`) — covers cloud metadata (`169.254.169.254`)
+/// - Operator-configured `outbound_egress_blocked_cidrs`
 ///
 /// RFC1918 private ranges are **not** blocked; cluster-internal pod/service IPs live there.
 #[inline]
@@ -241,6 +242,7 @@ pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: 
         Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => Ok(()),
         Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::BlockedCidr) => Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
     }
 }
 
@@ -290,6 +292,7 @@ pub(crate) fn validate_endpoint_backend_addr(
         }
         Some(BlockedBackendReason::Localhost) => Err(EdgionErrorCode::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::BlockedCidr) => Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
         None => Ok(()),
     }
 }

@@ -25,5 +25,14 @@ spec:
             domain: localhost
             port: 30002
             tls: false
+          # TEST-NET-3 literal in the Gateway's outbound_egress_blocked_cidrs.
+          "blocked":
+            domain: "203.0.113.200"
+            port: 30001
+            tls: false
+          "blocked-dns":
+            domain: deu-blocked.invalid
+            port: 30001
+            tls: false
         onMissing: reject
         onNoMatch: reject

@@ -293,8 +293,22 @@ fn dns_derived_unsafe_endpoints_are_never_probed() {
         "[::ffff:127.0.0.1]:80",
         "169.254.169.254:80",
     ] {
-        assert!(refuses_dns_endpoint(unsafe_addr.parse().unwrap()), "{unsafe_addr}");
+        assert!(
+            refuses_probe_endpoint(unsafe_addr.parse().unwrap(), true),
+            "{unsafe_addr}"
+        );
     }
-    assert!(!refuses_dns_endpoint("10.0.0.1:80".parse().unwrap()));
-    assert!(!refuses_dns_endpoint("[2001:db8::1]:80".parse().unwrap()));
+    assert!(!refuses_probe_endpoint("10.0.0.1:80".parse().unwrap(), true));
+    assert!(!refuses_probe_endpoint("[2001:db8::1]:80".parse().unwrap(), true));
+}
+
+#[test]
+fn configured_cidr_refuses_probes_for_every_endpoint_source() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let addr = std::net::SocketAddr::new(BLOCKED_CIDR_TEST_IP.parse().unwrap(), 80);
+    for dns_derived in [false, true] {
+        assert!(refuses_probe_endpoint(addr, dns_derived));
+        assert!(!refuses_probe_endpoint("10.0.0.1:80".parse().unwrap(), dns_derived));
+    }
 }

@@ -849,6 +849,7 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
     let reason = match status {
         EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
         EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+        EdgionErrorCode::BackendAddrBlockedCidrNotAllowed => "unsafe blocked-cidr upstream",
         _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
     };
     // Backfill the placeholder pushed by `begin_upstream_attempt`. Fall back to

@@ -21,6 +21,9 @@ data:
       # Probe endpoints listen on 0.0.0.0:12000.
       geoip:
         db_path: /usr/local/edgion/test-assets/geoip/edgion-test-city.mmdb
+      # TEST-NET-3 address targeted by the DynamicExternalUpstream blocked-CIDR probe.
+      outbound_egress_blocked_cidrs:
+        - "203.0.113.200/32"
 
     logging:
       log_dir: logs

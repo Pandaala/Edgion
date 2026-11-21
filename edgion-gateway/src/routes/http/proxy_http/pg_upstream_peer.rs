@@ -804,6 +804,7 @@ async fn get_peer_with_sp_fallback(
         Err(
             status @ (EdgionErrorCode::BackendLocalhostNotAllowed
             | EdgionErrorCode::BackendAddrLinkLocalNotAllowed
+            | EdgionErrorCode::BackendAddrBlockedCidrNotAllowed
             | EdgionErrorCode::BackendDnsResolutionFailed),
         ) => {
             ctx.record_error(status);
@@ -1554,6 +1555,7 @@ fn validate_resolved_domain_addr(
         Some(BlockedBackendReason::Localhost) if allow_loopback_upstream => {}
         Some(BlockedBackendReason::Localhost) => return Err(EdgionErrorCode::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => return Err(EdgionErrorCode::BackendAddrLinkLocalNotAllowed),
+        Some(BlockedBackendReason::BlockedCidr) => return Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed),
     }
 
     Ok(())
@@ -1569,6 +1571,7 @@ fn record_unsafe_resolved_upstream_attempt(
         let reason = match status {
             EdgionErrorCode::BackendLocalhostNotAllowed => "unsafe loopback upstream",
             EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
+            EdgionErrorCode::BackendAddrBlockedCidrNotAllowed => "unsafe blocked-cidr upstream",
             _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
         };
         upstream.err.push(reason.into());

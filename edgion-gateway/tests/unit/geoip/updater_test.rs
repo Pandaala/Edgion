@@ -61,6 +61,14 @@ fn ip_literal_loopback_update_url_is_allowed_under_test_escape_hatch() {
 }
 
 #[test]
+fn ip_literal_operator_blocked_cidr_is_rejected() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let error = classify_literal_destination(&format!("http://{BLOCKED_CIDR_TEST_IP}/db.mmdb")).unwrap_err();
+    assert!(error.contains("blocked_cidr"), "{error}");
+}
+
+#[test]
 fn ip_literal_link_local_metadata_address_is_rejected() {
     assert!(classify_literal_destination("http://169.254.169.254/db.mmdb").is_err());
 }

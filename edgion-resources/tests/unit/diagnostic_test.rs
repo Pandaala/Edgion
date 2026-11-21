@@ -110,6 +110,10 @@ fn diagnostic_codes_serialize_as_stable_strings() {
             "BackendAddrLinkLocalNotAllowed",
         ),
         (
+            EdgionErrorCode::BackendAddrBlockedCidrNotAllowed,
+            "BackendAddrBlockedCidrNotAllowed",
+        ),
+        (
             EdgionErrorCode::BackendDnsResolutionFailed,
             "BackendDnsResolutionFailed",
         ),

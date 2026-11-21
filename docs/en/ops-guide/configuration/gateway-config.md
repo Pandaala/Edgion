@@ -166,6 +166,7 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 | `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
 | `geoip` | `GeoIpConfig` | *(empty — no `db_path`)* | GeoIP database + updater settings, used by the `GeoIpLocation` plugin (HTTP `EdgionPlugin` and L4 `EdgionStreamPlugin`, one config shape). **Must be nested under `gateway:`** — see [GeoIP Restriction](../gateway/geoip.md) for the full field reference and required pitfalls. |
+| `outbound_egress_blocked_cidrs` | `Array<String>` | `[]` (the shipped config files list cloud metadata endpoints) | Additional destination CIDRs rejected by Gateway backends and guarded outbound clients. Additive only; restart-only; an invalid entry fails startup. See [Outbound egress blocked CIDRs](#outbound-egress-blocked-cidrs). |
 
 ### Controller failover
 
@@ -204,6 +205,54 @@ cannot be loaded by BoringSSL. The shipped images and packages install `ca-certi
 a custom image must do the same. To trust a private CA, use `caCertificateRefs`
 (BackendTLSPolicy, the resource, or EdgionGatewayConfig `outboundTls`), which replaces
 `System`. See [Backend TLS](../../user-guide/http-route/backends/backend-tls.md).
+
+### Outbound egress blocked CIDRs
+
+`gateway.outbound_egress_blocked_cidrs` adds destination ranges that Gateway backends and guarded outbound clients reject, on top of its built-in blocks (loopback `127.0.0.0/8` / `::1`, subject to the
+existing loopback exceptions, and link-local `169.254.0.0/16` / `fe80::/10`, which covers
+the common cloud metadata address `169.254.169.254`). It exists for cloud metadata and
+platform endpoints that sit **outside** link-local, which the built-in classifier cannot
+know about because those addresses can be ordinary business addresses in another network.
+
+```yaml
+gateway:
+  outbound_egress_blocked_cidrs:
+    - "100.100.100.200/32"     # Alibaba Cloud ECS instance metadata
+    - "fd00:ec2::254/128"      # AWS EC2 instance metadata (IPv6)
+    - "fd20:ce::254/128"       # Google Cloud metadata server (IPv6)
+    - "fd00:c1::a9fe:a9fe/128" # Oracle Cloud instance metadata (IPv6)
+    - "168.63.129.16/32"       # Azure platform endpoint (WireServer)
+```
+
+- **Defaults**: the code default (key omitted) is an empty list. The shipped config files
+  (`config/edgion-gateway.yaml`, the Kubernetes ConfigMap and the standalone packages) list
+  the endpoints above. Remove an entry only when that address is a legitimate destination
+  in your network; vendors whose metadata service uses `169.254.169.254` or another
+  link-local address are already covered by the built-in block.
+- **Additive only**: the list can add blocks but never unblocks a built-in range. Loopback
+  and link-local addresses keep their built-in handling even when an entry also covers them.
+  A listed address is rejected regardless of `outbound_egress_block_private`,
+  `target.blockPrivate` and `allowLoopbackUpstream`.
+- **Scope**: the list applies to HTTP/gRPC and L4 backends, RequestMirror, DirectEndpoint,
+  AllEndpointStatus, active health probes, and guarded outbound clients including webhooks,
+  ForwardAuth, OIDC, AI providers, DSL HTTP calls, Wasm callouts and downloads, GeoIP and
+  HTTP DNS. The Gateway filters DNS-derived Service endpoints before load balancing,
+  including Controller-published DNS slices. The Controller does not read this setting.
+  Kafka broker connections use the SDK's dialer. Elasticsearch LinkSys uses its own
+  client configuration. Use network-level egress controls for those two connectors.
+- **Format**: each entry uses `address/prefix` notation (a bare address is rejected); an
+  IPv4-mapped IPv6 destination matches the IPv4 entry. An invalid entry fails startup.
+  Changes require a Gateway restart; there is no environment variable or CLI flag.
+- **Observability**: HTTP backend address admission can record the access-log diagnostic
+  `BackendAddrBlockedCidrNotAllowed`. L4 routes use their existing unsafe-upstream
+  status. DNS answers discarded before endpoint selection do not produce a request
+  diagnostic. The observed egress resolver increments
+  `edgion_outbound_egress_blocked_total{reason="blocked_cidr"}` for each matching
+  address it drops. A managed outbound URL rejected by its IP-literal backend check
+  does not increment that counter.
+
+This is defense in depth. A Kubernetes `NetworkPolicy` (or host firewall) egress deny for
+these addresses remains the primary control.
 
 ### Gateway admin API authentication
 

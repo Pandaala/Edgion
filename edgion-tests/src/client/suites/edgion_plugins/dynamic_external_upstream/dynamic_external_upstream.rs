@@ -15,54 +15,59 @@
 // DynamicExternalUpstream routes to external domains via DNS resolution.
 // In test env, domainMap targets "localhost" which resolves to 127.0.0.1.
 // The suite-owned policy denies loopback in both local and Kubernetes fixtures.
-// The two denial probes require 500/502 plus the current request's canonical
-// BackendLocalhostNotAllowed error; an ordinary dial failure cannot pass.
+// The two loopback denial probes require 500/502 plus the current request's
+// canonical BackendLocalhostNotAllowed error; an ordinary dial failure cannot pass.
+// The reject plugin also maps "blocked" to the TEST-NET-3 literal 203.0.113.200,
+// which both integration Gateway configs add to outbound_egress_blocked_cidrs;
+// "blocked-dns" resolves to the same address through the suite HTTP DNS fixture.
+// Both probes require BackendAddrBlockedCidrNotAllowed.
 //
 // We verify:
 // 1. Plugin request_filter logic via access log (plugin_log entries)
 // 2. Fallback/Reject behavior for missing/unmatched keys
 // 3. Regex extraction
 // 4. dye presence
-// 5. Loopback rejection (security)
+// 5. Loopback and operator blocked-CIDR rejection (security)
 
 use crate::access_log_client::{trace_id_for_marker, traceparent_for_marker, AccessLogEntry};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
 
-fn verify_loopback_rejection(status: u16, entry: &AccessLogEntry, trace_id: &str) -> Result<(), String> {
+const LOOPBACK_DENIAL: &str = "BackendLocalhostNotAllowed";
+const BLOCKED_CIDR_DENIAL: &str = "BackendAddrBlockedCidrNotAllowed";
+
+fn verify_address_rejection(status: u16, entry: &AccessLogEntry, trace_id: &str, code: &str) -> Result<(), String> {
     if status != 500 && status != 502 {
-        return Err(format!("Expected 500 or 502 for loopback rejection, got {status}"));
+        return Err(format!("Expected 500 or 502 for address rejection, got {status}"));
     }
-    if entry.get_nested_str("request_info.trace_id") != Some(trace_id)
-        || !entry.has_diagnostic("error", "BackendLocalhostNotAllowed")
-    {
-        return Err("Missing trace-correlated BackendLocalhostNotAllowed evidence".to_string());
+    if entry.get_nested_str("request_info.trace_id") != Some(trace_id) || !entry.has_diagnostic("error", code) {
+        return Err(format!("Missing trace-correlated {code} evidence"));
     }
     Ok(())
 }
 
-async fn probe_loopback_rejection(ctx: TestContext, host: &str) -> TestResult {
+async fn probe_address_rejection(ctx: TestContext, host: &str, region: &str, code: &str) -> TestResult {
     let start = Instant::now();
-    let marker = format!("deu-loopback-denial-{}", uuid::Uuid::new_v4());
+    let marker = format!("deu-address-denial-{}", uuid::Uuid::new_v4());
     let trace_id = trace_id_for_marker(&marker);
     let access_logs = ctx.access_log_client();
     let request = ctx
         .http_client
         .get(format!("{}/echo", ctx.edgion_plugins_url()))
         .header("host", host)
-        .header("X-Target-Region", "us")
+        .header("X-Target-Region", region)
         .header("traceparent", traceparent_for_marker(&marker))
         .header("access_log", "test_store");
     let exchange = tokio::time::timeout(Duration::from_secs(10), async {
         let response = request
             .send()
             .await
-            .map_err(|_| "Loopback probe request failed".to_string())?;
+            .map_err(|_| "Address probe request failed".to_string())?;
         let status = response.status().as_u16();
         response
             .bytes()
             .await
-            .map_err(|_| "Loopback probe response body read failed".to_string())?;
+            .map_err(|_| "Address probe response body read failed".to_string())?;
         Ok::<_, String>(status)
     })
     .await;
@@ -73,11 +78,11 @@ async fn probe_loopback_rejection(ctx: TestContext, host: &str) -> TestResult {
         )
         .await
         {
-            Ok(Ok(entry)) => verify_loopback_rejection(status, &entry, &trace_id),
-            _ => Err("Failed to observe loopback probe access log".to_string()),
+            Ok(Ok(entry)) => verify_address_rejection(status, &entry, &trace_id, code),
+            _ => Err("Failed to observe address probe access log".to_string()),
         },
         Ok(Err(error)) => Err(error),
-        Err(_) => Err("Loopback probe exchange timed out".to_string()),
+        Err(_) => Err("Address probe exchange timed out".to_string()),
     };
     // Bounded cleanup cannot guarantee deletion after outer cancellation or
     // terminal publication following an exchange timeout; the store TTL still applies.
@@ -88,16 +93,16 @@ async fn probe_loopback_rejection(ctx: TestContext, host: &str) -> TestResult {
     match (outcome, cleanup_ok) {
         (Ok(()), true) => TestResult::passed_with_message(
             start.elapsed(),
-            "Loopback rejected with the canonical request diagnostic".to_string(),
+            format!("Address rejected with the canonical {code} request diagnostic"),
         ),
         (Err(error), true) => TestResult::failed(start.elapsed(), error),
         (Ok(()), false) => TestResult::failed(
             start.elapsed(),
-            "Failed to clean up loopback probe access log".to_string(),
+            "Failed to clean up address probe access log".to_string(),
         ),
         (Err(error), false) => TestResult::failed(
             start.elapsed(),
-            format!("{error}; failed to clean up loopback probe access log"),
+            format!("{error}; failed to clean up address probe access log"),
         ),
     }
 }
@@ -196,7 +201,7 @@ impl DynamicExternalUpstreamTestSuite {
         TestCase::new(
             "skip_matched_localhost_rejected",
             "Skip mode: matched localhost rejected with the current request diagnostic",
-            |ctx: TestContext| Box::pin(probe_loopback_rejection(ctx, SKIP_HOST)),
+            |ctx: TestContext| Box::pin(probe_address_rejection(ctx, SKIP_HOST, "us", LOOPBACK_DENIAL)),
         )
     }
 
@@ -385,7 +390,40 @@ impl DynamicExternalUpstreamTestSuite {
         TestCase::new(
             "reject_matched_localhost_rejected",
             "Reject mode: matched localhost rejected with the current request diagnostic",
-            |ctx: TestContext| Box::pin(probe_loopback_rejection(ctx, REJECT_HOST)),
+            |ctx: TestContext| Box::pin(probe_address_rejection(ctx, REJECT_HOST, "us", LOOPBACK_DENIAL)),
+        )
+    }
+
+    /// Reject mode: matched key → IP literal in the Gateway's
+    /// `outbound_egress_blocked_cidrs` → 5xx with the blocked-CIDR diagnostic.
+    /// An ordinary dial failure to the unroutable TEST-NET address cannot pass.
+    fn reject_matched_blocked_cidr_rejected() -> TestCase {
+        TestCase::new(
+            "reject_matched_blocked_cidr_rejected",
+            "Reject mode: matched operator blocked-CIDR literal rejected with the current request diagnostic",
+            |ctx: TestContext| {
+                Box::pin(probe_address_rejection(
+                    ctx,
+                    REJECT_HOST,
+                    "blocked",
+                    BLOCKED_CIDR_DENIAL,
+                ))
+            },
+        )
+    }
+
+    fn reject_matched_blocked_cidr_dns_answer() -> TestCase {
+        TestCase::new(
+            "reject_matched_blocked_cidr_dns_answer",
+            "Reject mode: matched hostname resolves to an operator-blocked address",
+            |ctx: TestContext| {
+                Box::pin(probe_address_rejection(
+                    ctx,
+                    REJECT_HOST,
+                    "blocked-dns",
+                    BLOCKED_CIDR_DENIAL,
+                ))
+            },
         )
     }
 
@@ -605,6 +643,8 @@ impl TestSuite for DynamicExternalUpstreamTestSuite {
             Self::reject_missing_header(),
             Self::reject_no_match(),
             Self::reject_matched_localhost_rejected(),
+            Self::reject_matched_blocked_cidr_rejected(),
+            Self::reject_matched_blocked_cidr_dns_answer(),
             // Regex extraction
             Self::regex_match_extracted(),
             Self::regex_no_match_fallback(),
@@ -634,16 +674,16 @@ mod tests {
         let trace = trace_id_for_marker("loopback-verdict");
         let entry = denial_entry(&trace);
         for status in [500, 502] {
-            assert!(verify_loopback_rejection(status, &entry, &trace).is_ok());
+            assert!(verify_address_rejection(status, &entry, &trace, LOOPBACK_DENIAL).is_ok());
         }
         for status in [200, 400, 403, 404, 501, 503, 504] {
-            assert!(verify_loopback_rejection(status, &entry, &trace).is_err());
+            assert!(verify_address_rejection(status, &entry, &trace, LOOPBACK_DENIAL).is_err());
         }
-        assert!(verify_loopback_rejection(502, &entry, "stale-trace").is_err());
+        assert!(verify_address_rejection(502, &entry, "stale-trace", LOOPBACK_DENIAL).is_err());
         for request_info in [json!({}), json!({"trace_id": 42}), json!(null)] {
             let mut entry = denial_entry(&trace);
             entry.data["request_info"] = request_info;
-            assert!(verify_loopback_rejection(502, &entry, &trace).is_err());
+            assert!(verify_address_rejection(502, &entry, &trace, LOOPBACK_DENIAL).is_err());
         }
     }
 
@@ -658,7 +698,7 @@ mod tests {
             }),
         };
         for status in [500, 502] {
-            assert!(verify_loopback_rejection(status, &entry, &trace).is_err());
+            assert!(verify_address_rejection(status, &entry, &trace, LOOPBACK_DENIAL).is_err());
         }
     }
 
@@ -679,8 +719,29 @@ mod tests {
         ] {
             let mut entry = denial_entry(&trace);
             entry.data["diagnostics"] = diagnostics;
-            assert!(verify_loopback_rejection(502, &entry, &trace).is_err());
+            assert!(verify_address_rejection(502, &entry, &trace, LOOPBACK_DENIAL).is_err());
         }
-        assert!(verify_loopback_rejection(502, &AccessLogEntry { data: json!({}) }, &trace).is_err());
+        assert!(verify_address_rejection(502, &AccessLogEntry { data: json!({}) }, &trace, LOOPBACK_DENIAL).is_err());
+    }
+
+    #[test]
+    fn blocked_cidr_rejection_requires_its_own_diagnostic() {
+        let trace = trace_id_for_marker("blocked-cidr-verdict");
+        let mut blocked = denial_entry(&trace);
+        blocked.data["diagnostics"] = json!([{"kind": "error", "code": BLOCKED_CIDR_DENIAL}]);
+        for status in [500, 502] {
+            assert!(verify_address_rejection(status, &blocked, &trace, BLOCKED_CIDR_DENIAL).is_ok());
+        }
+        assert!(verify_address_rejection(502, &blocked, &trace, LOOPBACK_DENIAL).is_err());
+        assert!(verify_address_rejection(502, &denial_entry(&trace), &trace, BLOCKED_CIDR_DENIAL).is_err());
+        for diagnostics in [
+            json!([{"kind": "error", "code": "BackendAddrLinkLocalNotAllowed"}]),
+            json!([{"kind": "info", "code": BLOCKED_CIDR_DENIAL}]),
+            json!([]),
+        ] {
+            let mut entry = denial_entry(&trace);
+            entry.data["diagnostics"] = diagnostics;
+            assert!(verify_address_rejection(502, &entry, &trace, BLOCKED_CIDR_DENIAL).is_err());
+        }
     }
 }

@@ -163,6 +163,7 @@ Gateway 采用**三端口模型**：
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
 | `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 | `geoip` | `GeoIpConfig` | *(空——未设置 `db_path`)* | GeoIP 数据库与更新器配置，供 `GeoIpLocation` 插件使用（HTTP `EdgionPlugin` 和 L4 `EdgionStreamPlugin` 共用同一套配置结构）。**必须嵌套在 `gateway:` 下**——完整字段参考及必读的坑见 [GeoIP 地理限制](../gateway/geoip.md)。 |
+| `outbound_egress_blocked_cidrs` | `Array<String>` | `[]`（随项目发布的配置文件列出了云元数据端点） | Gateway 后端和接入出站策略的客户端拒绝的额外目的 CIDR。只能追加；修改需重启；任一条目非法则启动失败。见 [出站封禁 CIDR](#出站封禁-cidr)。 |
 
 ### Controller 故障切换
 
@@ -191,6 +192,44 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 超过 8 MiB、PEM 格式错误、没有可用证书、BoringSSL 无法加载时，Gateway 拒绝启动。官方镜像和安装包都会安装
 `ca-certificates`，自定义镜像也必须安装。要信任私有 CA，请使用 `caCertificateRefs`（BackendTLSPolicy、
 资源自身或 EdgionGatewayConfig `outboundTls`），它会替换 `System`。参见[后端 TLS](../../user-guide/http-route/backends/backend-tls.md)。
+
+### 出站封禁 CIDR
+
+`gateway.outbound_egress_blocked_cidrs` 在 Gateway 内置拦截之外，为后端和接入出站策略的客户端追加拒绝连接的目的地址段。内置拦截包括回环 `127.0.0.0/8` / `::1`（沿用现有的回环例外）和链路本地
+`169.254.0.0/16` / `fe80::/10`，后者已覆盖常见的云元数据地址 `169.254.169.254`。本字段针对的是
+位于链路本地**之外**的云元数据与平台端点：这些地址在别的网络里可能是正常业务地址，内置分类器
+无法替你判断。
+
+```yaml
+gateway:
+  outbound_egress_blocked_cidrs:
+    - "100.100.100.200/32"     # 阿里云 ECS 实例元数据
+    - "fd00:ec2::254/128"      # AWS EC2 实例元数据（IPv6）
+    - "fd20:ce::254/128"       # Google Cloud 元数据服务器（IPv6）
+    - "fd00:c1::a9fe:a9fe/128" # Oracle Cloud 实例元数据（IPv6）
+    - "168.63.129.16/32"       # Azure 平台端点（WireServer）
+```
+
+- **默认值**：代码默认值（不写该键）为空列表。随项目发布的配置文件（`config/edgion-gateway.yaml`、
+  Kubernetes ConfigMap 以及 standalone 安装包）列出了上面的端点。只有当某个地址在你的网络中是
+  合法目的地时才删除对应条目；元数据服务使用 `169.254.169.254` 或其他链路本地地址的厂商，
+  已被内置拦截覆盖。
+- **只能追加**：该列表只能增加拦截，不能放开任何内置地址段。即使条目覆盖了回环或链路本地地址，
+  这两类地址仍按内置规则处理。列表中的地址无论 `outbound_egress_block_private`、
+  `target.blockPrivate`、`allowLoopbackUpstream` 如何设置都会被拒绝。
+- **生效范围**：HTTP/gRPC 和 L4 后端、RequestMirror、DirectEndpoint、AllEndpointStatus、主动健康探针，
+  以及接入出站策略的客户端，包括 webhook、ForwardAuth、OIDC、AI 提供方、DSL HTTP 调用、Wasm 外呼和下载、
+  GeoIP 更新及 HTTP DNS。Gateway 在负载均衡前过滤 DNS 派生的 Service 端点，包括 Controller 发布的 DNS 切片。
+  Controller 不读取该配置。Kafka broker 使用 SDK 拨号，Elasticsearch LinkSys 使用独立的客户端配置；
+  这两个连接器的目的地址限制需要通过网络层实施。
+- **格式**：每个条目必须使用 `地址/前缀长度` 形式（只写地址会被拒绝）；IPv4-mapped 的 IPv6 目的地址
+  会命中对应的 IPv4 条目。任一条目非法则启动失败。修改需重启 Gateway；没有对应的环境变量或 CLI 参数。
+- **可观测性**：HTTP 后端地址检查可在访问日志中记录 `BackendAddrBlockedCidrNotAllowed`。
+  L4 路由沿用原有的不安全上游状态。选址前过滤的 DNS 答案没有对应的请求诊断。
+  接入指标的出站解析器每过滤一个命中地址，就增加一次 `edgion_outbound_egress_blocked_total{reason="blocked_cidr"}`。
+  托管出站 URL 的 IP 字面量被后端地址检查拒绝时，该计数器不会递增。
+
+这是纵深防御。针对这些地址的 Kubernetes `NetworkPolicy`（或主机防火墙）出站拒绝规则仍是主要控制手段。
 
 ### conf_sync_security
 

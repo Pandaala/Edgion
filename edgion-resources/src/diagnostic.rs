@@ -185,6 +185,10 @@ pub enum EdgionErrorCode {
     /// Link-local / cloud-metadata backend rejected (SSRF defense: `169.254.0.0/16`, `fe80::/10`)
     BackendAddrLinkLocalNotAllowed,
 
+    /// Backend address matches the operator-configured egress blocked CIDR list
+    /// (`outbound_egress_blocked_cidrs`, e.g. vendor cloud metadata endpoints)
+    BackendAddrBlockedCidrNotAllowed,
+
     /// DNS resolution failed for ExternalName service hostname
     BackendDnsResolutionFailed,
 
@@ -440,6 +444,7 @@ impl EdgionErrorCode {
             Self::GrpcUpstreamNotBackendRefs => "GrpcUpstreamNotBackendRefs",
             Self::RefDenied => "RefDenied",
             Self::BackendAddrLinkLocalNotAllowed => "BackendAddrLinkLocalNotAllowed",
+            Self::BackendAddrBlockedCidrNotAllowed => "BackendAddrBlockedCidrNotAllowed",
             Self::BackendDnsResolutionFailed => "BackendDnsResolutionFailed",
             Self::BackendUnsupportedKind => "BackendUnsupportedKind",
             Self::StickyBackendUnhealthy => "StickyBackendUnhealthy",

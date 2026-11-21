@@ -4,6 +4,8 @@ kind: Gateway
 metadata:
   name: deu-gateway
   namespace: edgion-test
+  annotations:
+    edgion.io/dns-resolver-ref: edgion-test/deu-dns
 spec:
   gatewayClassName: deu-class
   listeners:

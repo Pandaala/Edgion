@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: deu-dns
+  namespace: edgion-test
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://edgion-test-server.edgion-test.svc.cluster.local:30001/dns/resolve?host={domain}&onlyHost=deu-blocked.invalid&ip=203.0.113.200"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: none

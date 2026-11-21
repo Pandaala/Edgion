@@ -7,6 +7,14 @@ gateway:
   server_addrs: ["https://127.0.0.1:12151"]
   admin_listen: "127.0.0.1:12001"        # Admin API — loopback-only (sensitive: /configclient, /api/v1/server-info)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); serves /health and /ready
+  # Additive egress deny list (cloud metadata endpoints outside link-local);
+  # built-in loopback / link-local blocking always applies. Restart-only.
+  outbound_egress_blocked_cidrs:
+    - "100.100.100.200/32"     # Alibaba Cloud ECS instance metadata
+    - "fd00:ec2::254/128"      # AWS EC2 instance metadata (IPv6)
+    - "fd20:ce::254/128"       # Google Cloud metadata server (IPv6)
+    - "fd00:c1::a9fe:a9fe/128" # Oracle Cloud instance metadata (IPv6)
+    - "168.63.129.16/32"       # Azure platform endpoint (WireServer)
 
 logging:
   log_dir: logs

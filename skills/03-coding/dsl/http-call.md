@@ -78,7 +78,7 @@ arguments.
 - `httpMaxTimeoutMs` (default 5000, range 1–60000 ms)
 - `httpMaxRequestBodyBytes` (default 1 MiB, explicit maximum 32 MiB)
 - `httpMaxResponseBodyBytes` (default and explicit maximum 1 MiB)
-- `httpBlockPrivateIps` (default false)
+- `httpBlockPrivateIps` (default false). Configured Gateway blocked CIDRs apply independently to literals, DNS answers and redirect destinations.
 
 Call timeouts are clamped to the configured maximum. For an opaque `Body`, the effective
 request limit is the smaller of `httpMaxRequestBodyBytes` and the gateway's resolved

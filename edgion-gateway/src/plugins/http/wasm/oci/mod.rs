@@ -261,6 +261,7 @@ impl RegistrySession {
         };
         let base = registry_base(&api_host);
         let registry_url = Url::parse(&base).map_err(|_| "wasm oci registry URL is invalid".to_string())?;
+        super::admit_configured_destination(&registry_url)?;
         let registry_uses_tls = registry_url.scheme() == "https";
         let registry_origin = registry_url.origin();
         let egress_policy = EgressPolicy {
@@ -508,6 +509,7 @@ fn guard_remote_target(target: &Url, registry_origin: &Origin, policy: EgressPol
     let reason = match classify_ip(ip) {
         IpClass::Loopback => "loopback",
         IpClass::LinkLocal => "link_local",
+        IpClass::BlockedCidr => "blocked_cidr",
         IpClass::Unspecified => "unspecified",
         IpClass::Private | IpClass::UniqueLocal if policy.block_private => "private",
         IpClass::Private | IpClass::UniqueLocal | IpClass::Global => return Ok(()),

@@ -1524,14 +1524,14 @@ impl Vm {
             });
         }
 
-        if runtime.block_private_ips {
+        {
             let raw = parsed_url.host_str().unwrap_or("");
             // url crate serializes IPv6 hosts with brackets (e.g. "[::1]") — strip them
             let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-            if is_ssrf_blocked_ip_literal(host) {
+            if is_ssrf_blocked_ip_literal(host, runtime.block_private_ips) {
                 return Err(RuntimeError::ApiError {
                     function: "http.call".into(),
-                    message: format!("http.call blocked: private/loopback IP not allowed: {}", host),
+                    message: format!("http.call blocked: destination IP not allowed: {}", host),
                 });
             }
         }
@@ -2216,16 +2216,13 @@ impl Vm {
     }
 }
 
-/// Return true if `host` is an IP literal that must be blocked to prevent SSRF
-/// (loopback / link-local / RFC 1918 private / RFC 4193 ULA / unspecified).
+/// Check literal destinations before sending or following a redirect.
+/// Configured CIDRs always apply. The strict mode also blocks loopback,
+/// link-local, private, unique-local and unspecified addresses.
 /// Hostnames are not resolved by this helper. Guarded clients use the shared
 /// `EgressResolver` to classify their resolved addresses at dial time.
 /// IPv6 zone IDs are stripped per RFC 6874 before parsing.
-///
-/// Exposed `pub(crate)` so the guarded DSL HTTP client's redirect policy
-/// (`runtime::dsl_http_client(true)`) re-applies the same IP-literal check to
-/// every redirect hop.
-pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
+pub(crate) fn is_ssrf_blocked_ip_literal(host: &str, block_private_ips: bool) -> bool {
     use crate::util::net::{classify_ip, IpClass};
     use std::net::IpAddr;
     // Strip IPv6 zone IDs (RFC 6874: "::1%eth0").
@@ -2236,9 +2233,11 @@ pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
     };
     // Exhaustive match, no wildcard: a new IpClass variant becomes a compile error
     // here too, so it cannot silently fall outside the DSL blocklist (an SSRF miss).
-    // DSL deliberately BLOCKS private / unique-local / unspecified.
     match classify_ip(ip) {
-        IpClass::Loopback | IpClass::LinkLocal | IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified => true,
+        IpClass::Loopback | IpClass::LinkLocal | IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified => {
+            block_private_ips
+        }
+        IpClass::BlockedCidr => true,
         IpClass::Global => false,
     }
 }

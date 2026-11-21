@@ -690,23 +690,22 @@ Kubernetes EndpointSlice — the gateway performs its own DNS resolution and mus
 result before connecting. Two enforcement points implement one policy, so the behavior is the same
 whether `target.url` names a hostname or an IP literal:
 
-- **Always blocked**: loopback (`127.0.0.0/8`, `::1`) and link-local addresses, which includes the
-  cloud-metadata address `169.254.169.254` and its whole `169.254.0.0/16` segment.
+- **Always blocked**: unspecified (`0.0.0.0`, `::`), loopback (`127.0.0.0/8`, `::1`) and link-local addresses, including the
+  cloud-metadata address `169.254.169.254` and its whole `169.254.0.0/16` segment, plus every
+  range in the Gateway's [`outbound_egress_blocked_cidrs`](../configuration/gateway-config.md#outbound-egress-blocked-cidrs)
+  list (cloud metadata endpoints outside link-local in the shipped configs).
 - **Blocked when `target.blockPrivate: true`**: RFC1918 private ranges (`10/8`, `172.16/12`,
-  `192.168/16`) and unique-local (`fd00::/8`) addresses, in addition to the always-blocked classes.
+  `192.168/16`) and unique-local (`fc00::/7`) addresses, in addition to the always-blocked classes.
 - **Default (`blockPrivate` unset or `false`)**: private ranges are allowed, matching the long-standing
   behavior for Service targets — most webhooks legitimately point at an internal artifact repository
   or SaaS reachable only over a private network.
 
 A rejected address surfaces as a connect failure for that call (WebhookKeyGet writes no value, same
-as any other webhook failure). Rejections increment the
-`edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
-on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
-path, only `reason="private"` is ever recorded: the `dial_url` `blockPrivate` check records that
-metric, but the loopback/link-local rejection there goes through the shared backend guard
-(`validate_endpoint_backend_addr`) that predates this metric and does not touch it. So a dashboard
-or alert built on this counter sees full coverage for a hostname target but is blind to
-loopback/link-local rejections when `target.url` is an IP literal.
+as any other webhook failure). For hostname targets the egress resolver increments
+`edgion_outbound_egress_blocked_total` with the reason `private`, `loopback`, `link_local`,
+`unspecified`, or `blocked_cidr`. For IP-literal URL targets, the URL policy counts
+`private` and `unspecified`. The earlier backend guard rejects loopback, link-local and
+configured CIDRs without incrementing this counter.
 
 **Gateway-local outbound settings.** When a webhook does not set `target.blockPrivate` explicitly,
 the effective value comes from the gateway's own configuration. The same configuration block also
@@ -717,6 +716,7 @@ owns the process-wide HTTP/2 response-header limit for Gateway-initiated reqwest
 | `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for guarded outbound targets. A webhook's `target.blockPrivate` may override it; Redis may not. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
 | `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | Freshness of guarded outbound DNS answers, including Redis, in the egress answer caches (the shared one, and the separate one used by DSL `http.call`) when the resolver reports no record TTL (capped at 300 seconds; reported TTLs are honored within 5–300 seconds). Answers are cached raw and classified on every use. `0` disables caching. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
 | `outbound_http2_max_header_list_size` (gateway config file) | Integer (bytes) | `16384` | Decoded HTTP/2 response-header-list limit shared by Gateway-initiated reqwest calls. Accepts `16384..=65536` and requires a Gateway restart. It does not affect client-to-Gateway traffic or Pingora route upstreams. |
+| `outbound_egress_blocked_cidrs` (gateway config file) | Array of CIDR strings | `[]` (shipped configs list cloud metadata endpoints) | Additional destinations rejected by guarded outbound clients and Gateway backends, regardless of `blockPrivate`. Additive only; restart-only. See [Outbound egress blocked CIDRs](../configuration/gateway-config.md#outbound-egress-blocked-cidrs). |
 
 **Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always
 overrides the gateway-local default — a cluster administrator who wants the stricter posture

@@ -196,6 +196,7 @@ fn classify_literal_destination(url: &str) -> Result<(), String> {
         IpClass::Loopback if cfg!(test) || edgion_common::test_mode::is_integration_testing_mode() => None,
         IpClass::Loopback => Some("loopback"),
         IpClass::LinkLocal => Some("link_local"),
+        IpClass::BlockedCidr => Some("blocked_cidr"),
         IpClass::Unspecified => Some("unspecified"),
         IpClass::Private | IpClass::UniqueLocal if default_block_private() => Some("private"),
         IpClass::Private | IpClass::UniqueLocal | IpClass::Global => None,

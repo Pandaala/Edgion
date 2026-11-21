@@ -20,7 +20,7 @@ use edgion_common::egress::{
 
 use crate::observe::metrics::record_egress_blocked;
 
-pub use edgion_common::egress::EgressPolicy;
+pub use edgion_common::egress::{EgressPolicy, ResolverAddressPolicy};
 
 const REQUEST_EGRESS_CACHE_CAPACITY: usize = 1024;
 const REQUEST_EGRESS_CACHE_SHARDS: usize = 8;
@@ -50,6 +50,18 @@ pub fn configure_egress_defaults(block_private: bool, dns_cache_ttl: Duration) {
     tracing::info!(block_private, dns_cache_ttl_ms, "Outbound egress defaults configured");
 }
 
+/// Compile and install the operator `outbound_egress_blocked_cidrs` list into
+/// the shared address classifier. Runs once at startup, before any outbound
+/// client or backend dial; an empty list installs nothing.
+pub fn configure_egress_blocked_cidrs(cidrs: &[String]) -> Result<(), String> {
+    let Some(matcher) = edgion_common::egress::compile_blocked_cidrs(cidrs)? else {
+        return Ok(());
+    };
+    edgion_common::egress::install_blocked_cidrs(matcher)?;
+    tracing::info!(count = cidrs.len(), "Outbound egress blocked CIDRs configured");
+    Ok(())
+}
+
 pub fn default_block_private() -> bool {
     EGRESS_BLOCK_PRIVATE.load(Ordering::Relaxed)
 }
@@ -77,7 +89,7 @@ impl EgressResolver {
 
     /// Construct a resolver for request- or upstream-influenced destination
     /// names, backed by [`request_egress_answer_cache`].
-    pub fn new_request_influenced(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+    pub fn new_request_influenced(spec: ResolverSpec, policy: ResolverAddressPolicy, ttl: Duration) -> Self {
         Self {
             inner: CoreEgressResolver::with_cache(
                 spec,

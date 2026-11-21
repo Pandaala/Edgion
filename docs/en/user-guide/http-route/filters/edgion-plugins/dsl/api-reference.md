@@ -1647,6 +1647,7 @@ fail-close `BodyAccess` error.
 
 **Constraints**:
 - Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) raise an error.
+- Gateway `outbound_egress_blocked_cidrs` applies to literals, DNS answers and redirect targets in both modes.
 - When `httpBlockPrivateIps: true`, loopback, private, link-local, and unspecified destinations are blocked. Direct IP literals are rejected before sending; hostnames are checked after DNS resolution against the exact addresses used for dialing, including on redirect hops. Network-level egress controls remain recommended as defense in depth.
 - Only the third argument accepts the opaque `Body` value, normally written as `req.body`. The runtime takes an immutable call-time snapshot and pull-streams its raw bytes from memory, spill files, and mutation segments without materializing the complete body.
 - Opaque `Body` size is capped by `min(httpMaxRequestBodyBytes, gateway physical request-body cap)`. The configured field defaults to 1 MiB and may be explicitly raised to at most 32 MiB. Bytes fetched from the snapshot count against the cumulative `maxBodyScanPasses` budget.

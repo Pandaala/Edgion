@@ -412,3 +412,27 @@ fn policy_ancestor_refusal_blocks_actual_peer_construction() {
     )
     .is_ok());
 }
+
+#[test]
+fn operator_blocked_cidr_has_its_own_status_and_ignores_loopback_exceptions() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let blocked = ip(BLOCKED_CIDR_TEST_IP);
+    let addr = SocketAddr::Inet(std::net::SocketAddr::new(blocked, 80));
+    for allow_loopback_upstream in [false, true] {
+        assert_eq!(
+            validate_backend_addr(&addr, allow_loopback_upstream),
+            Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed)
+        );
+        assert_eq!(
+            validate_endpoint_backend_addr(&addr, allow_loopback_upstream),
+            Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed)
+        );
+        assert_eq!(
+            first_safe_inet_addr(&[blocked], 80, allow_loopback_upstream),
+            Err(EdgionErrorCode::BackendAddrBlockedCidrNotAllowed)
+        );
+    }
+    let picked = first_safe_inet_addr(&[blocked, ip("93.184.216.34")], 443, false).unwrap();
+    assert!(matches!(picked, SocketAddr::Inet(a) if a.ip() == ip("93.184.216.34")));
+}

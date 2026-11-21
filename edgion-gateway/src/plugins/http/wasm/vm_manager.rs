@@ -1018,6 +1018,8 @@ async fn fetch_url_bytes_with_permits(
         .as_ref()
         .map_err(Clone::clone)?;
 
+    let url = reqwest::Url::parse(url).map_err(|_| "invalid Wasm source URL")?;
+    super::admit_configured_destination(&url)?;
     let auth_header = match fetch {
         Some(f) if f.auth_header_secret_ref.is_some() => match &f.resolved_auth_header {
             Some(v) => Some(v.clone()),
@@ -1041,7 +1043,7 @@ async fn fetch_url_bytes_with_permits(
             .acquire()
             .await
             .map_err(|_| "wasm fetch semaphore closed".to_string())?;
-        let mut req = client.get(url).timeout(timeout);
+        let mut req = client.get(url.clone()).timeout(timeout);
         if let Some(auth) = &auth_header {
             req = req.header(reqwest::header::AUTHORIZATION, auth.clone());
         }

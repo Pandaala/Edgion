@@ -3477,3 +3477,17 @@ fn configured_idle_limits_span_entries_and_release_on_checkout_and_retirement() 
         );
     }
 }
+
+#[tokio::test]
+async fn url_fetch_rejects_configured_cidr_before_network_admission() {
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    install();
+    let url = format!("http://{BLOCKED_CIDR_TEST_IP}/module.wasm");
+    let permits = tokio::sync::Semaphore::new(0);
+    permits.close();
+    let result = fetch_url_bytes_with_permits(&permits, &url, None, Some(&actual_url_client(&url, None))).await;
+    assert_eq!(
+        result.unwrap_err(),
+        "Wasm destination blocked by configured egress CIDR"
+    );
+}

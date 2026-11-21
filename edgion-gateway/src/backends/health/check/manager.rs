@@ -267,7 +267,7 @@ async fn health_check_loop(service_key: String, policy: Arc<super::config_store:
             let config_store = get_hc_config_store();
             let captured_service_key = &service_key;
             let captured_policy_identity = &policy_identity;
-            let refused = dns_derived && refuses_dns_endpoint(addr);
+            let refused = refuses_probe_endpoint(addr, dns_derived);
             probes.push(async move {
                 let probe = async {
                     if refused {
@@ -435,9 +435,12 @@ fn is_external_name(service_key: &str) -> bool {
         })
 }
 
-/// A DNS-derived endpoint no probe may dial: loopback (outside integration
-/// testing) or link-local, the same rule encrypted probes apply.
-fn refuses_dns_endpoint(addr: std::net::SocketAddr) -> bool {
+/// Every probe honors operator CIDRs. DNS endpoints also require the built-in
+/// endpoint checks because their addresses bypass API server validation.
+fn refuses_probe_endpoint(addr: std::net::SocketAddr, dns_derived: bool) -> bool {
+    if !dns_derived {
+        return crate::util::net::classify_ip(addr.ip()) == crate::util::net::IpClass::BlockedCidr;
+    }
     crate::backends::peer_builder::validate_endpoint_backend_addr(
         &pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
         false,

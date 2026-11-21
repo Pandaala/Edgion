@@ -36,3 +36,19 @@ pub mod plugin;
 pub mod request;
 
 pub use plugin::WasmPlugin;
+
+/// Reqwest dials IP literals without consulting its DNS resolver. Apply the
+/// operator list to the same parsed URL the client will send.
+#[cfg(feature = "wasm")]
+fn admit_configured_destination(url: &url::Url) -> Result<(), &'static str> {
+    use crate::util::net::{classify_ip, IpClass};
+    let ip = match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.into(),
+        Some(url::Host::Ipv6(ip)) => ip.into(),
+        _ => return Ok(()),
+    };
+    if classify_ip(ip) == IpClass::BlockedCidr {
+        return Err("Wasm destination blocked by configured egress CIDR");
+    }
+    Ok(())
+}

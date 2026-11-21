@@ -2761,3 +2761,20 @@ fn external_jump_dials_the_first_safe_resolved_address() {
     );
     assert_eq!(first_safe_resolved_addr(&[], false), Err(None));
 }
+
+#[test]
+fn external_jump_rejects_operator_blocked_cidr_with_its_own_status() {
+    use super::first_safe_resolved_addr;
+    use crate::test_blocked_cidr::{install, BLOCKED_CIDR_TEST_IP};
+    use edgion_resources::EdgionErrorCode;
+    install();
+    let blocked = std::net::SocketAddr::new(BLOCKED_CIDR_TEST_IP.parse().unwrap(), 80);
+    let public = "192.0.2.9:80".parse::<std::net::SocketAddr>().unwrap();
+    for allow_loopback_upstream in [false, true] {
+        assert_eq!(
+            first_safe_resolved_addr(&[blocked], allow_loopback_upstream),
+            Err(Some((blocked, EdgionErrorCode::BackendAddrBlockedCidrNotAllowed)))
+        );
+    }
+    assert_eq!(first_safe_resolved_addr(&[blocked, public], false), Ok(public));
+}

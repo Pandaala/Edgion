@@ -48,7 +48,9 @@ redaction guard.
 
 ## Accepted tradeoffs (fix suggestions here should be CLOSED unless a new scenario is shown)
 
-**1. IP-literal origins are not additionally IP-classified at dispatch.**
+**1. The Gateway-local blocked CIDRs take precedence over an allowlisted literal.**
+The callout checks the final request URL for `BlockedCidr` before sending. The
+following trust exception applies only to addresses outside that class.
 reqwest skips the custom DNS resolver for IP literals, so an operator who
 allowlists `http://169.254.169.254:80` or an RFC1918 literal reaches it. This is
 **operator self-harm**: the operator explicitly put that exact IP in
