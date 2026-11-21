@@ -26,7 +26,7 @@ impl AnthropicResponseProcessor {
     }
 }
 use super::*;
-use crate::ai::accounting::usage::QUOTA_EXCEEDED_SSE_EVENT;
+use crate::ai::accounting::usage::{GenAiAttemptUsageSource, QUOTA_EXCEEDED_SSE_EVENT};
 use crate::ai::quota::QuotaFinalStatus;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 
@@ -394,10 +394,7 @@ async fn streaming_translation_handles_every_byte_split_and_exact_usage() {
         assert!(output.ends_with("data: [DONE]\n\n"), "split={split}");
         assert!(!output.contains("claude-provider"));
         assert_eq!(usage.reported_tokens(), Some((15, 11)));
-        let mut oracle = SseDecoder::with_default_limit();
-        oracle.enable_data_char_counting();
-        oracle.feed_each_bytes(Bytes::copy_from_slice(output.as_bytes()), |_| {});
-        assert_eq!(usage.output_chars(), oracle.take_data_chars(), "split={split}");
+        assert_eq!(usage.output_chars(), 5, "split={split}");
     }
 }
 
@@ -445,6 +442,7 @@ async fn streaming_tools_forward_argument_fragments_without_accumulating() {
     let output = String::from_utf8(output.to_vec()).expect("UTF-8 output");
     assert_eq!(output, WIRE_GOLDEN);
     assert_eq!(usage.reported_tokens(), Some((1, 2)));
+    assert_eq!(usage.output_chars(), r#"{"city":"Paris"}"#.len() as u64);
 }
 
 #[tokio::test]
@@ -896,6 +894,37 @@ async fn streaming_translation_terminates_when_quota_is_over_limit() {
 }
 
 #[tokio::test]
+async fn unmeasured_stream_without_a_content_prefix_requires_reported_usage() {
+    let (mut partial, partial_usage) = processor(true, false);
+    partial.on_response_header(&mut header(200, "text/event-stream"));
+    let mut session = mock_session();
+    run_chunk(&mut partial, &mut session, Some(b"data: {"), false).await;
+    partial.finalize_incomplete("terminal", "disconnect");
+    assert_eq!(
+        partial_usage.accounting_snapshot(3, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+
+    for reported in [false, true] {
+        let (mut processor, usage) = processor(true, false);
+        processor.on_response_header(&mut header(200, "text/event-stream"));
+        let mut session = mock_session();
+        session.expect_record_error().times(1).return_const(());
+        let mut batch = if reported { streaming_fixture() } else { String::new() };
+        batch.push_str("data: invalid\n\n");
+        run_chunk(&mut processor, &mut session, Some(batch.as_bytes()), false).await;
+        let snapshot = usage.accounting_snapshot(3, true);
+        if reported {
+            assert_eq!(snapshot.source, GenAiAttemptUsageSource::Reported);
+            assert_eq!(snapshot.usage.unwrap().output_tokens, 11);
+        } else {
+            assert_eq!(snapshot.source, GenAiAttemptUsageSource::Unknown);
+            assert!(snapshot.usage.is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn streaming_translation_failure_emits_error_then_terminates_once() {
     let (mut processor, usage) = processor(true, false);
     processor.on_response_header(&mut header(200, "text/event-stream"));
@@ -906,7 +935,17 @@ async fn streaming_translation_failure_emits_error_then_terminates_once() {
         .times(1)
         .return_const(());
     let mut sink = ResponseBodySink::new();
-    let mut chunk = Some(Bytes::from_static(b"event: error\ndata: {}\n\n"));
+    let fixture = streaming_fixture();
+    let (prefix, _) = fixture.split_once("event: content_block_delta").unwrap();
+    let delta = event(
+        "content_block_delta",
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"é\n"}}),
+    );
+    let prefix = format!("{prefix}{delta}");
+    run_chunk(&mut processor, &mut session, Some(prefix.as_bytes()), false).await;
+    assert_eq!(usage.reported_tokens(), None);
+    assert_eq!(usage.output_chars(), 2);
+    let mut chunk = Some(Bytes::from(format!("{delta}event: error\ndata: {{}}\n\n")));
     processor
         .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
         .await;
@@ -914,7 +953,12 @@ async fn streaming_translation_failure_emits_error_then_terminates_once() {
     assert_eq!(chunk.as_deref(), Some(STREAM_ERROR));
     assert!(sink.is_terminated());
     assert!(sink.peek_extra().is_empty());
-    assert_eq!(usage.output_chars(), 0);
+    assert_eq!(usage.accounting_snapshot(3, true).usage.unwrap().output_tokens, 1);
+    assert_eq!(
+        usage.output_chars(),
+        2,
+        "discarded output and fixed errors add no characters"
+    );
 
     let mut later = Some(Bytes::from_static(b"provider bytes"));
     processor

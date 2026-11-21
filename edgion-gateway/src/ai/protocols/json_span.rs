@@ -23,7 +23,8 @@ pub(crate) enum Node {
     Array(Vec<Node>),
     String(StringToken),
     Number(String),
-    Other,
+    Null,
+    Boolean,
 }
 
 #[derive(Debug)]
@@ -146,15 +147,15 @@ impl<'a> Parser<'a> {
             Some(b'-' | b'0'..=b'9') => self.number().map(Node::Number),
             Some(b't') => {
                 self.literal(b"true")?;
-                Ok(Node::Other)
+                Ok(Node::Boolean)
             }
             Some(b'f') => {
                 self.literal(b"false")?;
-                Ok(Node::Other)
+                Ok(Node::Boolean)
             }
             Some(b'n') => {
                 self.literal(b"null")?;
-                Ok(Node::Other)
+                Ok(Node::Null)
             }
             _ => Err(()),
         }

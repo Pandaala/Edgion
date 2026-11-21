@@ -16,8 +16,9 @@ quota accumulation, and mid-stream quota termination. The generic
 `UsageExtractionProcessor` therefore must not buffer or parse the translated
 OpenAI-shaped body again.
 
-For SSE, the translator also owns translated `output_chars`, the bounded fallback
-for eligible incomplete streams. Unary conversion publishes checked provider usage
+For SSE, the translator owns `output_chars` for the
+[Chat estimate](chat-output-estimation.md), counting decoded text and tool-argument
+deltas that survive the callback's termination gate. Unary conversion publishes checked provider usage
 only after full document validation; invalid/incomplete JSON and fixed errors never
 produce character estimates. Valid usage survives later output overflow, local
 trailer failure, delivery cancellation and terminal cleanup. Dispatch installs no

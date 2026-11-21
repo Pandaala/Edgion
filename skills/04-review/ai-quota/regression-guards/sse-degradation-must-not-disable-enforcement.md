@@ -38,12 +38,11 @@ that `ai/accounting/usage.rs` made quota enforcement implicitly depend on parse 
 a memory-safety switch had been wired to a cost-control guarantee with no
 fallback and no operator signal.
 
-Note the asymmetry that hid it: `add_output_chars` is called **before**
-`feed_each` and kept working after degradation, so the existing test
-`sse_overflow_degrades_without_stopping_character_count` passed. But the two
-counters feed different things — chars feed post-hoc estimation (which has a
-`chars/4` fallback in `final_charged_tokens`), units feed the enforcement latch
-(which had none).
+At the time of the original defect, raw character counting continued after
+degradation, so its test passed even when the enforcement counter stopped. The
+current [Chat estimate](chat-output-estimation.md) counts decoded output in
+completed events. An opaque suffix cannot contribute to that estimate. Output
+units still drive the independent mid-stream enforcement latch.
 
 **2. The Anthropic path had already chosen fail-close**
 
@@ -115,7 +114,8 @@ its implementation.
   `AiSseDegradedQuotaTerminated` (a stream was cut).
 - **"Terminate on degradation regardless of quota"** — degradation predates
   mid-stream enforcement and is harmless on its own; an unquota'd stream must
-  keep running and fall back to the character estimate.
+  keep running. Without a provider report, a measured content prefix can supply
+  an estimate. Degradation before any measurable output leaves usage unknown.
 
 ## Scope boundary — malformed-event sibling
 

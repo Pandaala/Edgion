@@ -374,6 +374,7 @@ pub struct AiUsageShared {
     output_chars: AtomicU64,
     reported_usage: ArcSwapOption<ReportedAiUsage>,
     sse_degraded: AtomicBool,
+    chat_output_unmeasured: AtomicBool,
     observation_unavailable: AtomicBool,
     encoding_unavailable: AtomicBool,
     observation_diagnostic_recorded: AtomicBool,
@@ -480,6 +481,10 @@ impl AiUsageShared {
         self.output_chars.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn set_chat_output_unmeasured(&self, unmeasured: bool) {
+        self.chat_output_unmeasured.store(unmeasured, Ordering::Release);
+    }
+
     pub fn reported_tokens(&self) -> Option<(u64, u64)> {
         self.reported_usage()
             .map(|usage| (usage.input_tokens, usage.output_tokens))
@@ -550,14 +555,22 @@ impl AiUsageShared {
                 unavailable,
             };
         }
-        if self.reported_only && self.reported_usage().is_none() {
+        let reported = self.reported_usage();
+        if (self.reported_only || self.json_complete.load(Ordering::Acquire)) && reported.is_none() {
             return AiUsageSnapshot {
                 source: GenAiAttemptUsageSource::Unknown,
                 usage: None,
                 unavailable: Some(AiUsageUnavailableReason::MissingProviderUsage),
             };
         }
-        let (usage, source) = self.reported_usage().map_or_else(
+        if reported.is_none() && self.chat_output_unmeasured.load(Ordering::Acquire) && self.output_chars() == 0 {
+            return AiUsageSnapshot {
+                source: GenAiAttemptUsageSource::Unknown,
+                usage: None,
+                unavailable: Some(AiUsageUnavailableReason::ObservationUnavailable),
+            };
+        }
+        let (usage, source) = reported.map_or_else(
             || {
                 (
                     ReportedAiUsage {
@@ -683,80 +696,6 @@ pub fn estimated_cost_usd(pricing: ParsedAiModelPricing, usage: ReportedAiUsage)
     format!("{whole}.{fraction:0width$}")
 }
 
-/// Incremental UTF-8 character counter. A valid leading byte is counted
-/// immediately, so an abort with no EOS still accounts for an incomplete
-/// scalar. At most four bytes are retained to validate later continuation
-/// bytes; bytes proven invalid are counted individually.
-#[derive(Default)]
-struct Utf8CharCounter {
-    pending: [u8; 4],
-    pending_len: usize,
-    expected_len: usize,
-}
-
-impl Utf8CharCounter {
-    fn feed(&mut self, bytes: &[u8]) -> u64 {
-        // With no pending prefix, every ASCII byte is one character and leaves
-        // the state untouched. A pending prefix must take the byte loop: an
-        // ASCII byte there also counts the now-invalid continuation bytes.
-        if self.pending_len == 0 && bytes.is_ascii() {
-            return u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        }
-        let mut count = 0_u64;
-        for &byte in bytes {
-            count = count.saturating_add(self.feed_byte(byte));
-        }
-        count
-    }
-
-    fn feed_byte(&mut self, byte: u8) -> u64 {
-        if self.pending_len == 0 {
-            if byte.is_ascii() {
-                return 1;
-            }
-            self.expected_len = match byte {
-                0xc2..=0xdf => 2,
-                0xe0..=0xef => 3,
-                0xf0..=0xf4 => 4,
-                _ => return 1,
-            };
-            self.pending[0] = byte;
-            self.pending_len = 1;
-            return 1;
-        }
-
-        if byte & 0xc0 != 0x80 {
-            // The leading byte was counted when received. Continuations that
-            // are now known to be invalid each add one more character.
-            let invalid = u64::try_from(self.pending_len.saturating_sub(1)).unwrap_or(u64::MAX);
-            self.pending_len = 0;
-            self.expected_len = 0;
-            return invalid.saturating_add(self.feed_byte(byte));
-        }
-
-        self.pending[self.pending_len] = byte;
-        self.pending_len += 1;
-        if self.pending_len != self.expected_len {
-            return 0;
-        }
-
-        let len = self.pending_len;
-        self.pending_len = 0;
-        self.expected_len = 0;
-        if std::str::from_utf8(&self.pending[..len]).is_ok() {
-            0
-        } else {
-            u64::try_from(len.saturating_sub(1)).unwrap_or(u64::MAX)
-        }
-    }
-
-    fn finish(&mut self) -> u64 {
-        self.pending_len = 0;
-        self.expected_len = 0;
-        0
-    }
-}
-
 pub struct UsageExtractionProcessor {
     shared: Arc<AiUsageShared>,
     quota: Option<Arc<QuotaAccumulator>>,
@@ -775,8 +714,7 @@ pub struct UsageExtractionProcessor {
     sse: SseDecoder,
     json: Option<Box<JsonUsageObserver>>,
     observation_failure_reported: bool,
-    non_streaming_chars: Utf8CharCounter,
-    chars_finished: bool,
+    chat_event_unmeasured: bool,
     /// Latches the one-shot `AiSseDecodeDegraded` record. The decoder's
     /// degraded flag is sticky, so without this every subsequent chunk of the
     /// stream would append the same status again.
@@ -802,18 +740,15 @@ impl UsageExtractionProcessor {
         requested_streaming: bool,
         terminate_on_over_limit: bool,
     ) -> Self {
-        let mut sse = SseDecoder::with_default_limit();
-        sse.enable_data_char_counting();
         Self {
             shared,
             quota,
             requested_streaming,
             terminate_on_over_limit,
-            sse,
+            sse: SseDecoder::with_default_limit(),
             json: None,
             observation_failure_reported: false,
-            non_streaming_chars: Utf8CharCounter::default(),
-            chars_finished: false,
+            chat_event_unmeasured: false,
             sse_degraded_reported: false,
             sse_malformed_reported: false,
             semantic_source_overflowed: false,
@@ -832,7 +767,6 @@ impl UsageExtractionProcessor {
         let mut processor = Self::new_with_quota(shared, quota, requested_streaming, terminate_on_over_limit);
         // Responses output text/done/full-output repeats and hidden reasoning cannot
         // constitute a complete billing estimate. Count only provider usage totals.
-        processor.sse = SseDecoder::with_default_limit();
         processor.responses = true;
         processor
     }
@@ -846,6 +780,8 @@ impl UsageExtractionProcessor {
         match stream_kind {
             ResponseStreamKind::Sse => {
                 let shared = &self.shared;
+                let mut output_chars = 0_u64;
+                let event_unmeasured = &mut self.chat_event_unmeasured;
                 let quota = self.quota.as_ref();
                 let mut batch = semantic_guard_active.then(CanonicalRecordBatch::new);
                 let mut batch_overflowed = false;
@@ -894,6 +830,11 @@ impl UsageExtractionProcessor {
                         if let Some(quota) = quota {
                             quota.add_output_units(observation.output_units);
                         }
+                        if let Some(chars) = observation.output_chars {
+                            output_chars = output_chars.saturating_add(chars);
+                        } else {
+                            *event_unmeasured = true;
+                        }
                         let usage = observation.usage;
                         if let (Some(input_tokens), Some(output_tokens)) =
                             (usage.prompt_tokens, usage.completion_tokens)
@@ -922,7 +863,14 @@ impl UsageExtractionProcessor {
                         }
                     }
                 });
-                self.shared.add_output_chars(self.sse.take_data_chars());
+                if !responses {
+                    if output_chars != 0 {
+                        shared.add_output_chars(output_chars);
+                    }
+                    // An unfinished or unreadable event alone cannot establish zero output.
+                    // Once content was observed, its decoded prefix remains estimable.
+                    shared.set_chat_output_unmeasured(*event_unmeasured || self.sse.degraded() || !self.sse.is_idle());
+                }
                 if self.responses && (self.sse.degraded() || self.sse.malformed_events() != 0) {
                     self.shared.mark_observation_unavailable();
                 }
@@ -940,9 +888,6 @@ impl UsageExtractionProcessor {
                 }
             }
             ResponseStreamKind::None => {
-                if !self.responses {
-                    self.shared.add_output_chars(self.non_streaming_chars.feed(chunk));
-                }
                 self.observe_non_streaming(chunk);
                 None
             }
@@ -968,14 +913,6 @@ impl UsageExtractionProcessor {
     }
 
     fn finish(&mut self, stream_kind: ResponseStreamKind) {
-        if !self.chars_finished {
-            let remaining = match stream_kind {
-                ResponseStreamKind::Sse => self.sse.finish_data_chars(),
-                ResponseStreamKind::None => self.non_streaming_chars.finish(),
-            };
-            self.shared.add_output_chars(remaining);
-            self.chars_finished = true;
-        }
         if stream_kind == ResponseStreamKind::None && !self.shared.observation_unavailable() {
             let observer = self.json.get_or_insert_with(|| {
                 Box::new(if self.responses {
@@ -1097,10 +1034,9 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             }
         }
         // Recorded for every degraded stream, quota'd or not: even where no
-        // enforcement is at stake, degradation silently downgrades reported
-        // usage to the character estimate, and an operator cannot tell that
-        // from the numbers alone. Latched so a sticky flag cannot append this
-        // once per remaining chunk.
+        // enforcement is at stake, the decoder can miss later output and
+        // reported usage. Operators need to distinguish a partial estimate
+        // from an ordinary one. Record the sticky signal once per stream.
         if !self.sse_degraded_reported && self.sse.degraded() {
             self.sse_degraded_reported = true;
             session.record_error(EdgionErrorCode::AiSseDecodeDegraded);

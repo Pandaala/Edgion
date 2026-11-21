@@ -850,7 +850,8 @@ fn usage_injection_optout_and_split(
         let estimated = &optout_entry.data["genai"];
         if estimated["usage_estimated"] != true
             || estimated["input_tokens"].as_u64().unwrap_or(0) == 0
-            || estimated["output_tokens"].as_u64().unwrap_or(0) == 0
+            || estimated["output_tokens"] != 2
+        // Six generated characters in "fixed ".
         {
             return TestResult::failed(start.elapsed(), format!("missing usage was not estimated: {estimated}"));
         }
@@ -3233,7 +3234,7 @@ async fn incremental_json_quality(ctx: &TestContext, h2: bool) -> Result<(), Str
             "json_large_missing_usage",
             br#"{"ignored":""#,
             br#""}"#,
-            "estimated",
+            "unknown",
             None,
         ),
         (
@@ -3332,14 +3333,6 @@ async fn incremental_json_quality(ctx: &TestContext, h2: bool) -> Result<(), Str
         if let Some((input, output)) = counts {
             if usage["input_tokens"] != input || usage["output_tokens"] != output {
                 return Err(format!("{mode} lost reported usage: {usage}"));
-            }
-        } else if source == "estimated" {
-            if usage["input_tokens"].as_u64().is_none()
-                || usage["output_tokens"].as_u64() != Some((offset as u64).div_ceil(4))
-            {
-                return Err(format!(
-                    "{mode} did not preserve the complete valid JSON estimate: {usage}"
-                ));
             }
         } else {
             for key in ["input_tokens", "output_tokens", "estimated_cost_usd"] {

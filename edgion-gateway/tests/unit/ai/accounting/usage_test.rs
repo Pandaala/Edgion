@@ -159,171 +159,152 @@ async fn non_streaming_exact_boundary_is_accepted_and_overflow_degrades() {
 }
 
 #[tokio::test]
-async fn sse_overflow_degrades_without_stopping_character_count() {
+async fn chat_estimates_decoded_output_across_choices_and_event_boundaries() {
     let shared = Arc::new(AiUsageShared::default());
     let mut processor = UsageExtractionProcessor::new(shared.clone());
-    let mut oversized = vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1];
-    oversized.extend_from_slice(b"\n\n");
-    feed(
-        &mut processor,
-        &[(&oversized, false), (b"data: more", true)],
-        ResponseStreamKind::Sse,
-    )
-    .await;
-    assert!(shared.sse_degraded());
-    assert_eq!(shared.output_chars(), 4);
-}
-
-#[tokio::test]
-async fn sse_counts_only_data_values_and_ignores_heartbeat_and_framing() {
-    let shared = Arc::new(AiUsageShared::default());
-    let mut processor = UsageExtractionProcessor::new(shared.clone());
-    feed(
-        &mut processor,
-        &[(b": keepalive\nevent: chunk\nid: 7\nretry: 1000\ndata: hello\n\n", true)],
-        ResponseStreamKind::Sse,
-    )
-    .await;
+    let single = concat!(
+        ": heartbeat\nevent: chunk\nid: 99\ndata: {\"model\":\"extra metadata\",\"choices\":[\n",
+        "data: {\"delta\":{\"role\":\"assistant\",\"content\":\"\\u20ac\\n\",\"reasoning_content\":\"x\"}},",
+        "{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"metadata\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    feed(&mut processor, &[(single.as_bytes(), true)], ResponseStreamKind::Sse).await;
     assert_eq!(shared.output_chars(), 5);
+    assert_eq!(shared.accounting_snapshot(8, true).usage.unwrap().output_tokens, 2);
+
+    let split = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"€\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"x\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+    );
+    let split_shared = Arc::new(AiUsageShared::default());
+    let mut split_processor = UsageExtractionProcessor::new(split_shared.clone());
+    for byte in split.as_bytes().chunks(1) {
+        split_processor.observe_chunk(&Bytes::copy_from_slice(byte), ResponseStreamKind::Sse, false);
+    }
+    assert_eq!(split_shared.output_chars(), shared.output_chars());
+    assert_eq!(
+        split_shared.accounting_snapshot(8, true).usage.unwrap().output_tokens,
+        2
+    );
 }
 
 #[tokio::test]
-async fn sse_split_data_prefix_and_aborted_content_are_counted_incrementally() {
+async fn chat_partial_or_degraded_stream_only_estimates_decoded_content() {
+    let oversized = vec![b'x'; crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 1];
+    for with_content in [false, true] {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared.clone());
+        if with_content {
+            feed(
+                &mut processor,
+                &[(b"data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n", false)],
+                ResponseStreamKind::Sse,
+            )
+            .await;
+        }
+        for tail in [b"data: {\"choices\":".as_slice(), oversized.as_slice()] {
+            feed(&mut processor, &[(tail, false)], ResponseStreamKind::Sse).await;
+            let snapshot = shared.accounting_snapshot(8, true);
+            assert_eq!(
+                snapshot.usage.map(|usage| usage.output_tokens),
+                with_content.then_some(1)
+            );
+        }
+        assert!(shared.sse_degraded());
+    }
+}
+
+#[tokio::test]
+async fn chat_metadata_only_adds_zero_and_reported_usage_supersedes_estimation() {
     let shared = Arc::new(AiUsageShared::default());
     let mut processor = UsageExtractionProcessor::new(shared.clone());
     feed(
         &mut processor,
-        &[(b"da", false), (b"ta: hel", false), (b"lo", false)],
+        &[(
+            b"data: {\"id\":\"metadata\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            false,
+        )],
         ResponseStreamKind::Sse,
     )
     .await;
-    assert_eq!(shared.output_chars(), 5);
+    assert_eq!(shared.accounting_snapshot(2, true).usage.unwrap().output_tokens, 0);
+    feed(
+        &mut processor,
+        &[(b"data: invalid\n\n", false)],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    assert_eq!(
+        shared.accounting_snapshot(2, true).source,
+        GenAiAttemptUsageSource::Unknown
+    );
+    feed(
+        &mut processor,
+        &[(
+            b"data: {\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":17}}\n\n",
+            true,
+        )],
+        ResponseStreamKind::Sse,
+    )
+    .await;
+    let snapshot = shared.accounting_snapshot(2, true);
+    assert_eq!(snapshot.source, GenAiAttemptUsageSource::Reported);
+    assert_eq!(snapshot.usage.unwrap().output_tokens, 17);
 }
 
 #[tokio::test]
-async fn sse_multiline_data_uses_one_semantic_newline() {
-    let shared = Arc::new(AiUsageShared::default());
-    let mut processor = UsageExtractionProcessor::new(shared.clone());
-    feed(
-        &mut processor,
-        &[(b"data: first\ndata: second\n\n", true)],
-        ResponseStreamKind::Sse,
-    )
-    .await;
-    assert_eq!(shared.output_chars(), "first\nsecond".chars().count() as u64);
-}
-
-#[tokio::test]
-async fn sse_utf8_split_inside_data_value_counts_one_scalar() {
-    let shared = Arc::new(AiUsageShared::default());
-    let mut processor = UsageExtractionProcessor::new(shared.clone());
-    feed(
-        &mut processor,
-        &[(b"data: \xe2", false), (b"\x82", false), (b"\xac\n\n", true)],
-        ResponseStreamKind::Sse,
-    )
-    .await;
-    assert_eq!(shared.output_chars(), 1);
+async fn chat_nullable_content_and_invalid_deltas_have_distinct_usage() {
+    for (delta, expected) in [
+        (r#"{"content":null}"#, Some(0)),
+        (
+            r#"{"content":null,"tool_calls":[{"function":{"arguments":"12345"}}]}"#,
+            Some(2),
+        ),
+        (r#"{"content":true}"#, None),
+        (r#"{"content":"a","content":"b"}"#, None),
+    ] {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared.clone());
+        let event = format!("data: {{\"choices\":[{{\"delta\":{delta}}}]}}\n\n");
+        feed(&mut processor, &[(event.as_bytes(), true)], ResponseStreamKind::Sse).await;
+        assert_eq!(
+            shared
+                .accounting_snapshot(5, true)
+                .usage
+                .map(|usage| usage.output_tokens),
+            expected
+        );
+    }
 }
 
 #[tokio::test]
 async fn many_small_sse_events_in_one_chunk_are_observed_without_batching() {
     let shared = Arc::new(AiUsageShared::default());
     let mut processor = UsageExtractionProcessor::new(shared.clone());
-    let chunk = "data: x\n\n".repeat(10_000);
+    let chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n".repeat(10_000);
     feed(&mut processor, &[(chunk.as_bytes(), true)], ResponseStreamKind::Sse).await;
     assert_eq!(shared.output_chars(), 10_000);
 }
 
 #[tokio::test]
-async fn split_utf8_and_abort_without_eos_publish_incremental_characters() {
-    let shared = Arc::new(AiUsageShared::default());
-    let mut processor = UsageExtractionProcessor::new(shared.clone());
-    feed(
-        &mut processor,
-        &[(b"a\xe2", false), (b"\x82\xacb", false)],
-        ResponseStreamKind::None,
-    )
-    .await;
-    assert_eq!(shared.output_chars(), 3, "a, euro sign, b");
-    assert_eq!(shared.reported_tokens(), None);
-}
-
-#[tokio::test]
-async fn eos_flushes_incomplete_utf8_and_is_idempotent() {
-    let shared = Arc::new(AiUsageShared::default());
-    let mut processor = UsageExtractionProcessor::new(shared.clone());
-    feed(
-        &mut processor,
-        &[(b"\xe2", false), (b"", true), (b"", true)],
-        ResponseStreamKind::None,
-    )
-    .await;
-    assert_eq!(shared.output_chars(), 1);
-}
-
-#[tokio::test]
-async fn incomplete_utf8_is_visible_before_eos_and_invalid_bytes_are_deterministic() {
-    let abort_shared = Arc::new(AiUsageShared::default());
-    let mut abort = UsageExtractionProcessor::new(abort_shared.clone());
-    feed(&mut abort, &[(b"\xe2\x82", false)], ResponseStreamKind::None).await;
-    assert_eq!(abort_shared.output_chars(), 1, "an incomplete scalar is one character");
-
-    let invalid_shared = Arc::new(AiUsageShared::default());
-    let mut invalid = UsageExtractionProcessor::new(invalid_shared.clone());
-    feed(&mut invalid, &[(b"\xe2\x82A", false)], ResponseStreamKind::None).await;
-    assert_eq!(invalid_shared.output_chars(), 3, "invalid bytes count individually");
-}
-
-fn feed_per_byte(counter: &mut Utf8CharCounter, bytes: &[u8]) -> u64 {
-    bytes
-        .iter()
-        .fold(0_u64, |count, &byte| count.saturating_add(counter.feed_byte(byte)))
-}
-
-#[test]
-fn char_counter_ascii_fast_path_matches_per_byte_loop() {
-    let inputs: &[&[u8]] = &[
-        b"",
-        b"plain ascii {\"text\":\"hello\"}",
-        "caf\u{e9} \u{20ac}5 \u{3c0}".as_bytes(),
-        b"a\xe2\x82",
-        b"\xe2\x82A tail",
-        b"\xf0\x9f\x98",
-        b"\xff\xc0ab\xe2Z\x80\x80",
-        b"\xc3",
-        b"x\xc3\xa9y\xe2\x82\xacz",
-    ];
-    for input in inputs {
-        // Every pair of split points yields three chunks, empty ones included.
-        for first in 0..=input.len() {
-            for second in first..=input.len() {
-                let chunks = [&input[..first], &input[first..second], &input[second..]];
-                let mut fast = Utf8CharCounter::default();
-                let mut reference = Utf8CharCounter::default();
-                for chunk in chunks {
-                    assert_eq!(
-                        fast.feed(chunk),
-                        feed_per_byte(&mut reference, chunk),
-                        "input {input:?} split at {first}/{second}, chunk {chunk:?}"
-                    );
-                    assert_eq!(fast.pending_len, reference.pending_len);
-                    assert_eq!(fast.expected_len, reference.expected_len);
-                }
-                assert_eq!(fast.finish(), reference.finish());
-                assert_eq!(fast.finish(), 0, "finish is idempotent");
-            }
-        }
+async fn non_streaming_chat_without_reported_usage_is_unknown() {
+    for (body, eos) in [
+        (br#"{"choices":[{"message":{"content":"some text"}}]}"#.as_slice(), true),
+        (b"{", false),
+        (b"", true),
+        (b"{not-json", true),
+    ] {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared.clone());
+        feed(&mut processor, &[(body, eos)], ResponseStreamKind::None).await;
+        let snapshot = shared.accounting_snapshot(5, true);
+        assert_eq!(snapshot.source, GenAiAttemptUsageSource::Unknown);
+        assert_eq!(snapshot.usage, None);
+        assert_eq!(shared.output_chars(), 0);
     }
-}
-
-#[test]
-fn char_counter_pending_prefix_bypasses_ascii_fast_path() {
-    let mut counter = Utf8CharCounter::default();
-    assert_eq!(counter.feed(b"\xf0\x9f\x98"), 1);
-    // Two invalid continuations plus the ASCII byte exceed the chunk length.
-    assert_eq!(counter.feed(b"A"), 3);
-    assert_eq!(counter.feed(b"BC"), 2);
 }
 
 #[test]
@@ -1094,7 +1075,7 @@ fn accounting_quality_precedence_and_checked_arithmetic() {
     shared.json_complete.store(true, Ordering::Release);
     assert_eq!(
         shared.accounting_snapshot(2, true).source,
-        GenAiAttemptUsageSource::Estimated
+        GenAiAttemptUsageSource::Unknown
     );
     shared.observe_reported_usage(u64::MAX, 0, u64::MAX, 1);
     assert_eq!(shared.reported_usage().unwrap().cache_read_input_tokens, 0);

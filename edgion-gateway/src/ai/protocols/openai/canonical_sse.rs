@@ -34,6 +34,7 @@ pub(crate) struct CanonicalUsageObservation {
 pub(crate) struct CanonicalEventObservation {
     pub usage: CanonicalUsageObservation,
     pub output_units: u64,
+    pub output_chars: Option<u64>,
     pub fragments: Vec<SemanticFragment>,
     pub semantic_available: bool,
 }
@@ -325,12 +326,14 @@ pub(crate) fn observe_canonical_block(
     if status == SseBlockStatus::Dataless {
         return CanonicalEventObservation {
             semantic_available: true,
+            output_chars: Some(0),
             ..Default::default()
         };
     }
     let mut observation = observe_event(event, account_usage);
     if status == SseBlockStatus::Poisoned {
         observation.semantic_available = false;
+        observation.output_chars = None;
         observation.fragments.clear();
     }
     observation
@@ -340,6 +343,7 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
     if event.data_is_literal(b"[DONE]") {
         return CanonicalEventObservation {
             semantic_available: true,
+            output_chars: Some(0),
             ..Default::default()
         };
     }
@@ -356,8 +360,13 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
     if account_usage {
         observation.usage = observe_usage(&root);
     }
+    let mut output_chars = 0;
+    let mut output_measurable = true;
     let choices = match field(&root, "choices") {
-        Field::Missing => return observation,
+        Field::Missing => {
+            observation.output_chars = root.object_marker().map(|_| 0);
+            return observation;
+        }
         Field::Unique(value) => match value.array() {
             Some(choices) => choices,
             None => {
@@ -371,16 +380,19 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
         }
     };
     for choice in choices {
+        output_measurable &= choice.object_marker().is_some();
         let delta = match field(choice, "delta") {
             Field::Missing => continue,
             Field::Unique(value) => match value.object_marker() {
                 Some(delta) => delta,
                 None => {
+                    output_measurable = false;
                     observation.semantic_available = false;
                     continue;
                 }
             },
             Field::Ambiguous => {
+                output_measurable = false;
                 observation.semantic_available = false;
                 continue;
             }
@@ -402,15 +414,20 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
                 Field::Unique(value) => match value.string_token() {
                     Some(token) => token,
                     None => {
+                        output_measurable &= matches!(value, Node::Null);
                         observation.semantic_available = false;
                         continue;
                     }
                 },
                 Field::Ambiguous => {
+                    output_measurable = false;
                     observation.semantic_available = false;
                     continue;
                 }
             };
+            if account_usage {
+                output_chars += token.value.chars().count() as u64;
+            }
             if name == "content" && !token.value.is_empty() {
                 qualifying_output = true;
             }
@@ -427,27 +444,32 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
             Field::Unique(value) => match value.array() {
                 Some(calls) => Some(calls),
                 None => {
+                    output_measurable = false;
                     observation.semantic_available = false;
                     None
                 }
             },
             Field::Ambiguous => {
+                output_measurable = false;
                 observation.semantic_available = false;
                 None
             }
         };
         if let Some(tool_calls) = tool_calls {
             for tool in tool_calls {
+                output_measurable &= tool.object_marker().is_some();
                 let function = match field(tool, "function") {
                     Field::Missing => continue,
                     Field::Unique(value) => match value.object_marker() {
                         Some(function) => function,
                         None => {
+                            output_measurable = false;
                             observation.semantic_available = false;
                             continue;
                         }
                     },
                     Field::Ambiguous => {
+                        output_measurable = false;
                         observation.semantic_available = false;
                         continue;
                     }
@@ -464,15 +486,20 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
                     Field::Unique(value) => match value.string_token() {
                         Some(token) => token,
                         None => {
+                            output_measurable = false;
                             observation.semantic_available = false;
                             continue;
                         }
                     },
                     Field::Ambiguous => {
+                        output_measurable = false;
                         observation.semantic_available = false;
                         continue;
                     }
                 };
+                if account_usage {
+                    output_chars += token.value.chars().count() as u64;
+                }
                 if !token.value.is_empty() {
                     qualifying_output = true;
                 }
@@ -495,6 +522,7 @@ fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEvent
             observation.output_units = observation.output_units.saturating_add(1);
         }
     }
+    observation.output_chars = output_measurable.then_some(output_chars);
     if !observation.semantic_available {
         observation.fragments.clear();
     }

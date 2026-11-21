@@ -65,9 +65,11 @@ defaults off, with no provider usage observer or token/cost publication. `provid
 existing bounded observation; tokenQuota, credential TPM and LowestUsage require it.
 `injectUsageTracking` defaults false and controls declared request mutation independently.
 
-OpenAI JSON usage observation is incremental and bounded. Valid complete JSON without usage
-can fall back to a coarse raw-JSON character estimate; invalid/incomplete JSON or observation
-budget failure produces unknown usage. Selected unary Chat-to-Anthropic conversion instead
+OpenAI JSON usage observation is incremental and bounded. Successful non-streaming
+Chat responses require reported usage for numeric settlement. Missing usage,
+invalid/incomplete JSON and observation budget failure produce unknown usage.
+Chat SSE may estimate usage from decoded content, reasoning and tool arguments.
+Selected unary Chat-to-Anthropic conversion
 retains one bounded document and defers final commitment under the
 [bounded unary resource/transport contract](../../01-architecture/02-gateway/00-overview.md#ai-implementation-boundary).
 SSE conversion remains event-based.

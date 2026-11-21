@@ -88,6 +88,14 @@ provider emits usage on multiple chunks, Edgion keeps the highest observed value
 component; a later lower or out-of-order snapshot cannot reduce quota reconciliation, access-log
 usage, or estimated cost. OpenAI's usual final-only usage frame is unchanged.
 
+When reported usage is missing and a Chat stream is eligible for estimation, Edgion
+adds the decoded Unicode characters in `delta.content`, `delta.reasoning_content`,
+and `tool_calls[].function.arguments` across choices and completed events. The
+Anthropic-to-Chat response translator counts its text and tool-argument deltas.
+Edgion divides the attempt total by four and rounds up once. For example, five
+generated characters produce an estimate of two output tokens regardless of how
+many events carried them. Model names, JSON syntax and `[DONE]` contribute zero.
+
 ## Mid-stream termination
 
 `tokenQuota` enforcement is not purely an admission-time gate. A **streaming** request already in
@@ -164,10 +172,9 @@ chunks are forwarded. Content strings are validated and discarded by the
 observer; the response is not retained for an EOS parse. Selected values become
 reported usage only after the complete document is valid. Duplicate selected
 keys and replacement of `usage`/details parents use last-wins semantics within
-that document, independently of cumulative SSE snapshot merging. A valid complete OpenAI JSON
-document without usage can use an input estimate and output estimated from raw JSON characters
-rounded up after division by four. JSON wrappers and metadata may contribute; this is not an
-exact model-token count.
+that document, independently of cumulative SSE snapshot merging. A successful
+non-streaming Chat response with no provider usage has `unknown` usage. The
+access log omits its token counts and estimated cost.
 
 Inspection has fixed bounds: 64 MiB source and decoded bytes, nesting depth 64,
 256-byte decoded keys, 1,538-byte raw keys, 64-byte number spellings, 131,072

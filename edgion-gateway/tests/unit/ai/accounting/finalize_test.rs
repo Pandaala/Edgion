@@ -144,7 +144,13 @@ async fn finalize_estimates_partial_aborted_stream_and_emits_metrics_once() {
         .unwrap()
         .usage
         .set_input_chars(5);
-    observe_response(&ctx, b"data: hello", false, ResponseStreamKind::Sse).await;
+    observe_response(
+        &ctx,
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {",
+        false,
+        ResponseStreamKind::Sse,
+    )
+    .await;
     ctx.response_stream_kind = ResponseStreamKind::Sse;
     metrics::with_local_recorder(&recorder, || {
         finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
@@ -334,7 +340,8 @@ async fn access_log_genai_shape_contains_no_request_response_or_key_text() {
         .unwrap()
         .usage
         .set_input_chars(prompt.chars().count() as u64);
-    let event = format!("data: {completion}");
+    let delta = serde_json::json!({"choices": [{"delta": {"content": completion}}]});
+    let event = format!("data: {delta}\n\n");
     observe_response(&ctx, event.as_bytes(), false, ResponseStreamKind::Sse).await;
     ctx.ensure_ai_state().attempt_runtime.record_test_attempt(
         GenAiAttempt {

@@ -446,6 +446,8 @@ impl AnthropicResponseProcessor {
         if end_of_stream && (!self.message_stopped || !self.decoder.is_idle()) {
             failed = true;
         }
+        self.usage_shared
+            .set_chat_output_unmeasured(failed || !self.decoder.is_idle());
         if failed {
             self.fail_streaming(chunk, session);
         } else if !output.is_empty() {
@@ -562,11 +564,7 @@ impl AnthropicResponseProcessor {
                     return Err(());
                 }
                 let text = required_string(delta, "text")?;
-                if !text.is_empty() {
-                    if let Some(quota) = &self.quota {
-                        quota.add_output_units(1);
-                    }
-                }
+                self.observe_output_delta(text);
                 self.push_chunk(output, json!({"index":0,"delta":{"content":text},"finish_reason":null}))
             }
             Some(ActiveBlock::Tool {
@@ -577,17 +575,25 @@ impl AnthropicResponseProcessor {
                     return Err(());
                 }
                 let partial_json = required_string(delta, "partial_json")?;
-                if !partial_json.is_empty() {
-                    if let Some(quota) = &self.quota {
-                        quota.add_output_units(1);
-                    }
-                }
+                self.observe_output_delta(partial_json);
                 self.push_chunk(
                     output,
                     json!({"index":0,"delta":{"tool_calls":[{"index":tool_index,"function":{"arguments":partial_json}}]},"finish_reason":null}),
                 )
             }
             _ => Err(()),
+        }
+    }
+
+    fn observe_output_delta(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(quota) = &self.quota {
+            quota.add_output_units(1);
+        }
+        if !self.usage_shared.observation_is_off() {
+            self.pending_output_chars = self.pending_output_chars.saturating_add(text.chars().count() as u64);
         }
     }
 
@@ -673,7 +679,6 @@ impl AnthropicResponseProcessor {
                 )]))
                 .map_err(|_| ())?;
         }
-        self.pending_output_chars = self.pending_output_chars.saturating_add(6);
         Ok(())
     }
 
@@ -698,14 +703,6 @@ impl AnthropicResponseProcessor {
     fn push_json_event(&mut self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
         let (encoded_record, record) = write_canonical_record(value, MAX_BODY_BYTES, self.semantic_records.is_some())?;
         append_capped(output, &encoded_record, MAX_BODY_BYTES)?;
-        self.pending_output_chars = self.pending_output_chars.saturating_add(
-            u64::try_from(
-                String::from_utf8_lossy(&encoded_record[6..encoded_record.len() - 2])
-                    .chars()
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-        );
         if let (Some(batch), Some(record)) = (&mut self.semantic_records, record) {
             batch.push(record).map_err(|_| ())?;
         }
@@ -723,7 +720,6 @@ impl AnthropicResponseProcessor {
         // A translation failure wins in the AI slot. Do not hand its fixed
         // client error to the preempted semantic guard as provider content.
         self.semantic_records = None;
-        self.pending_output_chars = stream_error_output_chars();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from_static(STREAM_ERROR));
         session.mark_response_terminal_emission(crate::response::terminal::TerminalEmission::Rendered);
@@ -840,31 +836,21 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             }
             // Publish an empty active batch at EOS as an explicit semantic
             // source boundary for a window retained by an earlier callback.
-            if (!batch.is_empty() || end_of_stream)
-                && session.publish_canonical_records(batch).is_err()
-                && session
+            if (!batch.is_empty() || end_of_stream) && session.publish_canonical_records(batch).is_err() {
+                self.usage_shared.set_chat_output_unmeasured(true);
+                if session
                     .try_claim_response_terminal(crate::response::terminal::ResponseTerminalCause::ProcessorFailure)
-            {
-                session.mark_response_terminal_emission(crate::response::terminal::TerminalEmission::NoEvent);
-                sink.terminate();
+                {
+                    session.mark_response_terminal_emission(crate::response::terminal::TerminalEmission::NoEvent);
+                    sink.terminate();
+                }
+                return;
             }
         }
-        if !sink.is_terminated() && self.unary.is_none() {
-            let chars = if matches!(self.mode, BodyMode::Streaming) {
-                self.pending_output_chars
-            } else {
-                chunk
-                    .as_ref()
-                    .map(|bytes| u64::try_from(String::from_utf8_lossy(bytes).chars().count()).unwrap_or(u64::MAX))
-                    .unwrap_or(0)
-            };
-            self.usage_shared.add_output_chars(chars);
+        if !sink.is_terminated() && self.pending_output_chars != 0 {
+            self.usage_shared.add_output_chars(self.pending_output_chars);
         }
     }
-}
-
-fn stream_error_output_chars() -> u64 {
-    u64::try_from(STREAM_ERROR.len().saturating_sub(b"data: \n\n".len())).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -18,4 +18,8 @@ before applying a decision to current code.
 - [A gateway-injected SSE error event must carry its own event boundary — FIXED](regression-guards/injected-error-event-needs-its-own-sse-boundary.md)
 - [SSE decoder degradation must not silently disable mid-stream quota enforcement — FIXED](regression-guards/sse-degradation-must-not-disable-enforcement.md)
 - [Malformed SSE events must not disable quota enforcement — FIXED](regression-guards/sse-malformed-events-must-not-disable-enforcement.md)
-- [Non-streaming character counter ASCII fast path is gated on an empty pending prefix — FIXED](regression-guards/non-streaming-char-counter-ascii-fast-path.md)
+- [Chat output estimation and missing unary usage](regression-guards/chat-output-estimation.md)
+
+## Superseded
+
+- [Retired non-streaming character counter](superseded/non-streaming-char-counter-ascii-fast-path.md)
