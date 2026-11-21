@@ -97,6 +97,66 @@ fn released(output: WindowOutput) -> Vec<u8> {
 }
 
 #[test]
+fn incremental_stats_visit_only_new_fragments_after_bucket_insertion() {
+    let mut window = RawWindow::new();
+    let mut progress = SemanticProgress::default();
+    let late = key(1, LogicalField::Content);
+    let early = key(0, LogicalField::Content);
+    let raw = Bytes::from_static(br#""\u00e9""#);
+    window
+        .retain(
+            WindowRecord::raw(vec![raw.slice(..3), raw.slice(3..)]).with_fragments(vec![SemanticFragment {
+                bucket: late,
+                source: SemanticSource::JsonStringTokenRanges(vec![ByteRange::new(0, raw.len())]),
+            }]),
+        )
+        .unwrap();
+    assert_eq!(
+        window.incremental_stats(&mut progress).unwrap().current_semantic_bytes,
+        2
+    );
+    for bucket in [early, late, early] {
+        window
+            .retain(event(Bytes::from_static(b"x"), bucket, vec![ByteRange::new(0, 1)]))
+            .unwrap();
+        let (stats, allocations) =
+            crate::test_allocation_counter::count_allocation_stats(|| window.incremental_stats(&mut progress));
+        assert_eq!(stats, window.stats());
+        assert_eq!(allocations.requested_bytes, 1);
+    }
+    let (stats, allocations) =
+        crate::test_allocation_counter::count_allocation_stats(|| window.incremental_stats(&mut progress));
+    assert_eq!(stats, window.stats());
+    assert_eq!(allocations.calls, 0);
+
+    window.limits.combined = window.resident().unwrap() + raw.len() - 1;
+    assert_eq!(
+        window.incremental_stats(&mut progress),
+        Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
+    );
+    assert_eq!(window.incremental_stats(&mut progress), window.stats());
+}
+
+#[test]
+fn failed_incremental_stats_preserve_progress_and_raw_release() {
+    let mut window = RawWindow::new();
+    let mut progress = SemanticProgress::default();
+    let bucket = key(0, LogicalField::Content);
+    window
+        .retain(event(Bytes::from_static(b"a"), bucket, vec![ByteRange::new(0, 1)]))
+        .unwrap();
+    window.incremental_stats(&mut progress).unwrap();
+    window
+        .retain(event(Bytes::from_static(b"\xff"), bucket, vec![ByteRange::new(0, 1)]))
+        .unwrap();
+    assert_eq!(window.incremental_stats(&mut progress), Err(WindowError::InvalidUtf8));
+    assert_eq!(progress.counted.as_slice(), &[(bucket, 1)]);
+    assert_eq!(progress.decoded_bytes, 1);
+    assert_eq!(window.snapshot_all(), Err(WindowError::SemanticUnavailable));
+    assert_eq!(released(window.resolve(WindowDecision::Release).unwrap()), b"a\xff");
+}
+
+#[test]
 fn raw_slice_iteration_preserves_handles_without_a_temporary_vector() {
     let source = [Bytes::from_static(b"first"), Bytes::new(), Bytes::from_static(b"last")];
     let pointers = source.each_ref().map(|bytes| bytes.as_ptr());

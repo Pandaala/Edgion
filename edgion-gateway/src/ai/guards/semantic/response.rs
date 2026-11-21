@@ -23,7 +23,8 @@ use crate::plugins::runtime::traits::StreamingResponseProcessor;
 use crate::plugins::runtime::ResponseStreamSession;
 use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 use crate::sse::window::{
-    RawWindow, RawWindowPolicy, SemanticReplacement, WindowDecision, WindowError, WindowOutput, MAX_RAW_BYTES,
+    RawWindow, RawWindowPolicy, SemanticProgress, SemanticReplacement, WindowDecision, WindowError, WindowOutput,
+    MAX_RAW_BYTES,
 };
 use crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES;
 
@@ -57,6 +58,7 @@ pub(super) struct GuardrailResponseProcessor {
     permits: Arc<Semaphore>,
     owner: Arc<AttachedGuardrail>,
     window: RawWindow,
+    semantic_progress: SemanticProgress,
     window_bytes: usize,
     max_request_bytes: usize,
     max_replacement_bytes: usize,
@@ -173,6 +175,7 @@ impl GuardrailResponseProcessor {
                 global_overlap_bytes: crate::sse::window::MAX_OVERLAP_BYTES,
                 max_replacement_bytes,
             })?,
+            semantic_progress: SemanticProgress::default(),
             window_bytes,
             max_request_bytes,
             max_replacement_bytes,
@@ -181,6 +184,12 @@ impl GuardrailResponseProcessor {
             disabled: false,
             summary: GuardrailSummary::default(),
         })
+    }
+
+    fn start_next_window(&mut self) -> Result<(), WindowError> {
+        self.window.start_next()?;
+        self.semantic_progress = SemanticProgress::default();
+        Ok(())
     }
 
     fn append_output(output: &mut BytesMut, resolved: WindowOutput) -> Result<(), ()> {
@@ -601,7 +610,7 @@ impl GuardrailResponseProcessor {
                             *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
                         }
-                        if Self::append_output(&mut output, resolved).is_err() || self.window.start_next().is_err() {
+                        if Self::append_output(&mut output, resolved).is_err() || self.start_next_window().is_err() {
                             self.fail_dependency(&mut output, records, sink, session, "window-state");
                             *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
@@ -615,7 +624,7 @@ impl GuardrailResponseProcessor {
                     }
                 }
             }
-            let Ok(stats) = self.window.stats() else {
+            let Ok(stats) = self.window.incremental_stats(&mut self.semantic_progress) else {
                 self.fail_dependency(&mut output, records, sink, session, "semantic-source");
                 *chunk = (!output.is_empty()).then(|| output.freeze());
                 return;
@@ -674,7 +683,7 @@ impl GuardrailResponseProcessor {
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
                 }
-                if self.window.start_next().is_err() {
+                if self.start_next_window().is_err() {
                     self.fail_dependency(&mut output, records, sink, session, "window-state");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;

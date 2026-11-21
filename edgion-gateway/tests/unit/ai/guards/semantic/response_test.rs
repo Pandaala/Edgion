@@ -526,17 +526,21 @@ async fn one_callback_can_make_multiple_serial_policy_calls() {
         .await;
     let mut processor = processor(false);
     processor.client = Arc::new(guardrail_client(&localhost_uri(&server.uri())));
+    processor.window_bytes = 3;
     let first = semantic_record("one");
-    let second = semantic_record("two");
+    let second = semantic_record("t");
+    let third = semantic_record("wo");
     let expected: Vec<u8> = first
         .raw_slices_cloned()
         .into_iter()
         .chain(second.raw_slices_cloned())
+        .chain(third.raw_slices_cloned())
         .flatten()
         .collect();
     let mut batch = CanonicalRecordBatch::new();
     batch.push(first).unwrap();
     batch.push(second).unwrap();
+    batch.push(third).unwrap();
     let mut chunk = None;
     let mut sink = ResponseBodySink::new();
     let mut session = mock_request_session();

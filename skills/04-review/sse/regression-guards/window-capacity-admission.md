@@ -52,8 +52,27 @@ bounded multi-handle coalescing and empty append behavior with admissible inputs
 The old task also mentioned repeated linear replacement lookup. Current baseline
 code already sorted and zipped replacements; that claim described a rejected
 attempt, not a separate reproduced defect. Repeated bucket cloning and untracked
-sort/decoder/preview allocations were current defects. No claim is made that all
-semantic scanning across successive stats calls is amortized linear.
+sort/decoder/preview allocations were current defects. General-purpose stats,
+snapshots and overlap preparation can still scan the complete window.
+
+### Guardrail threshold checks
+
+For `gw-ai3-06`, the post-retain Guardrail threshold check now counts only
+previously uncounted fragments. The processor owns one generation's decoded
+byte total, largest raw token length, and bounded inline fragment positions
+keyed by logical bucket. Sorted insertion can move an existing bucket.
+Positions advance only after decoding and snapshot-limit checks succeed, and
+the processor resets them on each successful transition to the next window.
+
+The check admits the generation's largest raw token against current residency
+before allocating scratch for the largest new token. This preserves the error
+boundary even when later raw-only records grow the window. Retain-limit and EOS
+queries still use full stats. The focused incremental stats tests compare
+totals, temporary allocation sizes, admission errors, and raw-only recovery.
+The gateway library filters `sse::` and `ai::guards::semantic::response::`
+passed together (122 tests), including the two-generation threshold regression.
+Re-evaluate on changes to bucket ordering, fragment mutability, capacity
+accounting, or Guardrail generation transitions.
 
 ## Verification and re-evaluation
 

@@ -48,6 +48,15 @@ pub struct WindowStats {
     pub current_semantic_bytes: usize,
 }
 
+/// Progress for repeated threshold checks within a single window generation.
+#[derive(Default)]
+pub(crate) struct SemanticProgress {
+    // A newly admitted bucket can sort before previously counted buckets.
+    counted: smallvec::SmallVec<[(LogicalBucketKey, usize); MAX_BUCKETS]>,
+    decoded_bytes: usize,
+    max_token_bytes: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticWindow {
     pub key: LogicalBucketKey,
@@ -296,6 +305,13 @@ struct StoredFragment {
     source: SemanticSource,
 }
 
+impl StoredFragment {
+    fn token_len(&self) -> Result<usize, WindowError> {
+        checked_sum(self.source.ranges().iter().map(|range| range.len()))
+            .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))
+    }
+}
+
 #[derive(Debug)]
 struct Bucket {
     key: LogicalBucketKey,
@@ -399,13 +415,61 @@ impl RawWindow {
             self.semantic_degraded = true;
             self.semantic_failure = Some(*error);
         })?;
-        Ok(WindowStats {
+        Ok(self.window_stats(checked_sum(scan.lengths).ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?))
+    }
+
+    fn window_stats(&self, current_semantic_bytes: usize) -> WindowStats {
+        WindowStats {
             raw_bytes: self.raw.len(),
             raw_ranges: self.raw_ranges,
             events: self.events,
             lines: self.lines,
-            current_semantic_bytes: checked_sum(scan.lengths).ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?,
-        })
+            current_semantic_bytes,
+        }
+    }
+
+    pub(crate) fn incremental_stats(&mut self, progress: &mut SemanticProgress) -> Result<WindowStats, WindowError> {
+        self.require_collecting()?;
+        let total = self.count_new_fragments(progress).inspect_err(|error| {
+            self.semantic_degraded = true;
+            self.semantic_failure = Some(*error);
+        })?;
+        Ok(self.window_stats(total))
+    }
+
+    fn count_new_fragments(&self, progress: &mut SemanticProgress) -> Result<usize, WindowError> {
+        let pending = |bucket: &Bucket| {
+            progress
+                .counted
+                .binary_search_by_key(&bucket.key, |&(key, _)| key)
+                .map_or(0, |index| progress.counted[index].1)
+        };
+        let mut new_max = 0;
+        for bucket in &self.buckets {
+            for fragment in &bucket.fragments[pending(bucket)..] {
+                new_max = new_max.max(fragment.token_len()?);
+            }
+        }
+        // Preserve the full scan's admission boundary as the resident window grows,
+        // even when the longest token was counted during an earlier callback.
+        let max_token_bytes = progress.max_token_bytes.max(new_max);
+        self.admit(max_token_bytes)?;
+        let mut scratch = Vec::with_capacity(new_max);
+        let mut total = progress.decoded_bytes;
+        for bucket in &self.buckets {
+            self.visit_fragments(&bucket.fragments[pending(bucket)..], &mut scratch, |text| {
+                total = add(total, text.len())?;
+                Ok(())
+            })?;
+        }
+        check_limit(total, self.limits.snapshot, WindowLimit::SnapshotBytes)?;
+        progress.counted.clear();
+        progress
+            .counted
+            .extend(self.buckets.iter().map(|bucket| (bucket.key, bucket.fragments.len())));
+        progress.decoded_bytes = total;
+        progress.max_token_bytes = max_token_bytes;
+        Ok(total)
     }
 
     pub fn snapshot_all(&mut self) -> Result<Vec<SemanticWindow>, WindowError> {
@@ -709,10 +773,7 @@ impl RawWindow {
         let mut length = 0;
         for bucket in buckets {
             for fragment in &bucket.fragments {
-                length = length.max(
-                    checked_sum(fragment.source.ranges().iter().map(|range| range.len()))
-                        .ok_or(WindowError::Limit(WindowLimit::SnapshotBytes))?,
-                );
+                length = length.max(fragment.token_len()?);
             }
         }
         self.admit(add(extra, length)?)?;
@@ -723,9 +784,18 @@ impl RawWindow {
         &self,
         bucket: &Bucket,
         scratch: &mut Vec<u8>,
+        visitor: impl FnMut(&str) -> Result<(), WindowError>,
+    ) -> Result<(), WindowError> {
+        self.visit_fragments(&bucket.fragments, scratch, visitor)
+    }
+
+    fn visit_fragments(
+        &self,
+        fragments: &[StoredFragment],
+        scratch: &mut Vec<u8>,
         mut visitor: impl FnMut(&str) -> Result<(), WindowError>,
     ) -> Result<(), WindowError> {
-        for fragment in &bucket.fragments {
+        for fragment in fragments {
             scratch.clear();
             for &range in fragment.source.ranges() {
                 self.raw
