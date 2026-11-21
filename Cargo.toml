@@ -120,15 +120,15 @@ foreign-types = "0.5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
 # public types never cross a source boundary. Development selects
-# `edgion_v0.9.1`; Cargo.lock pins its exact commit. The source-policy guard
+# `edgion_v0.9.1_main`; Cargo.lock pins its exact commit. The source-policy guard
 # requires the same selector across the family. CI/release builds use `--locked`.
-pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1", features = ["connection_filter"] }
-pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
-pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
-pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
-pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
-pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
-tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1" }
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v0.9.1_main" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros"] }
@@ -289,14 +289,3 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 debug = 1
-
-# TEMPORARY local development override for the Pingora fork admission-permit
-# change. Remove once the fork commit is pushed and the lockfile is updated.
-[patch."https://github.com/Pandaala/pingora.git"]
-pingora-core = { path = "/Volumes/ExtStore/ws3/pingora/pingora-core" }
-pingora-http = { path = "/Volumes/ExtStore/ws3/pingora/pingora-http" }
-pingora-proxy = { path = "/Volumes/ExtStore/ws3/pingora/pingora-proxy" }
-pingora-limits = { path = "/Volumes/ExtStore/ws3/pingora/pingora-limits" }
-pingora-load-balancing = { path = "/Volumes/ExtStore/ws3/pingora/pingora-load-balancing" }
-pingora-ketama = { path = "/Volumes/ExtStore/ws3/pingora/pingora-ketama" }
-TinyUFO = { path = "/Volumes/ExtStore/ws3/pingora/tinyufo" }

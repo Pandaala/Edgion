@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard the Edgion Pingora branch/lockfile source policy.
 
-Development manifests track the shared `edgion_v0.9.1` branch so advancing the fork
+Development manifests track the shared `edgion_v0.9.1_main` branch so advancing the fork
 does not require synchronized SHA edits. A release milestone may select one
 protected immutable tag for the whole family. Reproducibility comes from the
 committed Cargo.lock and `--locked` CI/release commands. This guard prevents a
@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FORK_URL = "https://github.com/Pandaala/pingora.git"
-FORK_BRANCH = "edgion_v0.9.1"
+FORK_BRANCH = "edgion_v0.9.1_main"
 FORK_SOURCE = re.compile(
     r"^git\+https://github\.com/Pandaala/pingora\.git"
     r"\?(branch|tag)=([^#]+)#([0-9a-f]{40})$"

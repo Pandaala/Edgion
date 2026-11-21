@@ -93,7 +93,7 @@ subsystem; the FIPS recipe is `FEATURES="allocator-jemalloc,fips,full"`.
 
 The seven direct fork dependencies (`pingora-core`, `pingora-http`,
 `pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`,
-and `TinyUFO`) all track the fork's `edgion_v0.9.1` branch (`Pandaala/pingora`).
+and `TinyUFO`) all track the fork's `edgion_v0.9.1_main` branch (`Pandaala/pingora`).
 They must move as one source family; never pin or advance only one package.
 
 Reproducibility comes from the committed `Cargo.lock`, which records the exact

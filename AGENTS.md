@@ -45,7 +45,7 @@ still pass through Edgion as opaque HTTP traffic using normal API Gateway featur
 **Three product binary roles**: Controller (handles K8s resources), Gateway
 (data-plane proxy), and edgion-cli (CLI debugging tool). The Gateway builds
 exclusively against the Edgion Pingora fork (`Pandaala/pingora`, branch
-`edgion_v0.9.1`). The federation Center has been extracted to the separate
+`edgion_v0.9.1_main`). The federation Center has been extracted to the separate
 EdgionCenter repository.
 
 **Workspace layout** (Cargo workspace, resolver 2): the code is split across crates rather than one root crate —
@@ -251,7 +251,7 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    the inventory doc must list every emitted metric (both directions) and no emit
    site may use a high-cardinality label off the allowlist.
 7. **Pingora source policy**: `python3 cicd/checks/check_pingora_source_policy.py` —
-   all seven Edgion fork dependencies must share the development `edgion_v0.9.1` branch
+   all seven Edgion fork dependencies must share the development `edgion_v0.9.1_main` branch
    or one release tag, and the lockfile must resolve the complete fork family
    to one commit.
 8. **Gateway API transform contract**:

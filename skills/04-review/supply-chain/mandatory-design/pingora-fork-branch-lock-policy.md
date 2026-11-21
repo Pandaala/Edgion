@@ -15,7 +15,7 @@ the Edgion fork (`Pandaala/pingora`). There is no stock crates.io Pingora
 family — the former `body-buffering`/`upstream-pingora` flavor duality was
 removed on 2026-08-03 (fork-only build).
 
-- Normal development selects `branch = "edgion_v0.9.1"` for all seven entries.
+- Normal development selects `branch = "edgion_v0.9.1_main"` for all seven entries.
 - `Cargo.lock` records the exact resolved commit for the complete transitive
   fork family.
 - CI, release workflows, Cargo Chef, and image builds use `--locked`.
@@ -45,7 +45,7 @@ An intentional fork advance therefore consists of:
 `cicd/checks/check_pingora_source_policy.py` verifies:
 
 - all seven direct dependencies point to the fork URL;
-- every entry uses the same supported selector (`edgion_v0.9.1` branch or one release
+- every entry uses the same supported selector (`edgion_v0.9.1_main` branch or one release
   tag), with no `rev`;
 - every fork package in `Cargo.lock` uses that selector;
 - all locked fork packages resolve to exactly one commit;
@@ -71,13 +71,17 @@ HEAD, locked source, remote branch observation, and local fork changes separatel
 Inspect resolved Cargo metadata as well as the manifest to exclude a local
 override from consumer verification.
 
-### Current lock: `edgion_v0.9.1` rebase
+### Current development lock
 
-The current lockfile resolves all 16 fork packages to
+The fork family resolves to `edgion_v0.9.1_main@f5166596693188313ad89afbb44b1804e7e5c650` from Git. The connection admission permit is included in this revision. Earlier source inspections and test results below apply to their recorded revisions.
+
+### Historical: `edgion_v0.9.1` rebase
+
+That lockfile resolved all 16 fork packages to
 `edgion_v0.9.1@e5f4287be713d01ffd444544251bf75c9d00062a`, and `h2` to 0.4.20.
 Lock history on `edgion_0.9.0_v1`: `0b0d8bba9609655bfd7db0fe0add6818bc0ee937`
 (Edgion `c633ef4a7`, 2026-10-08), then `1aaa45cc70430bc782990bc20ddee3fef36d6b99`
-(`963d2664a`, 2026-11-03; `0b0d8bba` plus six fork commits), then the current lock
+(`963d2664a`, 2026-11-03; `0b0d8bba` plus six fork commits), then the rebased lock
 (`e270a928e`, 2026-11-05). The new branch is not a fast-forward of either: the fork
 patch series was rebased and partly rewritten onto upstream 0.9.1
 (`f86ffda5d3ae5c3baf5125682138b33b26c01b08`), so neither `0b0d8bba` nor `1aaa45cc`

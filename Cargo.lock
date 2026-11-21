@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "TinyUFO"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "ahash 0.8.12",
  "crossbeam-queue",
@@ -4552,6 +4553,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pingora-boringssl"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4564,6 +4566,7 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "ahash 0.8.12",
  "arrayvec",
@@ -4598,6 +4601,7 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4652,10 +4656,12 @@ dependencies = [
 [[package]]
 name = "pingora-error"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 
 [[package]]
 name = "pingora-header-serde"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "bytes",
  "http",
@@ -4670,6 +4676,7 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "bytes",
  "http",
@@ -4679,6 +4686,7 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "crc32fast",
 ]
@@ -4686,6 +4694,7 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "ahash 0.8.12",
 ]
@@ -4693,6 +4702,7 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4713,8 +4723,9 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
- "ahash 0.8.12",
+ "ahash 0.7.8",
  "arrayvec",
  "async-channel",
  "flurry",
@@ -4728,6 +4739,7 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "crossbeam-queue",
  "dashmap 5.5.3",
@@ -4742,6 +4754,7 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4764,6 +4777,7 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "log",
  "once_cell",
@@ -4776,6 +4790,7 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "log",
  "no_debug",
@@ -4791,6 +4806,7 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.9.1"
+source = "git+https://github.com/Pandaala/pingora.git?branch=edgion_v0.9.1_main#f5166596693188313ad89afbb44b1804e7e5c650"
 dependencies = [
  "once_cell",
  "parking_lot",
