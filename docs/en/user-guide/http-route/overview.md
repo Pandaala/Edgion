@@ -48,6 +48,10 @@ Matching declared names are considered from exact to longest wildcard suffix, be
 
 `parentRefs` attaches the route to a Gateway listener. The Controller intersects the route's hostnames with the listener's hostnames and binds the route only to matching listeners.
 
+You can apply an HTTPRoute and its parent Gateway in either order. If the route arrives first, the Controller reconciles it again when the Gateway becomes available.
+
+In FileSystem mode, set `metadata.namespace` explicitly and use the matching filename, such as `default/HTTPRoute_default_my-route.yaml`. A missing namespace produces a `ParseError` in the file's status.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | String | **Required** | Gateway name |

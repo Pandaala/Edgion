@@ -224,6 +224,17 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             return ProcessResult::Continue(route);
         }
 
+        // Subscribe before reading any Gateway snapshot. Keep old parents until
+        // on_change replaces the edges after attachment counts have been updated.
+        if let Some(parents) = route.spec.parent_refs.as_deref().filter(|_| source_valid) {
+            _ctx.runtime().gateway_route_index.register_route_dependencies(
+                ResourceKind::HTTPRoute,
+                &format!("{route_ns}/{}", grant_owner.name),
+                parents,
+                route_ns,
+            );
+        }
+
         // This is controller-owned transport metadata. Kubernetes prunes it
         // via schemars, while filesystem/etcd inputs need the same explicit
         // defense.

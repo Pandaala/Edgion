@@ -115,7 +115,7 @@ growth limits change.
   `tasks/todo/header-map-insert-max-size-residuals.md`; the fork records the limitation
   in `../pingora/edgion-changes/review/upstream-limitations.md`.
 - An HTTP/2 upstream response map that already arrives near the limit is a separate
-  root: `tasks/panic-issues/core-01-upstream-h2-response-header-map-near-max-size.md`.
+  root: `tasks/block/core-01-upstream-h2-response-header-map-near-max-size.md`.
 
 ## Verification and re-evaluation
 

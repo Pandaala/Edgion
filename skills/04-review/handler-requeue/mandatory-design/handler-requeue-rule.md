@@ -22,9 +22,20 @@ affected resources.
 
 Snapshot-dependent attachments also require registration before the first
 Gateway read, so publication cannot miss a dependency while that read is in
-flight. TLSRoute adds new edges before parsing and keeps its exact replacement
+flight. HTTPRoute and TLSRoute add new edges in parse and keep exact replacement
 in `on_change`: dropped parents must be requeued only after `update_status`
 updates their attachment counts. EdgionTls registers before its proof lookup.
+
+For `controller-route-attachment-gateway-ordering-race`, the regression
+`http_routes_converge_after_concurrent_gateway_publication` publishes a Gateway
+between an HTTPRoute's empty listener read and its final index update. Both
+that route and an earlier sibling must acquire the listener through queued work
+after the sources stop changing. The test checks the dependency at the first
+Gateway source read, the transport parent status (`Accepted=True`), and the
+Gateway's attached route count. FileSystem rejects an HTTPRoute with no
+namespace at ingestion so the queued key identifies the original source file.
+Reprocessing an unchanged Gateway alone cannot
+repair a missed notification because listener inputs are compared on publication.
 
 ## Affected handlers
 

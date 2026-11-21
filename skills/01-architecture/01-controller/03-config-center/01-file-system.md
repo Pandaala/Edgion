@@ -46,6 +46,10 @@ winner if duplicate files are encountered while that debt remains.
 
 Status files: append a `.status` suffix to the corresponding configuration file name.
 
+FileSystem HTTPRoute ingestion requires an explicit, nonempty `metadata.namespace`.
+This keeps the file's work key and its Gateway dependency key identical on
+initial load, watch events and worker rereads, including in the default namespace.
+
 | Configuration file | Status file |
 |--------------------|-------------|
 | `HTTPRoute_default_my-route.yaml` | `HTTPRoute_default_my-route.yaml.status` |

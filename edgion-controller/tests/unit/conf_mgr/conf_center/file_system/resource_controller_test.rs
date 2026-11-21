@@ -433,6 +433,36 @@ fn fs_worker_test_harness(conf_dir: &std::path::Path) -> FsWorkerTestHarness {
 }
 
 #[tokio::test]
+async fn namespace_less_http_route_cannot_alias_the_default_namespace_route() {
+    use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (processor, _, raw, status, _, _worker) = fs_worker_test_harness(tmp.path());
+    let mut bare = make_route("default", "r");
+    bare.metadata.namespace = None;
+    for (key, route) in [("r", bare), ("default/r", make_route("default", "r"))] {
+        let path = super::build_resource_path_from_key(tmp.path(), "HTTPRoute", key);
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::write(path, yaml_serde::to_string(&route).unwrap())
+            .await
+            .unwrap();
+        processor.on_event_key(key.into()).await;
+    }
+    // One serial worker processes the bare key before the valid sibling.
+    timeout(Duration::from_secs(5), async {
+        while processor.get("default/r").is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(raw.get("r").is_none() && processor.get("r").is_none());
+    assert!(raw.get("default/r").is_some());
+    let error = status.read_status_json("HTTPRoute", "r").await.unwrap();
+    assert!(error.contains("FileSystem HTTPRoute requires an explicit metadata.namespace"));
+}
+
+#[tokio::test]
 async fn sole_file_delete_removes_resource_and_status() {
     let tmp = tempfile::tempdir().unwrap();
     let (processor, _registry, _raw_store, status_handler, _invalid, _worker) = fs_worker_test_harness(tmp.path());

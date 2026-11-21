@@ -39,6 +39,22 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::task::AbortOnDropHandle;
 
+fn parse_file_resource<K>(content: &str) -> Result<K>
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+{
+    let obj = parse_resource_content_offline::<K>(content)?;
+    // The file key is authoritative. Treating a bare HTTPRoute key as default/name
+    // only during reconciliation would send dependency updates to another file.
+    if K::resource_kind() == edgion_resources::ResourceKind::HTTPRoute {
+        anyhow::ensure!(
+            obj.meta().namespace.as_deref().is_some_and(|ns| !ns.is_empty()),
+            "FileSystem HTTPRoute requires an explicit metadata.namespace"
+        );
+    }
+    Ok(obj)
+}
+
 /// FileSystemResourceController - handles events for a single resource type
 pub struct FileSystemResourceController<K>
 where
@@ -163,7 +179,7 @@ where
                         }
                         FileSystemEvent::InitApply { path, content } => {
                             // Parse YAML content to resource type
-                            match parse_resource_content_offline::<K>(&content) {
+                            match parse_file_resource::<K>(&content) {
                                 Ok(obj) => {
                                     let key = make_resource_key(&obj);
 
@@ -328,7 +344,7 @@ where
                         FileSystemEvent::Apply { path, content } => {
                             if !init_done {
                                 // During init phase, treat as InitApply
-                                match parse_resource_content_offline::<K>(&content) {
+                                match parse_file_resource::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
@@ -425,7 +441,7 @@ where
                                 }
                             } else {
                                 // Runtime phase - parse and enqueue
-                                match parse_resource_content_offline::<K>(&content) {
+                                match parse_file_resource::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
@@ -652,7 +668,7 @@ where
 
                         let (store_obj, parse_error) = if path.exists() {
                             match tokio::fs::read_to_string(&path).await {
-                                Ok(content) => match parse_resource_content_offline::<K>(&content) {
+                                Ok(content) => match parse_file_resource::<K>(&content) {
                                     Ok(obj) => {
                                         // Guard the same content/filename identity invariant the
                                         // main loop enforces. The worker re-reads the registry-winner

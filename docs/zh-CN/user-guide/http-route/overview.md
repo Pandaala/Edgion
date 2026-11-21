@@ -48,6 +48,10 @@ spec:
 
 `parentRefs` 将路由附加到 Gateway listener。Controller（控制平面）会将路由的 hostname 与 listener 的 hostname 取交集，仅将路由绑定到匹配的 listener。
 
+HTTPRoute 和父 Gateway 可以按任意顺序创建。如果路由先到，Controller 会在 Gateway 就绪后重新解析路由。
+
+在 FileSystem 模式下，请显式填写 `metadata.namespace` 并使用匹配的文件名，例如 `default/HTTPRoute_default_my-route.yaml`。命名空间缺失时，Controller 会在该文件的状态中记录 `ParseError`。
+
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `name` | String | **必填** | Gateway 名称 |

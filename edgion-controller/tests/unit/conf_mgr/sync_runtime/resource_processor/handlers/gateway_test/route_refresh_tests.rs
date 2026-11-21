@@ -1,5 +1,5 @@
 //! Drive one serial worker per kind through the real Gateway publication and
-//! TLSRoute processing hooks. No network, status writer, or extra worker runs.
+//! Route processing hooks. No network, status writer, or extra worker runs.
 
 use super::GatewayHandler;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::tls_route::TlsRouteHandler;
@@ -132,6 +132,160 @@ fn gateway(listeners: serde_json::Value) -> Gateway {
 
 fn listener(name: &str, hostname: Option<&str>, port: i32) -> serde_json::Value {
     serde_json::json!({"name": name, "hostname": hostname, "port": port, "protocol": "TLS", "tls": {"mode": "Passthrough"}})
+}
+
+#[tokio::test]
+async fn http_routes_converge_after_concurrent_gateway_publication() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::http_route::HttpRouteHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessResult, RawStore};
+    use edgion_resources::{HTTPRoute, ResourceKind};
+    use std::sync::atomic::AtomicBool;
+
+    struct MissingGateway {
+        runtime: std::sync::Weak<ControllerRuntime>,
+        read: AtomicBool,
+    }
+    impl RawStore<Gateway> for MissingGateway {
+        fn get(&self, key: &str) -> Option<Arc<Gateway>> {
+            assert_eq!(key, GATEWAY);
+            let runtime = self.runtime.upgrade().unwrap();
+            assert!(
+                runtime
+                    .gateway_route_index
+                    .get_routes_for_gateway(key)
+                    .contains(&(ResourceKind::HTTPRoute, "apps/second".into())),
+                "the second route must subscribe before its first Gateway read"
+            );
+            self.read.store(true, Ordering::Relaxed);
+            None
+        }
+
+        fn snapshot(&self) -> Vec<Arc<Gateway>> {
+            Vec::new()
+        }
+    }
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = Arc::new(HttpRouteHandler::default());
+    let routes = Arc::new(ResourceProcessor::new(
+        "HTTPRoute",
+        16,
+        handler.clone(),
+        runtime.clone(),
+    ));
+    let gateways = Arc::new(ResourceProcessor::new(
+        "Gateway",
+        16,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(routes.clone());
+    runtime.processor_registry.register(gateways.clone());
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let gateway = gateway(serde_json::json!([{"name": "http", "port": 8080, "protocol": "HTTP"}]));
+    let route = |name: &str| -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": name},
+            "spec": {
+                "parentRefs": [{"name": "gateway", "sectionName": "http"}],
+                "rules": [{"filters": [{"type": "RequestRedirect", "requestRedirect": {"scheme": "https"}}]}]
+            }
+        }))
+        .unwrap()
+    };
+    routes.on_init_done();
+    gateways.on_init_done();
+
+    // One route has finished its first pass. Pause the other between the real
+    // parse and on_change hooks so publication lands inside the missed-wakeup window.
+    routes.on_event_key("apps/first".into()).await;
+    let rq = routes.workqueue();
+    let first = dequeue(&rq).await;
+    routes
+        .process_work_item(&first.key, Some(route("first")), None, first.trigger_chain)
+        .await;
+    rq.done(&first.key);
+    assert!(routes.get(&first.key).unwrap().spec.resolved_listeners.is_none());
+    let missing = Arc::new(MissingGateway {
+        runtime: Arc::downgrade(&runtime),
+        read: AtomicBool::new(false),
+    });
+    gateways.set_raw_store(missing.clone());
+    let ProcessResult::Continue(second) = handler.parse(route("second"), &ctx).await else {
+        panic!("expected the second route to be publishable");
+    };
+    assert!(missing.read.load(Ordering::Relaxed));
+    assert!(second.spec.resolved_listeners.is_none());
+    let gq = gateways.workqueue();
+    let publish = dequeue(&gq).await;
+    assert_eq!(publish.key, GATEWAY);
+    let raw = Arc::new(LocalRawStore::new());
+    raw.upsert(GATEWAY.into(), Arc::new(gateway.clone()));
+    gateways.set_raw_store(raw);
+    gateways
+        .process_work_item(&publish.key, Some(gateway.clone()), None, publish.trigger_chain)
+        .await;
+    gq.done(&publish.key);
+    handler.on_change(&second, &ctx).await;
+
+    // Only consume dependency work from here. Both sources must converge even
+    // if no external event ever touches them again.
+    let feedback = dequeue(&gq).await;
+    gateways
+        .process_work_item(&feedback.key, Some(gateway.clone()), None, feedback.trigger_chain)
+        .await;
+    gq.done(&feedback.key);
+    assert_eq!(
+        rq.metrics().delayed_total.load(Ordering::Relaxed),
+        2,
+        "both routes must be requeued"
+    );
+    let mut refreshed = Vec::new();
+    for _ in 0..2 {
+        let item = dequeue(&rq).await;
+        let name = item.key.strip_prefix("apps/").unwrap();
+        routes
+            .process_work_item(&item.key, Some(route(name)), None, item.trigger_chain)
+            .await;
+        rq.done(&item.key);
+        refreshed.push(item.key);
+    }
+    refreshed.sort();
+    assert_eq!(refreshed, ["apps/first", "apps/second"]);
+    // A marker scheduled after the final Route worker's feedback crosses the
+    // same delay heap. Every earlier Gateway notification must precede it.
+    let marker = "test/end-of-feedback";
+    let marker_delay = gq.config().default_requeue_delay * 2;
+    assert!(gq.enqueue_after(marker.into(), marker_delay, Default::default()).await);
+    loop {
+        let feedback = dequeue(&gq).await;
+        if feedback.key == marker {
+            break;
+        }
+        assert_eq!(feedback.key, GATEWAY);
+        gateways
+            .process_work_item(&feedback.key, Some(gateway.clone()), None, feedback.trigger_chain)
+            .await;
+        gq.done(&feedback.key);
+    }
+    for key in refreshed {
+        let spec = routes.get(&key).unwrap().spec;
+        let status = spec.current_status.unwrap();
+        assert_eq!(status.parents.len(), 1);
+        let parent = &status.parents[0];
+        assert_eq!(parent.parent_ref.name, "gateway");
+        assert_eq!(parent.parent_ref.section_name.as_deref(), Some("http"));
+        assert!(parent
+            .conditions
+            .iter()
+            .any(|c| c.type_ == "Accepted" && c.status == "True"));
+        let listeners = spec.resolved_listeners.unwrap();
+        assert_eq!(listeners.len(), 1);
+        assert_eq!(listeners[0].0, "0.0.0.0:8080/HTTP");
+    }
+    assert_eq!(runtime.attached_route_tracker.count_for_listener(GATEWAY, "http"), 2);
+    assert_eq!(rq.metrics().delayed_total.load(Ordering::Relaxed), 2);
+    assert!(rq.is_empty() && gq.is_empty());
 }
 
 #[tokio::test]
