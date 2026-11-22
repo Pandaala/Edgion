@@ -172,6 +172,9 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             .as_ref()
             .filter(|mutation| !mutation.set_headers.is_empty() || !mutation.remove_headers.is_empty())
         {
+            if mutation.set_headers.len() > TRAILER_FIELD_CAP || mutation.remove_headers.len() > TRAILER_FIELD_CAP {
+                return self.finish_failure(session, log, "bad-verdict");
+            }
             let mut candidate = trailers.clone();
             if apply_mutation(&mut candidate, mutation, session).is_err() {
                 return self.finish_failure(session, log, "bad-verdict");
@@ -305,9 +308,6 @@ fn apply_mutation(
         if !exists && !session.downstream_response_trailer_name_allowed(&name) {
             return Err(());
         }
-        // The field cap is checked only after the whole mutation, so processor
-        // input can reach HeaderMap's MAX_SIZE first; the panicking
-        // `append`/`insert` would unwind the response task.
         match action {
             HeaderAppendAction::AppendIfExistsOrAdd => {
                 candidate.try_append(name, value).map_err(|_| ())?;

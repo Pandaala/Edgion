@@ -283,6 +283,12 @@ final `response_trailers` request on the same Process stream. If the upstream
 ends without trailers, Edgion cleanly closes the stream without fabricating an
 empty trailer phase. `SKIP` leaves real trailers unprocessed.
 
+Each response trailer mutation allows up to 256 `set_headers` entries and 256
+`remove_headers` entries, counted independently, including repeated names.
+If either list exceeds its limit, the whole verdict follows `failureModeAllow`.
+With fail-open, the original trailers are forwarded, including fields the
+processor requested to remove. Within the limits, sets run before removals.
+
 Trailer mutation preserves duplicate raw values and commits atomically: the
 gateway validates a cloned map first, so fail-open never exposes a partial
 mutation. Both the observed input and fully mutated result are capped at 256

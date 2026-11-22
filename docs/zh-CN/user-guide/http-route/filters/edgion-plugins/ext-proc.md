@@ -191,6 +191,8 @@ body 访问失败策略，不读取或发布字节。普通请求的 trailers �
 
 使用 `responseTrailerMode: SEND` 时，真实的上游 trailer map 会作为同一条 Process 流最后一条 `response_trailers` 请求发送。上游没有 trailer 时，Edgion 会干净地关闭流，不伪造空 trailer 相位。`SKIP` 会让真实 trailer 不经过 ExtProc。
 
+一次响应 trailer 修改最多允许 256 条 `set_headers` 和 256 条 `remove_headers`，两个列表分别计数，重复名称也计入。任一列表超限时，整批修改按 `failureModeAllow` 处理。启用 fail-open 时，网关转发原始 trailer，其中包括处理器要求删除的字段。限额内先执行设置，再执行删除。
+
 Trailer mutation 保留重复 raw value，并采用原子提交：网关先校验克隆后的 map，因此 fail-open 不会暴露半套 mutation。输入和 mutation 后的完整结果都限制为最多 256 个字段、raw name/value 总计 64 KiB。伪 header、`host`、`proxy-authenticate`、`proxy-authorization`，以及代理管理的 framing/逐跳字段（`connection`、`keep-alive`、`proxy-connection`、`transfer-encoding`、`content-length`、`te`、`upgrade`、`trailer`）均禁止。gRPC 响应最终必须恰好保留一个 0–16 的合法 `grpc-status`；只有非 gRPC 响应允许移除它。
 
 H2 和 custom transport 可以引入合法的新 trailer 名。对于 H1.1 下游，新名字必须已出现在提交的 `Trailer` 声明中；已观察到的名字仍可修改或移除。H1.0 无法表达响应 trailer：fail-open 会在 transport 边界丢弃它们，fail-close 会终止连接。Trailer 处理不会缓冲或聚合响应 body。

@@ -25,7 +25,7 @@ A violation returns the detail `"too many set headers"`. It follows the existing
 first: no header, body overwrite, or mode override.
 
 Streamed request/response body verdicts already reject any header mutation. Response
-trailers use a cloned map with fallible inserts and validate the final result; see
+trailers cap each operation list separately before cloning and validate the final result; see
 [trailer mutation capacity](trailer-mutation-header-map-capacity.md).
 
 ## Rationale and evidence
@@ -67,8 +67,9 @@ trailers use a cloned map with fallible inserts and validate the final result; s
   example all `x-internal-*`) over a removal cap and, under `failureModeAllow: true`,
   get a forged header through. The independent review on 2026-11-12 found that case, and
   the user chose to drop the removal cap.
-- **Why a pre-application cap here but not for trailers.** The trailer page rejected
-  op-count early rejection because it refuses mutations whose final map would be valid.
+- **Trailer-specific removal limit.** Response trailer input already has a
+  256-field limit. Both trailer operation lists are independently capped at 256
+  before the first write. See the [trailer capacity guard](trailer-mutation-header-map-capacity.md).
   Request and response headers are written straight into Pingora's panicking map, with
   no cloned fallible candidate, so a bound is needed before application. Like Envoy's,
   this cap refuses some set lists whose final map would be valid.

@@ -8,6 +8,10 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
+The response-trailer callback checks both decoded operation lists before cloning the
+original trailers. Each list admits up to `TRAILER_FIELD_CAP` (256) entries.
+Exceeding either limit rejects the entire verdict under `failureModeAllow`.
+For admitted verdicts,
 `apply_mutation` in `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs`
 applies every processor `set_headers` entry to a cloned candidate trailer map with
 the fallible `http::HeaderMap::try_append` / `try_insert`. `MaxSizeReached` becomes
@@ -62,24 +66,28 @@ they refuse mutations whose final map is valid:
   add. Example: 200 upstream trailers, 100 new names and 100 removals. The map
   reaches 300 fields mid-mutation, but the result has 200 fields.
 
-The fallible APIs change only the overflow outcome, from a panic to a rejected
-verdict.
+The original wasm-02 fix made writes fallible. The follow-up
+`ext-proc-trailer-mutation-collision-cpu-bound` addresses synchronous map work
+before final validation. With only the final limits, a decoded verdict could
+drive thousands of writes and costly hash probes. No latency measurement was
+used to choose the limit.
 
-The panic is gone, but the CPU work is not yet bounded. Processor input can still
-build up to 24,576 distinct names before the final validation rejects the map, or
-an unbounded number of repeated values for one name (`extra_values` has no
-`MAX_SIZE` check), all within the 4 MiB gRPC message. Green-state maps hash with
-unkeyed FNV truncated to 15 bits. The vacant-slot branch of `insert_phase_one`
-ignores the displacement-danger flag. Names crafted to share one hash therefore
-never switch the map to SipHash, as long as no existing entry sits in the cluster's
-probe path. The processor sees the upstream trailer names, so it can choose a hash
-that avoids them. That can make this pre-validation work quadratic on a
-Tokio worker. This conclusion comes from reading the code and has not been
-measured. It predates wasm-02 and the fix does not make it worse. The follow-up is
-`tasks/todo/ext-proc-trailer-mutation-collision-cpu-bound.md`. Do not treat this
-page as accepting that cost.
+The separate operation limits bound each loop to 256 entries. The input map
+has at most 256 fields, so the temporary map has at most 512 fields before
+removals. Repeated names and no-op entries count. This can reject a verdict
+whose final map would have fit. Under fail-open even its requested removals
+are skipped. The gate bounds map operations after decoding; it does not limit
+protobuf decoding time or impose an intermediate byte cap.
+
+The callback tests `trailer_operation_limits_are_independent_and_inclusive`
+and `oversized_trailer_operation_lists_are_rejected_before_name_admission`
+cover both lists at their limits and either list one over, including atomic
+failure under both policies.
 
 ## Verification and re-evaluation
+
+With the operation limits in place,
+`cargo test -p edgion-gateway --lib ext_proc::response_trailer` passed all 24 tests.
 
 Verified on 2026-11-12 with
 `cargo test -p edgion-gateway --lib ext_proc::response_trailer` (22 passed). Two

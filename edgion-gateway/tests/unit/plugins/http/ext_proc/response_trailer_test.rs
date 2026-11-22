@@ -792,6 +792,59 @@ fn repeated_sets_admit_a_new_name_only_once() {
     assert_eq!(values, vec![b"first".as_slice(), b"second".as_slice()]);
 }
 
+#[tokio::test]
+async fn trailer_operation_limits_are_independent_and_inclusive() {
+    let names: Vec<_> = (0..TRAILER_FIELD_CAP).map(|index| format!("x-{index}")).collect();
+    let mutation = HeaderMutation {
+        set_headers: names
+            .iter()
+            .map(|name| option(name, b"v", HeaderAppendAction::AddIfAbsent))
+            .collect(),
+        remove_headers: names,
+    };
+    let (mut processor, owner) = processor(Ok(response(Some(mutation))), false, false);
+    let mut trailers = HeaderMap::new();
+    trailers.insert("grpc-status", HeaderValue::from_static("0"));
+    let expected = trailers.clone();
+    let mut session = session(true, true, true);
+    let result = processor
+        .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut PluginLog::new("ExtProc"))
+        .await;
+    assert_eq!(result, UpstreamTrailerResult::Continue);
+    assert_eq!(trailers, expected);
+    assert_eq!(*owner.terminal.lock(), Some(("success", "response-trailers")));
+}
+
+#[tokio::test]
+async fn oversized_trailer_operation_lists_are_rejected_before_name_admission() {
+    for (sets, removes) in [(TRAILER_FIELD_CAP + 1, 0), (1, TRAILER_FIELD_CAP + 1)] {
+        for fail_open in [false, true] {
+            let mutation = HeaderMutation {
+                set_headers: vec![option("x-new", b"v", HeaderAppendAction::OverwriteIfExistsOrAdd); sets],
+                remove_headers: vec!["x-original".to_string(); removes],
+            };
+            let (mut processor, owner) = processor(Ok(response(Some(mutation))), fail_open, false);
+            let mut trailers = HeaderMap::new();
+            trailers.insert("x-original", HeaderValue::from_static("v"));
+            let expected = trailers.clone();
+            let mut session = MockPluginSession::new();
+            session.expect_is_grpc_request().return_const(false);
+            session.expect_downstream_response_trailer_name_allowed().never();
+            let result = processor
+                .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut PluginLog::new("ExtProc"))
+                .await;
+            let (expected_result, outcome) = if fail_open {
+                (UpstreamTrailerResult::Continue, "fail-open")
+            } else {
+                (UpstreamTrailerResult::FailClose, "fail-close")
+            };
+            assert_eq!(result, expected_result);
+            assert_eq!(trailers, expected);
+            assert_eq!(*owner.terminal.lock(), Some((outcome, "bad-verdict")));
+        }
+    }
+}
+
 /// More distinct names than `http::HeaderMap` can hold (24,576 usable slots at
 /// its 32,768 raw MAX_SIZE); the panicking `append`/`insert` would unwind here.
 const BEYOND_HEADER_MAP_MAX_NAMES: usize = 25_000;
