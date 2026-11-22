@@ -3508,6 +3508,12 @@ impl EdgionHttpContext {
         self.final_downstream_status = Some(status);
         self.candidate_downstream_status = None;
         self.response_write_started = true;
+        // Claiming the final writer closes AI replay even if the downstream write fails.
+        if let Some(crate::ai::AiAttemptPlan::Ready(plan)) =
+            self.ai_state_mut().and_then(|state| state.attempt_plan.as_mut())
+        {
+            plan.request_body = Bytes::new();
+        }
         true
     }
 

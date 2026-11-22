@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [AI replay body lifetime at final writer claim](regression-guards/replay-body-lifetime.md)
+
 - [Prepared attempt owns admission input](regression-guards/prepared-attempt-owns-admission-input.md): ARCH-009 selected-generation policy projection and transport sequencing.
 
 - [Precompiled backend lookup keys](regression-guards/precompiled-backend-lookup-keys.md): ARCH-008 cold identity ownership, borrowed planning projections and retained plan lifetimes.

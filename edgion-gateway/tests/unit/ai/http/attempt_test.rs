@@ -358,6 +358,32 @@ fn install_zero_retry_budget(ctx: &mut EdgionHttpContext) {
 }
 
 #[test]
+fn final_writer_releases_ai_body_after_the_retry_window() {
+    let mut ctx = ready_context(1);
+    let body: Arc<[u8]> = Arc::from(br#"{"model":"logical"}"#.as_slice());
+    let owner = Arc::downgrade(&body);
+    let Some(AiAttemptPlan::Ready(plan)) = ctx.ensure_ai_state().attempt_plan.as_mut() else {
+        panic!("expected a ready plan");
+    };
+    plan.request_body = Bytes::from_owner(body);
+
+    crate::ai::runtime::dispatch::mark_ai_dispatch_started(&mut ctx).unwrap();
+    let mut response = ResponseHeader::build(503, None).unwrap();
+    let error = on_raw_response(&mut ctx, &mut response, transport(true)).unwrap_err();
+    assert!(on_transport_failure(&mut ctx, transport(true), error).retry());
+    assert!(ctx.select_final_downstream_status(200));
+    assert!(!ctx.claim_final_response(103));
+    assert!(owner.upgrade().is_some());
+
+    assert!(ctx.claim_final_response(200));
+    assert!(owner.upgrade().is_none());
+    let Some(AiAttemptPlan::Ready(plan)) = ctx.ai_state().and_then(|state| state.attempt_plan.as_ref()) else {
+        panic!("expected to retain the plan metadata");
+    };
+    assert_eq!(plan.logical_model, "logical");
+}
+
+#[test]
 fn raw_status_retry_is_acknowledged_without_a_second_transition() {
     let mut ctx = ready_context(1);
     crate::ai::runtime::dispatch::mark_ai_dispatch_started(&mut ctx).unwrap();
