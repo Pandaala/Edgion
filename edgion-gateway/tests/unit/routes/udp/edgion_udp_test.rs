@@ -197,6 +197,7 @@ fn test_pinned_endpoint() -> PinnedServiceEndpoint {
 
 fn make_test_session(proxy: &EdgionUdpProxy, last_activity: Instant) -> Arc<ClientSession> {
     Arc::new(ClientSession {
+        cancel_token: proxy.cancel_token.child_token(),
         _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
         upstream_socket: proxy.socket.clone(),
@@ -375,6 +376,7 @@ async fn test_serve_exits_on_cancel() {
     proxy.client_sessions.insert(
         peer,
         Arc::new(ClientSession {
+            cancel_token: proxy.cancel_token.child_token(),
             _route_slot: proxy.route_sessions.acquire().0,
             _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
             upstream_socket: proxy.socket.clone(),
@@ -482,6 +484,7 @@ async fn test_cleanup_expired_sessions() {
     let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let expired_time = Instant::now() - Duration::from_secs(120);
     let session = Arc::new(ClientSession {
+        cancel_token: proxy.cancel_token.child_token(),
         _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy
             .session_permits
@@ -536,6 +539,7 @@ async fn test_cleanup_keeps_active_sessions() {
     // Insert an active session (recent last_activity)
     let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let session = Arc::new(ClientSession {
+        cancel_token: proxy.cancel_token.child_token(),
         _route_slot: proxy.route_sessions.acquire().0,
         _session_permit: proxy
             .session_permits
@@ -627,12 +631,23 @@ async fn expiry_candidate_refreshed_before_retirement_stays_active() {
     assert_eq!(session.lifecycle.lock().packets_sent, 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn retired_generation_cannot_remove_replacement_or_keep_receiver_alive() {
     let proxy = make_test_proxy(19992).await;
     let peer: SocketAddr = "192.0.2.2:12346".parse().unwrap();
     let old = make_test_session(&proxy, Instant::now() - Duration::from_secs(120));
     proxy.client_sessions.insert(peer, old.clone());
+    let (receiver, _send) = controlled_receiver();
+    let handle = tokio::spawn(EdgionUdpProxy::handle_upstream_packets(
+        peer,
+        proxy.socket.clone(),
+        receiver.clone(),
+        proxy.client_sessions.clone(),
+        old.clone(),
+        proxy.listener_port,
+    ));
+    receiver.started.acquire().await.unwrap().forget();
+    let before_retirement = tokio::time::Instant::now();
     assert!(EdgionUdpProxy::retire_session(
         &proxy.client_sessions,
         peer,
@@ -648,20 +663,12 @@ async fn retired_generation_cannot_remove_replacement_or_keep_receiver_alive() {
         None,
     ));
 
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        EdgionUdpProxy::handle_upstream_packets(
-            peer,
-            proxy.socket.clone(),
-            proxy.socket.clone(),
-            proxy.client_sessions.clone(),
-            old.clone(),
-            proxy.cancel_token.clone(),
-            proxy.listener_port,
-        ),
-    )
-    .await
-    .expect("retired receiver should exit despite replacement");
+    tokio::time::timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("retirement should wake the pending receiver")
+        .unwrap();
+    assert_eq!(tokio::time::Instant::now(), before_retirement);
+    assert!(!replacement.cancel_token.is_cancelled());
     assert!(Arc::ptr_eq(
         proxy.client_sessions.get(&peer).unwrap().value(),
         &replacement
@@ -677,7 +684,6 @@ async fn receiver_cancellation_retires_session_and_releases_permit() {
     let peer: SocketAddr = "192.0.2.3:12347".parse().unwrap();
     let session = make_test_session(&proxy, Instant::now());
     proxy.client_sessions.insert(peer, session.clone());
-    let cancel = CancellationToken::new();
     let (receiver, _send) = controlled_receiver();
     let handle = tokio::spawn(EdgionUdpProxy::handle_upstream_packets(
         peer,
@@ -685,11 +691,10 @@ async fn receiver_cancellation_retires_session_and_releases_permit() {
         receiver.clone(),
         proxy.client_sessions.clone(),
         session.clone(),
-        cancel.clone(),
         proxy.listener_port,
     ));
     receiver.started.acquire().await.unwrap().forget();
-    cancel.cancel();
+    proxy.cancel_token.cancel();
     tokio::time::timeout(Duration::from_secs(1), handle)
         .await
         .expect("pending receiver should stop on cancellation")
@@ -714,7 +719,6 @@ async fn receiver_error_retires_session_and_releases_permit() {
         receiver.clone(),
         proxy.client_sessions.clone(),
         session.clone(),
-        proxy.cancel_token.clone(),
         proxy.listener_port,
     ));
     receiver.started.acquire().await.unwrap().forget();

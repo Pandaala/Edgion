@@ -18,8 +18,8 @@ not try to distinguish forged sources, evict sessions under pressure, or
 shorten the lifetime of sessions without a backend reply.
 
 The decision covers only spoofed-source admission. Configurability of the cap
-and timeout, the per-session footprint (dedicated socket, 64 KiB receive
-buffer, 1 s receive poll), and receive-loop head-of-line latency are not
+and timeout, the per-session footprint (dedicated socket and 64 KiB receive
+buffer), and receive-loop head-of-line latency are not
 accepted; they remain open work in
 [`tasks/todo/gw-core3-05-udp-session-admission-hardening.md`](../../../../tasks/todo/gw-core3-05-udp-session-admission-hardening.md).
 

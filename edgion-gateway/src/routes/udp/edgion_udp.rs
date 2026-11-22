@@ -162,6 +162,7 @@ fn pinned_endpoint_removed(
 
 /// Client session information with statistics
 struct ClientSession {
+    cancel_token: CancellationToken,
     _session_permit: OwnedSemaphorePermit,
     /// Route-stage session count; released when the last session handle drops.
     _route_slot: ConnectionSlot,
@@ -524,6 +525,7 @@ impl EdgionUdpProxy {
         let upstream_socket = Arc::new(upstream_socket);
 
         let session = Arc::new(ClientSession {
+            cancel_token: self.cancel_token.child_token(),
             _session_permit: session_permit,
             _route_slot: route_slot,
             upstream_socket,
@@ -549,7 +551,6 @@ impl EdgionUdpProxy {
         let downstream = self.socket.clone();
         let sess = session.clone();
         let upstream_receiver = session.upstream_socket.clone();
-        let cancel = self.cancel_token.clone();
         let listener_port = self.listener_port;
 
         children.spawn(self.child_tasks.track_future(async move {
@@ -559,7 +560,6 @@ impl EdgionUdpProxy {
                 upstream_receiver,
                 sessions_ref,
                 sess,
-                cancel,
                 listener_port,
             )
             .await;
@@ -578,22 +578,17 @@ impl EdgionUdpProxy {
         upstream_receiver: Arc<R>,
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
         session: Arc<ClientSession>,
-        cancel: CancellationToken,
         listener_port: u16,
     ) {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
         loop {
-            if session.lifecycle.lock().retired {
-                break;
-            }
-
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => break,
-                result = tokio::time::timeout(Duration::from_secs(1), upstream_receiver.recv_from(&mut buf)) => {
+                _ = session.cancel_token.cancelled() => break,
+                result = upstream_receiver.recv_from(&mut buf) => {
                     match result {
-                        Ok(Ok((len, src))) => {
+                        Ok((len, src)) => {
                             if session.lifecycle.lock().retired {
                                 break;
                             }
@@ -602,7 +597,7 @@ impl EdgionUdpProxy {
                             }
                             let send_result = tokio::select! {
                                 biased;
-                                _ = cancel.cancelled() => break,
+                                _ = session.cancel_token.cancelled() => break,
                                 result = downstream_socket.send_to(&buf[..len], direct_peer_addr) => result,
                             };
                             Self::record_downstream_send_result(
@@ -613,8 +608,7 @@ impl EdgionUdpProxy {
                             )
                             .await;
                         }
-                        Ok(Err(_)) => break,
-                        Err(_) => continue,
+                        Err(_) => break,
                     }
                 }
             }
@@ -767,6 +761,7 @@ impl EdgionUdpProxy {
         lifecycle.retired = true;
         drop(lifecycle);
         occupied.remove();
+        session.cancel_token.cancel();
         true
     }
 

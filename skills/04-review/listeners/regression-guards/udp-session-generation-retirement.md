@@ -49,8 +49,12 @@ retirement state and converges on the same retirement function at exit.
 
 ## Alternatives and limits
 
-The receiver still uses a one-second receive timeout to observe retirement
-without a separate wakeup channel. An already in-flight datagram or send can
+For `gw-core3-05`, each session owns a child of the listener cancellation token.
+Successful retirement cancels that generation's token after map removal and
+wakes its pending receive or downstream send. Listener shutdown cancels all
+children. Previously, an idle receiver checked retirement on a one-second
+timer and retained its socket, receive buffer and permit until it ran again.
+An already in-flight datagram or send can
 finish after retirement; its completed result does not refresh or account to a
 retired session. The permit remains held until that owner and the receiver
 release their Arcs. Normal process shutdown retains its existing join and
@@ -68,6 +72,12 @@ particular resource-growth rate. The existing integration scenarios are not
 changed.
 
 ## Verification and re-evaluation
+
+For `gw-core3-05`, `cargo test -p edgion-gateway --lib routes::udp::`
+passed all 67 selected tests. With the Tokio clock paused, the generation
+test starts a pending receive, retires the session and installs a replacement.
+The old task exits without clock advancement, the replacement stays active,
+and the old permit remains held until the last old handle drops.
 
 The tests in `edgion-gateway/tests/unit/routes/udp/edgion_udp_test.rs`
 cover refreshed expiry candidates, old-generation

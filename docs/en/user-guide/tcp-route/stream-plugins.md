@@ -570,8 +570,8 @@ Notes:
   streams and upstream connections; memory-based protection is separate.
 - L4 load balancer or kubelet TCP probes aimed at a capped listener fail while
   it is at the cap. Admin, probe and metrics ports are not counted.
-- A UDP session releases its slot up to about one second after it is retired
-  (the upstream receiver notices retirement on its next poll).
+- Retiring a UDP session wakes its upstream receiver. The slot becomes available
+  when the last task holding that session releases it.
 - UDP source addresses can be spoofed: one datagram per spoofed source creates a
   session that holds a slot until the session times out (60 s). A UDPRoute
   `ConnectionLimit` can therefore be filled by a few spoofed datagrams, denying

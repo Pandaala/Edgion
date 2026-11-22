@@ -473,7 +473,7 @@ spec:
 - 把 `ConnectionLimit` 放在 `plugins` 的**第一位**，超限连接就不会再执行后面更昂贵的条目（例如依赖 Redis 的 `ConnectionRateLimit`）。如果放在 `ConnectionRateLimit` 之后，超限客户端的重连会先消耗速率令牌（包括按来源 IP 的预算），并等待 Redis 往返后才被拒绝；挂在 Gateway 上时，这个等待发生在 listener 的串行 accept 循环中，会推迟后续连接。在前面条目中等待的连接已经被计数。
 - 上限统计的是下游 socket。一个 HTTP/2 连接可以承载多个 stream 和上游连接；基于内存的保护是另一项能力。
 - 指向已达上限 listener 的 L4 负载均衡或 kubelet TCP 探活会失败。Admin、探活和 metrics 端口不计入。
-- UDP session 被回收后，名额最多约 1 秒后释放（上游接收任务在下一次轮询时才发现回收）。
+- 回收 UDP 会话时，网关会唤醒该会话的上游接收任务。最后一个持有该会话的任务释放引用后，名额即可重新使用。
 - UDP 来源地址可以被伪造：每个伪造来源的一个数据报就会创建一个 session，并占用名额直到 session 超时（60 秒）。因此挂在 UDPRoute 上的 `ConnectionLimit` 能被少量伪造数据报占满，导致新的合法客户端被拒绝。它限制资源占用，不能防御伪造源洪泛。
 - `pluginPolicy` 照常生效：`Block` `stream/ConnectionLimit` 会让该挂载 fail-closed，`Bypass` 会去掉上限。
 - 拒绝计入 `edgion_downstream_connections_rejected_total{reason="listener"|"route"}`（UDP 按每个被拒绝的新 session 准入尝试计数，也就是每个数据报）；TCP/UDP access log 中显示通用的 `stream plugin policy denied`。

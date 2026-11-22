@@ -60,8 +60,8 @@ Review invariants and accepted limits:
   `EdgionStreamPlugins` resource.
 - The bridge accepts a non-inet peer without running the chain; Edgion binds no
   UDS data-plane listener.
-- UDP session slots are released when the last `Arc<ClientSession>` drops, up to
-  about one second after retirement.
+- Retirement wakes the UDP session's receiver. Its slot is released when the
+  last `Arc<ClientSession>` drops.
 - `edgion_downstream_connections_active` counts admitted listener sockets (after
   a successful chain); internal counters also include sockets still in admission.
 - Memory-pressure shedding is tracked in `tasks/todo/gateway-overload-manager.md`;
