@@ -21,17 +21,14 @@ The ready bit feeds `EndpointOrigin.ready`, slot readiness (any origin ready),
 `materialize_section`. Unready slots remain in `all_slots` for active health
 probes, sticky lookup and DirectEndpoint authorization, as before.
 
-The `serving` and `terminating` conditions are currently not read. The KEP-1669
-serving-terminating fallback is a deferred feature, tracked in
-[`tasks/todo/endpointslice-terminating-endpoint-fallback.md`](../../../../tasks/todo/endpointslice-terminating-endpoint-fallback.md).
-Its absence is a known gap, not an accepted design.
+For ordinary Service selection during rollout, see
+[Ready endpoints during Service drain](../intentional-design/ready-endpoints-during-service-drain.md).
 
 ## Rationale and evidence
 
 Authority: Kubernetes `discovery.k8s.io/v1` `EndpointConditions.ready`
-("A nil value should be interpreted as true"). kube-proxy applies the same rule
-(`Ready == nil || *Ready`), so a hand-written slice behaves the same for
-ClusterIP traffic and Gateway traffic.
+("A nil value should be interpreted as true"). Gateway and kube-proxy both
+interpret an omitted `ready` field as ready.
 
 Hand-written and sync-bridge slices are a supported input: the
 [service discovery guide](../../../../docs/en/ops-guide/infrastructure/service-discovery.md)
@@ -80,14 +77,11 @@ run passes trivially. Executed on 2026-11-12 in FileSystem mode on macOS:
 dead-loop, unknown-field and cache-residue checks passing. The case was not run
 against the pre-fix code; the unit test above carries the red/green evidence.
 
-Re-evaluate when the KEP-1669 fallback lands (normalization of `serving` /
-`terminating`, fallback selectors, sticky eligibility), when readiness
-normalization moves out of `normalize_section`, or when the Controller starts
-rewriting EndpointSlice conditions.
+Re-evaluate when readiness normalization moves out of `normalize_section`
+or when the Controller starts rewriting EndpointSlice conditions.
 
 ## Resolution references
 
 - infra3-01 (`tasks/improve-issues/`, P2, 2026-11-12): nil `ready` now interpreted
-  as ready; dead `EndpointSliceExt` removed; terminating fallback deferred to the
-  task above. User docs gained an "Endpoint Readiness" section in
+  as ready. The dead `EndpointSliceExt` helper was removed. User docs gained an "Endpoint Readiness" section in
   `docs/{en,zh-CN}/ops-guide/infrastructure/service-discovery.md`.

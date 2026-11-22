@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Ready endpoints during Service drain](intentional-design/ready-endpoints-during-service-drain.md)
 - [Active health-check transport is independent of BackendTLSPolicy](intentional-design/active-health-check-transport-is-independent.md)
 - [backends-F016 — Probe semaphore acquired per probe, not per cycle](intentional-design/probe-semaphore-per-cycle.md)
 
