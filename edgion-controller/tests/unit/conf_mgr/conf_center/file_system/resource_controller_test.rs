@@ -433,6 +433,100 @@ fn fs_worker_test_harness(conf_dir: &std::path::Path) -> FsWorkerTestHarness {
 }
 
 #[tokio::test]
+async fn offline_route_namespace_file_events_preserve_the_default_sibling() {
+    use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+    use edgion_resources::TCPRoute;
+    struct Handler;
+    impl ProcessorHandler<TCPRoute> for Handler {}
+    let tmp = tempfile::tempdir().unwrap();
+    let processor = Arc::new(ResourceProcessor::new(
+        "TCPRoute",
+        100,
+        Arc::new(Handler),
+        Arc::new(ControllerRuntime::default()),
+    ));
+    let (tx, rx) = mpsc::channel(16);
+    let shutdown = ShutdownHandle::new();
+    let controller = FileSystemResourceController::new(
+        "TCPRoute",
+        processor.clone(),
+        tmp.path().into(),
+        Arc::new(PathRegistry::default()),
+        rx,
+    )
+    .with_shutdown(shutdown.signal());
+    let raw = controller.fs_raw_store.clone();
+    let run = tokio::spawn(controller.run());
+    let bare_path = super::build_resource_path_from_key(tmp.path(), "TCPRoute", "r");
+    let sibling_path = super::build_resource_path_from_key(tmp.path(), "TCPRoute", "default/r");
+    let bare = "apiVersion: gateway.networking.k8s.io/v1\nkind: TCPRoute\nmetadata: {name: r}\nspec: {}";
+    let sibling =
+        "apiVersion: gateway.networking.k8s.io/v1\nkind: TCPRoute\nmetadata: {name: r, namespace: default}\nspec: {}";
+    for (path, content) in [(&bare_path, bare), (&sibling_path, sibling)] {
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::write(path, content).await.unwrap();
+        tx.send(FileSystemEvent::InitApply {
+            path: path.clone(),
+            content: content.into(),
+        })
+        .await
+        .unwrap();
+    }
+    tx.send(FileSystemEvent::InitDone).await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        while processor.get("default/r").is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(raw.get("r").is_none() && processor.get("r").is_none());
+    // An accidental sibling requeue would now publish generation 2.
+    let updated = sibling.replace("namespace: default", "namespace: default, generation: 2");
+    tokio::fs::write(&sibling_path, &updated).await.unwrap();
+    tx.send(FileSystemEvent::Apply {
+        path: bare_path.clone(),
+        content: bare.into(),
+    })
+    .await
+    .unwrap();
+    tokio::fs::remove_file(bare_path).await.unwrap();
+    tx.send(FileSystemEvent::Delete("__DELETE__:TCPRoute:r".into()))
+        .await
+        .unwrap();
+    // An unrelated key is a barrier for the preceding events and queued work.
+    let marker_path = super::build_resource_path_from_key(tmp.path(), "TCPRoute", "default/marker");
+    let marker = sibling.replace("name: r,", "name: marker,");
+    tokio::fs::write(&marker_path, &marker).await.unwrap();
+    tx.send(FileSystemEvent::Apply {
+        path: marker_path,
+        content: marker,
+    })
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(5), async {
+        while processor.get("default/marker").is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(raw.get("r").is_none() && processor.get("r").is_none());
+    assert!(raw.get("default/r").is_some());
+    assert_eq!(processor.get("default/r").unwrap().metadata.generation, None);
+    processor.on_event_key("default/r".into()).await;
+    timeout(Duration::from_secs(5), async {
+        while processor.get("default/r").and_then(|r| r.metadata.generation) != Some(2) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    shutdown.shutdown();
+    timeout(Duration::from_secs(5), run).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn namespace_less_http_route_cannot_alias_the_default_namespace_route() {
     use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
 

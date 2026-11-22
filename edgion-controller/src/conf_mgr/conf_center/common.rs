@@ -213,7 +213,20 @@ pub fn parse_resource_content_offline<K>(content: &str) -> yaml_serde::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
-    parse_resource_content_inner(content, true)
+    let resource: K = parse_resource_content_inner(content, true)?;
+    let kind = K::resource_kind();
+    // Gateway dependency requeues must identify the same source as the file or etcd key.
+    if matches!(
+        kind,
+        ResourceKind::GRPCRoute | ResourceKind::TCPRoute | ResourceKind::UDPRoute
+    ) && resource.meta().namespace.as_deref().unwrap_or("").is_empty()
+    {
+        return Err(yaml_serde::Error::custom(format!(
+            "{} requires an explicit metadata.namespace",
+            kind.as_str()
+        )));
+    }
+    Ok(resource)
 }
 
 fn parse_resource_content_inner<K>(content: &str, validate_alpha_schema: bool) -> yaml_serde::Result<K>

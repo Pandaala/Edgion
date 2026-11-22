@@ -222,6 +222,11 @@ ignore `label_selector` to cover unlabeled classes too. Adding `GatewayClass` to
 
 ### [conf_center] — FileSystem Mode
 
+In FileSystem files and resources written directly to etcd, GRPCRoute, TCPRoute,
+and UDPRoute require a nonempty `metadata.namespace`. To use the default
+namespace, set `metadata.namespace: default` and use the matching file or etcd
+key (for example, `TCPRoute_default_r.yaml` or `{prefix}/conf/TCPRoute/default/r`).
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `file_system` |

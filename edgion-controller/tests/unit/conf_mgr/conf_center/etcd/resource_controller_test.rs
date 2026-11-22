@@ -262,7 +262,7 @@ spec:
     assert!(get_runtime_invalid(&invalid, key).is_none());
 }
 
-fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> {
+fn runtime_status_handler(prefix: &str) -> Arc<super::EtcdStatusHandler> {
     use edgion_common::link_sys_core::providers::etcd::{EtcdBootstrapConfig, EtcdLinkClient};
     let client = EtcdLinkClient::from_bootstrap(
         "test/invalid-ingress",
@@ -276,6 +276,13 @@ fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> 
         },
     )
     .unwrap();
+    Arc::new(super::EtcdStatusHandler::new(
+        Arc::new(client),
+        prefix.trim_end_matches("/conf/").to_owned(),
+    ))
+}
+
+fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> {
     let processor = Arc::new(ResourceProcessor::new(
         "HTTPRoute",
         100,
@@ -286,10 +293,7 @@ fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> 
     super::EtcdResourceController::new(
         "HTTPRoute",
         processor,
-        Arc::new(super::EtcdStatusHandler::new(
-            Arc::new(client),
-            prefix.trim_end_matches("/conf/").to_owned(),
-        )),
+        runtime_status_handler(prefix),
         rx,
         Arc::from(prefix),
     )
@@ -297,6 +301,72 @@ fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> 
 
 fn route_document(host: &str) -> super::EtcdDocument {
     super::EtcdDocument::Text(format!("apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\nspec:\n  hostnames: [{host}]\n  rules: []\n"))
+}
+
+#[tokio::test]
+async fn offline_route_namespace_etcd_put_and_delete_target_only_the_bare_key() {
+    use edgion_resources::TCPRoute;
+    struct Handler;
+    impl ProcessorHandler<TCPRoute> for Handler {}
+    let processor = Arc::new(ResourceProcessor::new(
+        "TCPRoute",
+        100,
+        Arc::new(Handler),
+        Arc::new(ControllerRuntime::default()),
+    ));
+    let (_, rx) = tokio::sync::mpsc::channel(16);
+    let controller = super::EtcdResourceController::new(
+        "TCPRoute",
+        processor.clone(),
+        runtime_status_handler(CONF_PREFIX),
+        rx,
+        Arc::from(CONF_PREFIX),
+    );
+    let queue = processor.workqueue();
+    let bare_key = "/edgion/conf/TCPRoute/_/r";
+    let sibling_key = "/edgion/conf/TCPRoute/default/r";
+    let bare = super::EtcdDocument::Text(
+        "apiVersion: gateway.networking.k8s.io/v1\nkind: TCPRoute\nmetadata: {name: r}\nspec: {}".into(),
+    );
+    let sibling = super::EtcdDocument::Text(
+        "apiVersion: gateway.networking.k8s.io/v1\nkind: TCPRoute\nmetadata: {name: r, namespace: default}\nspec: {}"
+            .into(),
+    );
+    for with_sibling in [false, true] {
+        if with_sibling {
+            controller.apply_runtime_document(sibling_key, &sibling).await;
+            let item = queue.dequeue().await.unwrap();
+            assert_eq!(item.key, "default/r");
+            queue.done(&item.key);
+        }
+        for delete in [false, false, true] {
+            if delete {
+                controller.delete_runtime_document(bare_key).await;
+            } else {
+                controller.apply_runtime_document(bare_key, &bare).await;
+            }
+            let item = queue.dequeue().await.unwrap();
+            assert_eq!(item.key, "r");
+            assert!(controller.fs_raw_store.get(&item.key).is_none());
+            assert_eq!(controller.fs_raw_store.get("default/r").is_some(), with_sibling);
+            assert_eq!(
+                get_runtime_invalid(&controller.invalid_envelopes, "r").is_none(),
+                delete
+            );
+            queue.done(&item.key);
+        }
+    }
+    processor.on_event_key("default/r".into()).await;
+    let item = queue.dequeue().await.unwrap();
+    let raw = controller.fs_raw_store.get(&item.key).unwrap();
+    assert!(matches!(
+        processor
+            .process_work_item(&item.key, Some((*raw).clone()), None, item.trigger_chain)
+            .await,
+        WorkItemResult::Processed { .. }
+    ));
+    queue.done(&item.key);
+    assert!(processor.get("default/r").is_some());
 }
 
 // Exercise the real queue and processor without status RPCs. Ingress is performed

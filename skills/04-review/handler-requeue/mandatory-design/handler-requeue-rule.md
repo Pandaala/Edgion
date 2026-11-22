@@ -55,8 +55,15 @@ diagnostic must remain available even if the Gateway appears after the status
 read and the route never receives another notification. The invalid-owner
 status regression checks the same source error with missing and present parents.
 
-FileSystem and direct etcd route keys with an omitted namespace have a separate
-[requeue-key issue](../../../../tasks/todo/controller-offline-route-namespace-requeue-key.md).
+For `controller-offline-route-namespace-requeue-key`, the source key must also
+match the dependency key. FileSystem and direct etcd ingestion reject GRPCRoute,
+TCPRoute and UDPRoute documents without a nonempty namespace before raw-store
+insertion. Otherwise a bare source named `r` would register as `default/r`:
+a Gateway change could miss it or target a same-name sibling. Invalid updates
+and deletes use the source path's identity, including the bare key.
+The three `offline_route_namespace` regressions passed for parser admission,
+FileSystem event and worker isolation, and etcd event keys and raw-store
+rereads. The etcd test exercises controller methods without a running server.
 
 ## Affected handlers
 

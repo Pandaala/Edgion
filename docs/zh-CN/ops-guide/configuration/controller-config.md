@@ -205,6 +205,10 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 
 ### [conf_center] — FileSystem 模式
 
+通过文件或直接写入 etcd 配置 GRPCRoute、TCPRoute、UDPRoute 时，必须填写非空的
+`metadata.namespace`。如需使用默认命名空间，请显式填写 `metadata.namespace: default`，
+并使用匹配的文件名或 etcd 键，例如 `TCPRoute_default_r.yaml` 或 `{prefix}/conf/TCPRoute/default/r`。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `type` | `String` | — | 必须填 `file_system`（snake_case，不是 `filesystem`） |

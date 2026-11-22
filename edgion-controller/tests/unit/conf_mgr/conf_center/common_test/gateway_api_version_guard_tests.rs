@@ -4,6 +4,40 @@ use edgion_resources::{
 };
 
 #[test]
+fn offline_route_namespace_matches_the_dependency_key() {
+    fn check<K>(parse: fn(&str) -> yaml_serde::Result<K>, kind: &str)
+    where
+        K: kube::Resource + std::fmt::Debug,
+    {
+        for version in ["v1", "v1alpha2"] {
+            let mut source = serde_json::json!({
+                "apiVersion": format!("gateway.networking.k8s.io/{version}"), "kind": kind,
+                "metadata": {"name": "r"}, "spec": {"rules": [{"backendRefs": [{"name":"svc", "port":80}]}]}
+            });
+            for namespace in [None, Some(""), Some("default"), Some("team")] {
+                if let Some(ns) = namespace {
+                    source["metadata"]["namespace"] = ns.into();
+                }
+                let result = parse(&source.to_string());
+                match namespace {
+                    Some(ns) if !ns.is_empty() => assert_eq!(
+                        crate::conf_mgr::sync_runtime::resource_processor::make_resource_key(&result.unwrap()),
+                        format!("{ns}/r")
+                    ),
+                    _ => assert!(result.unwrap_err().to_string().contains("metadata.namespace")),
+                }
+            }
+        }
+    }
+    check(
+        super::parse_resource_content_offline::<edgion_resources::GRPCRoute>,
+        "GRPCRoute",
+    );
+    check(super::parse_resource_content_offline::<TCPRoute>, "TCPRoute");
+    check(super::parse_resource_content_offline::<UDPRoute>, "UDPRoute");
+}
+
+#[test]
 fn last_pre_v1_sources_convert_to_canonical_resources() {
     let cases = [
         ("GRPCRoute", "v1alpha2"),
