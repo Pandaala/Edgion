@@ -21,7 +21,7 @@ async fn invalid_updates_withdraw_old_route_without_dependency_residue() {
             ref_denied: None,
         }]),
     };
-    let valid = UDPRoute {
+    let mut valid = UDPRoute {
         metadata: ObjectMeta {
             name: Some("r1".to_string()),
             namespace: Some("default".to_string()),
@@ -37,22 +37,39 @@ async fn invalid_updates_withdraw_old_route_without_dependency_residue() {
         },
         status: None,
     };
+    let parents = |name: &str| Some(serde_json::from_value(serde_json::json!([{"name": name}])).unwrap());
+    valid.spec.parent_refs = parents("published");
     let mut invalid = valid.clone();
+    invalid.spec.parent_refs = parents("rejected");
+    let check_index = |published: bool| {
+        let index = &runtime.gateway_route_index;
+        let route = (ResourceKind::UDPRoute, "default/r1".to_string());
+        assert_eq!(
+            index.get_routes_for_gateway("default/published").contains(&route),
+            published
+        );
+        assert!(index.get_routes_for_gateway("default/rejected").is_empty());
+    };
     invalid.spec.rules.as_mut().unwrap().push(rule("svc-b"));
 
     processor.on_init_apply(invalid.clone(), None).await;
+    check_index(false);
     assert!(processor.get("default/r1").is_none());
     assert!(runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
     assert!(runtime.service_ref_mgr.get_refs("default/svc-b").is_empty());
 
     processor.on_init_apply(valid.clone(), None).await;
+    check_index(true);
     assert!(processor.get("default/r1").is_some());
     processor.on_init_apply(invalid.clone(), None).await;
+    check_index(false);
     processor.on_init_apply(invalid, None).await;
+    check_index(false);
     assert!(processor.get("default/r1").is_none());
     assert!(runtime.service_ref_mgr.get_refs("default/svc-a").is_empty());
     assert!(runtime.service_ref_mgr.get_refs("default/svc-b").is_empty());
 
     processor.on_init_apply(valid, None).await;
+    check_index(true);
     assert!(processor.get("default/r1").is_some());
 }

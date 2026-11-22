@@ -134,6 +134,12 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         // Resolve listener keys from parentRefs for per-listener route isolation
         if let Some(parent_refs) = route.spec.parent_refs.as_ref().filter(|_| source_valid) {
+            _ctx.runtime().gateway_route_index.register_route_dependencies(
+                ResourceKind::UDPRoute,
+                &format!("{route_ns}/{}", route.metadata.name.as_deref().unwrap_or("")),
+                parent_refs,
+                route_ns,
+            );
             let attachments =
                 super::route_utils::resolve_route_listener_attachments(parent_refs, route_ns, _ctx.runtime());
             if !attachments.is_empty() {
@@ -163,8 +169,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        // Register in gateway_route_index so Gateway changes trigger requeue
-        // (required because parse() calls lookup_gateway() for resolved_listeners)
+        // Drop old parents only after update_status has refreshed their counts.
         let dropped_gateways = update_gateway_route_index(
             ResourceKind::UDPRoute,
             route_ns,
@@ -199,7 +204,8 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
     }
 
     fn update_status(&self, route: &mut UDPRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
-        if UdpRouteBackendRefs::from_route(route).is_err() {
+        let source_error = UdpRouteBackendRefs::from_route(route).err();
+        if source_error.is_some() {
             route.spec.resolved_listeners = None;
             route.spec.resolved_listener_attachments = None;
         }
@@ -207,7 +213,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
-        if let Err(error) = UdpRouteBackendRefs::from_route(route) {
+        if let Some(error) = source_error {
             let message = route_backend_refs::source_error_message(error);
             if !validation_errors.contains(&message) {
                 validation_accepted_errors.push(AcceptedError::Invalid { message });
@@ -229,14 +235,13 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
 
         if let Some(parent_refs) = &route.spec.parent_refs {
             for parent_ref in parent_refs {
-                let accepted_result = super::route_utils::validate_parent_ref_accepted(
-                    route_ns,
+                let mut accepted_errors = super::route_utils::gateway_parent_status_errors(
+                    source_error.is_none().then_some(route_ns),
                     parent_ref,
                     None,
                     "UDPRoute",
                     _ctx.runtime(),
                 );
-                let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
                 let ps = super::route_utils::parent_status_for_update(
@@ -263,16 +268,12 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
             );
         }
 
-        if validation_errors.is_empty() || UdpRouteBackendRefs::from_route(route).is_err() {
+        if validation_errors.is_empty() || source_error.is_some() {
             super::route_utils::update_tracker_accepted_only(
                 ResourceKind::UDPRoute,
                 route_ns,
                 route.metadata.name.as_deref().unwrap_or(""),
-                route
-                    .spec
-                    .parent_refs
-                    .as_ref()
-                    .filter(|_| UdpRouteBackendRefs::from_route(route).is_ok()),
+                route.spec.parent_refs.as_ref().filter(|_| source_error.is_none()),
                 None,
                 _ctx.runtime(),
             );

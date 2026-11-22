@@ -22,8 +22,9 @@ affected resources.
 
 Snapshot-dependent attachments also require registration before the first
 Gateway read, so publication cannot miss a dependency while that read is in
-flight. HTTPRoute and TLSRoute add new edges in parse and keep exact replacement
-in `on_change`: dropped parents must be requeued only after `update_status`
+flight. HTTPRoute, GRPCRoute, TCPRoute, UDPRoute and TLSRoute add new edges in
+parse and keep exact replacement in `on_change`: dropped parents must be
+requeued only after `update_status`
 updates their attachment counts. EdgionTls registers before its proof lookup.
 
 For `controller-route-attachment-gateway-ordering-race`, the regression
@@ -37,6 +38,26 @@ namespace at ingestion so the queued key identifies the original source file.
 Reprocessing an unchanged Gateway alone cannot
 repair a missed notification because listener inputs are compared on publication.
 
+For `controller-grpc-tcp-udp-route-gateway-dependency-order`, the GRPC, TCP
+and UDP variants of `routes_converge_after_concurrent_gateway_publication`
+exercise this ordering for namespaced sources. Only Gateway parentRefs enter
+the index (including defaulted group/kind); a gRPC delegation parent does not
+subscribe to a same-name Gateway. TCP and UDP reject multi-rule sources before
+listener resolution; adding an edge for an unpublished first generation would
+leave no cached route for deletion to clean up. On reparenting, the old Gateway
+remains indexed during parse and is requeued after its attached count drops.
+The three new first-read assertions failed on the previous handlers; all nine
+Gateway route-refresh tests passed with early registration.
+
+GRPCRoute, TCPRoute and UDPRoute skip Gateway-dependent acceptance errors for
+an invalid route reference source. Such a route cannot attach. Its validation
+diagnostic must remain available even if the Gateway appears after the status
+read and the route never receives another notification. The invalid-owner
+status regression checks the same source error with missing and present parents.
+
+FileSystem and direct etcd route keys with an omitted namespace have a separate
+[requeue-key issue](../../../../tasks/todo/controller-offline-route-namespace-requeue-key.md).
+
 ## Affected handlers
 
 | Handler | lookup_gateway() in parse() | gateway_route_index in on_change() |
@@ -45,8 +66,8 @@ repair a missed notification because listener inputs are compared on publication
 | `grpc_route.rs` | Yes (via hostname_resolution) | Yes |
 | `tls_route.rs` | Yes | Yes |
 | `edgion_tls.rs` | Yes | Registered in parse before proof lookup; on_change has no index work |
-| `tcp_route.rs` | Yes (via resolve_listener_keys) | Yes |
-| `udp_route.rs` | Yes (via resolve_listener_keys) | Yes |
+| `tcp_route.rs` | Yes (via resolve_route_listener_attachments) | Yes |
+| `udp_route.rs` | Yes (via resolve_route_listener_attachments) | Yes |
 
 ## How to verify
 

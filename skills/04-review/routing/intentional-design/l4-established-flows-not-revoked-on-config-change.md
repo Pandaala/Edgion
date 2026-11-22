@@ -70,10 +70,10 @@ UDP differs because a removed endpoint retires the session; opt-in TCP/TLS
 host-removal closing (Envoy `close_connections_on_host_set_change`) is not
 implemented.
 
-UDP listener throughput (single serve task per listener, inline new-session
-admission) is a separate concern tracked with gw-core3-05 in
-[`tasks/todo/gw-core3-05-udp-session-admission-hardening.md`](../../../../tasks/todo/gw-core3-05-udp-session-admission-hardening.md),
-not part of this decision.
+UDP listener throughput is a separate, deferred concern. Each listener awaits
+new-session admission inline. See the
+[listener review](../../listeners/intentional-design/udp-session-table-spoofed-source-limit.md#resolution-references)
+for the condition for revisiting receive-loop isolation.
 
 ## Verification and re-evaluation
 

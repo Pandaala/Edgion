@@ -231,6 +231,11 @@ ignore `label_selector` to cover unlabeled classes too. Adding `GatewayClass` to
 
 Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` to FileSystem mode.
 
+If a GRPCRoute, TCPRoute or UDPRoute reports `Accepted=False` with reason
+`Invalid` and a message beginning with `Invalid route reference source`,
+check the route's own `metadata.name` and `metadata.namespace`. Creating the
+referenced Gateway cannot correct an invalid route identity.
+
 ### [conf_center] — Kubernetes Mode
 
 | Parameter | Type | Default | Description |

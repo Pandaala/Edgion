@@ -155,6 +155,19 @@ async fn all_five_invalid_owners_fail_closed_in_direct_status_and_recover_after_
                 let ProcessResult::Continue(mut parsed)=handler.parse(route,&ctx).await else {panic!("lenient invalid source status")};
                 let errors=handler.validate(&parsed,&ctx); handler.update_status(&mut parsed,&ctx,&errors);
                 assert!(parsed.spec.resolved_listeners.is_none());
+                if matches!($kind, ResourceKind::GRPCRoute | ResourceKind::TCPRoute | ResourceKind::UDPRoute) {
+                    let mut invalid = parsed.clone();
+                    let expected = source_error_message($facade::from_route(&invalid).err().unwrap());
+                    for parent in ["missing", "gateway"] {
+                        invalid.spec.parent_refs.as_mut().unwrap()[0].name = parent.into();
+                        handler.update_status(&mut invalid, &ctx, &errors);
+                        let parents = &invalid.status.as_ref().unwrap().parents;
+                        assert_eq!(parents.len(), 1);
+                        let accepted = parents[0].conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+                        assert_eq!((&*accepted.status, &*accepted.reason), ("False", "Invalid"));
+                        assert_eq!(accepted.message, expected);
+                    }
+                }
                 assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
                 assert!(runtime.service_ref_mgr.get_refs("target/service").is_empty());
                 // Repair keeps the original backend slot and restarts ordinary publication.

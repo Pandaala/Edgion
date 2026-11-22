@@ -448,6 +448,22 @@ fn listener_supports_route_kind(listener: &edgion_resources::resources::gateway:
     }
 }
 
+/// Add Gateway-derived status errors only when the route has a valid reference
+/// source. Otherwise the caller reports its validation errors independently of
+/// the Gateway snapshot, which cannot make this route attachable.
+pub(super) fn gateway_parent_status_errors(
+    valid_route_namespace: Option<&str>,
+    parent_ref: &ParentReference,
+    route_hostnames: Option<&Vec<String>>,
+    route_kind: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<AcceptedError> {
+    let Some(namespace) = valid_route_namespace else {
+        return Vec::new();
+    };
+    validate_parent_ref_accepted(namespace, parent_ref, route_hostnames, route_kind, runtime).errors
+}
+
 /// Validate a parent ref for the Accepted condition.
 ///
 /// Checks namespace policy and (optionally) hostname intersection.

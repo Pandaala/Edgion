@@ -34,7 +34,7 @@ ConfigMap, plugin/config-data references, and other runtime-owned indexes.
 
 **Registration rule**: a Handler that resolves Gateway dependencies must maintain the GatewayRouteIndex on apply and remove its edges on delete. Ordinary Route handlers finalize their edges in `on_change`; EdgionTls installs its exact edges in `parse` before proof lookup.
 
-HTTPRoute and TLSRoute register new parent edges before reading Gateway
+HTTPRoute, GRPCRoute, TCPRoute, UDPRoute and TLSRoute register new parent edges before reading Gateway
 snapshots. Their normal `on_change` still replaces the complete edge set and
 requeues dropped parents after attachment counts change. EdgionTls uses its
 existing dependency-before-proof-read barrier for the same publication race.
@@ -42,7 +42,7 @@ existing dependency-before-proof-read barrier for the same publication race.
 **Key files**:
 - `gateway_route_index.rs` — forward/reverse index + associated listener routing-input records
 - `handlers/gateway.rs` — after_publish/after_unpublish: update comparison records and requeue routes after cache publication/removal
-- `handlers/{http_route,grpc_route,tls_route}.rs` — on_change: finalize index edges; HTTPRoute and TLSRoute also pre-register in parse
+- `handlers/{http_route,grpc_route,tcp_route,udp_route,tls_route}.rs` — register eligible parents in parse, then finalize index edges in on_change
 - `handlers/edgion_tls.rs` — parse: register before proof lookup; on_change has no index work
 
 ### 2. SecretRefManager
@@ -140,8 +140,8 @@ Call sites:
 | GRPCRoute | yes | yes | gateway_route_index, attached_route_tracker, cross_ns_ref, service_ref |
 | TLSRoute | yes | yes | gateway_route_index, attached_route_tracker, service_ref |
 | EdgionTls | no index work; registered in parse | yes | gateway_route_index, secret_ref |
-| TCPRoute | yes | yes | attached_route_tracker, service_ref |
-| UDPRoute | yes | yes | attached_route_tracker, service_ref |
+| TCPRoute | yes | yes | gateway_route_index, attached_route_tracker, cross_ns_ref, service_ref |
+| UDPRoute | yes | yes | gateway_route_index, attached_route_tracker, cross_ns_ref, service_ref |
 | Gateway | after_publish | after_unpublish + on_delete | gateway_route_index (consumer) |
 | Secret | yes | yes | triggers cascading requeue |
 | Service | yes | yes | triggers requeue of dependent routes |

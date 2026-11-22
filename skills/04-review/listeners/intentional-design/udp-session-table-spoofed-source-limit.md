@@ -17,11 +17,9 @@ clients of that listener. This is an accepted L4 limitation: the gateway does
 not try to distinguish forged sources, evict sessions under pressure, or
 shorten the lifetime of sessions without a backend reply.
 
-The decision covers only spoofed-source admission. Configurability of the cap
-and timeout, the per-session footprint (dedicated socket and 64 KiB receive
-buffer), and receive-loop head-of-line latency are not
-accepted; they remain open work in
-[`tasks/todo/gw-core3-05-udp-session-admission-hardening.md`](../../../../tasks/todo/gw-core3-05-udp-session-admission-hardening.md).
+The decision covers only spoofed-source admission. Separate tasks cover
+[session cap and idle timeout configuration](../../../../tasks/todo/udp-session-cap-and-idle-timeout.md)
+and [receive-buffer memory](../../../../tasks/todo/udp-session-receive-buffer-footprint.md).
 
 ## Rationale and evidence
 
@@ -51,19 +49,17 @@ Rejected for this finding:
 - Two-tier lifetime with unreplied-first eviction (conntrack style):
   defeated by valid request payloads, as above.
 - Per-source or per-prefix quotas: ineffective against rotating forged
-  sources; may still be useful against a single misbehaving real client and
-  is kept as an optional item in the task.
+  sources; may still be useful against a single misbehaving real client.
 - Evicting the most idle session when full: admits new clients but drops
   low-rate legitimate clients under a strong flood, and requires a hot-path
   eviction order plus a change to the permit-ownership contract in
   [UDP session retirement](../regression-guards/udp-session-generation-retirement.md).
-  Left as an open question in the task.
 
 Accepted cost: a low-rate spoofed flood (about 10 000 new sources per 60 s)
 can deny service to new clients of every UDPRoute on the listener, and the
 gateway holds up to 10 000 sockets, tasks and receive buffers per listener
 while it lasts. Established sessions keep forwarding, subject to the
-single-serve-task head-of-line latency tracked in the task. When the backend
+single-serve-task head-of-line latency. When the backend
 answers forged requests, the gateway sends those replies to the forged source
 address, so a UDP listener in front of a request/response service can act as a
 reflector; this is the same network-layer spoofing problem and is mitigated
@@ -90,7 +86,9 @@ Re-evaluate if:
 ## Resolution references
 
 - `gw-core3-05` (P2, CONFIRMED, re-verified STILL-VALID on `feature-10-28`):
-  spoofed-source admission accepted on 2026-11-07; remaining hardening deferred
-  to the task above.
+  spoofed-source admission accepted on 2026-11-07. The two follow-up tasks
+  above cover configuration and buffer memory.
 - `gw-core-05` option 3 (single serve task head-of-line latency), merged into
-  `gw-core3-05` on 2026-11-06: deferred to the same task.
+  `gw-core3-05` on 2026-11-06: receive-loop isolation remains deferred.
+  Revisit if slow new-session admission causes unacceptable latency or loss
+  for established flows.

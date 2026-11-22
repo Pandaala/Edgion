@@ -136,13 +136,120 @@ fn listener(name: &str, hostname: Option<&str>, port: i32) -> serde_json::Value 
 
 #[tokio::test]
 async fn http_routes_converge_after_concurrent_gateway_publication() {
-    use crate::conf_mgr::sync_runtime::resource_processor::handlers::http_route::HttpRouteHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::HttpRouteHandler;
+    check_gateway_publication(
+        HttpRouteHandler::default(),
+        "HTTP",
+        serde_json::json!([{"filters": [{"type": "RequestRedirect", "requestRedirect": {"scheme": "https"}}]}]),
+        |route: edgion_resources::HTTPRoute| {
+            (
+                route.spec.resolved_listeners,
+                route.spec.current_status.map(|s| s.parents).unwrap_or_default(),
+            )
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn grpc_routes_converge_after_concurrent_gateway_publication() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GrpcRouteHandler;
+    check_gateway_publication(
+        GrpcRouteHandler::default(),
+        "HTTP",
+        serde_json::json!([{"backendRefs": [{"name": "backend", "port": 8080}]}]),
+        |route: edgion_resources::GRPCRoute| {
+            (
+                route.spec.resolved_listeners,
+                route.spec.current_status.map(|s| s.parents).unwrap_or_default(),
+            )
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn tcp_routes_converge_after_concurrent_gateway_publication() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::TcpRouteHandler;
+    check_gateway_publication(
+        TcpRouteHandler::default(),
+        "TCP",
+        serde_json::json!([{"backendRefs": [{"name": "backend", "port": 8080}]}]),
+        |route: edgion_resources::TCPRoute| {
+            check_l4_attachment(
+                route.spec.resolved_listener_attachments.as_deref(),
+                route.spec.resolved_listeners.is_some(),
+                "TCP",
+            );
+            (
+                route.spec.resolved_listeners,
+                route.spec.current_status.map(|s| s.parents).unwrap_or_default(),
+            )
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn udp_routes_converge_after_concurrent_gateway_publication() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::UdpRouteHandler;
+    check_gateway_publication(
+        UdpRouteHandler::default(),
+        "UDP",
+        serde_json::json!([{"backendRefs": [{"name": "backend", "port": 8080}]}]),
+        |route: edgion_resources::UDPRoute| {
+            check_l4_attachment(
+                route.spec.resolved_listener_attachments.as_deref(),
+                route.spec.resolved_listeners.is_some(),
+                "UDP",
+            );
+            (
+                route.spec.resolved_listeners,
+                route.spec.current_status.map(|s| s.parents).unwrap_or_default(),
+            )
+        },
+    )
+    .await;
+}
+
+fn check_l4_attachment(
+    attachments: Option<&[edgion_resources::RouteListenerAttachment]>,
+    resolved: bool,
+    protocol: &str,
+) {
+    if !resolved {
+        assert!(attachments.is_none());
+        return;
+    }
+    let [attachment] = attachments.unwrap() else {
+        panic!("expected exactly one L4 attachment");
+    };
+    assert_eq!(attachment.gateway_namespace, "apps");
+    assert_eq!(attachment.gateway_name, "gateway");
+    assert_eq!(attachment.listener_name, "listener");
+    assert_eq!(attachment.listener_key.0, format!("0.0.0.0:8080/{protocol}"));
+}
+
+async fn check_gateway_publication<R>(
+    handler: impl ProcessorHandler<R> + 'static,
+    protocol: &str,
+    rules: serde_json::Value,
+    fields: impl Fn(
+        R,
+    ) -> (
+        Option<Vec<edgion_resources::ListenerKey>>,
+        Vec<edgion_resources::resources::http_route::RouteParentStatus>,
+    ),
+) where
+    R: edgion_resources::ResourceMeta + kube::Resource + Clone + std::fmt::Debug + serde::Serialize,
+{
     use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessResult, RawStore};
-    use edgion_resources::{HTTPRoute, ResourceKind};
+    use edgion_resources::ResourceKind;
     use std::sync::atomic::AtomicBool;
 
     struct MissingGateway {
         runtime: std::sync::Weak<ControllerRuntime>,
+        kind: ResourceKind,
         read: AtomicBool,
     }
     impl RawStore<Gateway> for MissingGateway {
@@ -153,7 +260,7 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
                 runtime
                     .gateway_route_index
                     .get_routes_for_gateway(key)
-                    .contains(&(ResourceKind::HTTPRoute, "apps/second".into())),
+                    .contains(&(self.kind, "apps/second".into())),
                 "the second route must subscribe before its first Gateway read"
             );
             self.read.store(true, Ordering::Relaxed);
@@ -166,9 +273,9 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
     }
 
     let runtime = Arc::new(ControllerRuntime::default());
-    let handler = Arc::new(HttpRouteHandler::default());
+    let handler = Arc::new(handler);
     let routes = Arc::new(ResourceProcessor::new(
-        "HTTPRoute",
+        R::kind_name(),
         16,
         handler.clone(),
         runtime.clone(),
@@ -182,17 +289,18 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
     runtime.processor_registry.register(routes.clone());
     runtime.processor_registry.register(gateways.clone());
     let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
-    let gateway = gateway(serde_json::json!([{"name": "http", "port": 8080, "protocol": "HTTP"}]));
-    let route = |name: &str| -> HTTPRoute {
+    let gateway = gateway(serde_json::json!([{"name": "listener", "port": 8080, "protocol": protocol}]));
+    let route_with_parent = |name: &str, parent: &str| -> R {
         serde_json::from_value(serde_json::json!({
             "metadata": {"namespace": "apps", "name": name},
             "spec": {
-                "parentRefs": [{"name": "gateway", "sectionName": "http"}],
-                "rules": [{"filters": [{"type": "RequestRedirect", "requestRedirect": {"scheme": "https"}}]}]
+                "parentRefs": [{"name": parent, "sectionName": "listener"}],
+                "rules": rules
             }
         }))
         .unwrap()
     };
+    let route = |name: &str| route_with_parent(name, "gateway");
     routes.on_init_done();
     gateways.on_init_done();
 
@@ -205,9 +313,10 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
         .process_work_item(&first.key, Some(route("first")), None, first.trigger_chain)
         .await;
     rq.done(&first.key);
-    assert!(routes.get(&first.key).unwrap().spec.resolved_listeners.is_none());
+    assert!(fields(routes.get(&first.key).unwrap()).0.is_none());
     let missing = Arc::new(MissingGateway {
         runtime: Arc::downgrade(&runtime),
+        kind: R::resource_kind(),
         read: AtomicBool::new(false),
     });
     gateways.set_raw_store(missing.clone());
@@ -215,7 +324,7 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
         panic!("expected the second route to be publishable");
     };
     assert!(missing.read.load(Ordering::Relaxed));
-    assert!(second.spec.resolved_listeners.is_none());
+    assert!(fields(second.clone()).0.is_none());
     let gq = gateways.workqueue();
     let publish = dequeue(&gq).await;
     assert_eq!(publish.key, GATEWAY);
@@ -269,23 +378,62 @@ async fn http_routes_converge_after_concurrent_gateway_publication() {
         gq.done(&feedback.key);
     }
     for key in refreshed {
-        let spec = routes.get(&key).unwrap().spec;
-        let status = spec.current_status.unwrap();
-        assert_eq!(status.parents.len(), 1);
-        let parent = &status.parents[0];
+        let (listeners, parents) = fields(routes.get(&key).unwrap());
+        assert_eq!(parents.len(), 1);
+        let parent = &parents[0];
         assert_eq!(parent.parent_ref.name, "gateway");
-        assert_eq!(parent.parent_ref.section_name.as_deref(), Some("http"));
+        assert_eq!(parent.parent_ref.section_name.as_deref(), Some("listener"));
         assert!(parent
             .conditions
             .iter()
             .any(|c| c.type_ == "Accepted" && c.status == "True"));
-        let listeners = spec.resolved_listeners.unwrap();
+        let listeners = listeners.unwrap();
         assert_eq!(listeners.len(), 1);
-        assert_eq!(listeners[0].0, "0.0.0.0:8080/HTTP");
+        assert_eq!(listeners[0].0, format!("0.0.0.0:8080/{protocol}"));
     }
-    assert_eq!(runtime.attached_route_tracker.count_for_listener(GATEWAY, "http"), 2);
+    assert_eq!(
+        runtime.attached_route_tracker.count_for_listener(GATEWAY, "listener"),
+        2
+    );
     assert_eq!(rq.metrics().delayed_total.load(Ordering::Relaxed), 2);
     assert!(rq.is_empty() && gq.is_empty());
+
+    // During reparenting the old edge survives parse, then on_change removes
+    // it and queues the old Gateway after the attachment count has changed.
+    let moved = route_with_parent("second", "replacement");
+    let notifications = gq.metrics().delayed_total.load(Ordering::Relaxed);
+    let errors = handler.validate(&moved, &ctx);
+    let ProcessResult::Continue(mut moved) = handler.parse(moved, &ctx).await else {
+        panic!("expected a publishable route");
+    };
+    let indexed = |key: &str| {
+        runtime
+            .gateway_route_index
+            .get_routes_for_gateway(key)
+            .contains(&(R::resource_kind(), "apps/second".into()))
+    };
+    assert!(indexed(GATEWAY) && indexed("apps/replacement"));
+    assert_eq!(
+        runtime.attached_route_tracker.count_for_listener(GATEWAY, "listener"),
+        2
+    );
+    handler.update_status(&mut moved, &ctx, &errors);
+    assert_eq!(
+        runtime.attached_route_tracker.count_for_listener(GATEWAY, "listener"),
+        1
+    );
+    assert!(indexed(GATEWAY));
+    assert_eq!(gq.metrics().delayed_total.load(Ordering::Relaxed), notifications);
+    handler.on_change(&moved, &ctx).await;
+    assert!(!indexed(GATEWAY) && indexed("apps/replacement"));
+    let mut parents = Vec::new();
+    for _ in 0..2 {
+        let item = dequeue(&gq).await;
+        gq.done(&item.key);
+        parents.push(item.key);
+    }
+    parents.sort();
+    assert_eq!(parents, [GATEWAY, "apps/replacement"]);
 }
 
 #[tokio::test]

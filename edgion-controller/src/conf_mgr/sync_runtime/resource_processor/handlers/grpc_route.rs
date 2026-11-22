@@ -164,6 +164,14 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         _ctx.runtime().plugin_ref_mgr.clear_value_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
+        if let Some(parents) = route.spec.parent_refs.as_deref().filter(|_| source_valid) {
+            _ctx.runtime().gateway_route_index.register_route_dependencies(
+                ResourceKind::GRPCRoute,
+                &format!("{route_ns}/{}", grant_owner.name),
+                parents,
+                route_ns,
+            );
+        }
 
         // Authorize actual authored loans.
         let decisions = GrpcRouteBackendRefs::from_route(&route)
@@ -470,14 +478,13 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 if !is_gateway_parent_ref(parent_ref) {
                     continue;
                 }
-                let accepted_result = super::route_utils::validate_parent_ref_accepted(
-                    route_ns,
+                let mut accepted_errors = super::route_utils::gateway_parent_status_errors(
+                    source_error.is_none().then_some(route_ns),
                     parent_ref,
                     route_hostnames,
                     "GRPCRoute",
                     _ctx.runtime(),
                 );
-                let mut accepted_errors = accepted_result.errors;
                 if let Some(error) = hostname_error {
                     accepted_errors.insert(
                         0,

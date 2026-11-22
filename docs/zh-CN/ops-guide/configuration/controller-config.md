@@ -214,6 +214,10 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 
 注意：`--conf-dir` CLI 参数会直接覆盖此处的 `conf_dir`，并将 `conf_center` 切换到 FileSystem 模式。
 
+如果 GRPCRoute、TCPRoute 或 UDPRoute 的状态为 `Accepted=False`，原因为
+`Invalid`，且消息以 `Invalid route reference source` 开头，请检查路由自身的
+`metadata.name` 和 `metadata.namespace`。创建所引用的 Gateway 无法修正路由的身份错误。
+
 ### [conf_center] — Kubernetes 模式
 
 | 参数 | 类型 | 默认值 | 说明 |
