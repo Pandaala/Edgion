@@ -476,6 +476,7 @@ fn copy_target_plan(
         records: candidate_records,
         bytes: candidate_bytes,
     } = candidate;
+    let mut requires_request_body = false;
     let record_start = target_records.len();
     let end = candidate
         .record_start
@@ -507,6 +508,7 @@ fn copy_target_plan(
             CandidateTargetSelector::Regex { style, program } => CompiledTargetSelector::Regex { style, program },
         };
         work.reserve_canonical(target_records, 1, "canonical target records")?;
+        requires_request_body |= generation::collection_requires_request_body(record.collection);
         target_records.push(CompiledTargetRecord {
             collection: record.collection,
             modifier: record.modifier,
@@ -516,6 +518,7 @@ fn copy_target_plan(
     work.reserve_canonical(target_plans, 1, "canonical target plans")?;
     let id = target_plans.len();
     target_plans.push(CompiledTargetPlan {
+        requires_request_body,
         record_start,
         record_count: candidate.record_count,
     });

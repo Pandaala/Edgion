@@ -114,8 +114,9 @@ worker, exhaust memory, or crash the worker, i.e. a denial of service for every 
   in [chain ordinary work](../regression-guards/chain-ordinary-work-accumulates-per-unit.md).
 - Operator rule sets are semi-trusted: compile-time limits protect Controller availability, not
   confidentiality. A rule set can still express a WAF that blocks nothing (see `waf4-02`).
-- This page does not decide gateway-side behavior (status codes, inspection cutoffs, `catch_unwind`); those
-  live in the gateway and in `waf-01`, `waf-05`, `waf-06`.
+- Gateway-side status codes and panic handling belong to the Gateway. The
+  [full-mode cutoff contract](../../http-body/regression-guards/waf-prefix-before-dispatch.md#explicit-full-mode-policy-cutoff)
+  covers `waf-01`. See also `waf-05` and `waf-06`.
 
 ## Verification and re-evaluation
 

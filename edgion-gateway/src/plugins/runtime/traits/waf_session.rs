@@ -13,8 +13,8 @@ use std::sync::Arc;
 #[cfg_attr(test, mockall::automock)]
 #[cfg_attr(test, allow(clippy::disallowed_types))]
 pub trait WafSessionCapability: Send + Sync {
-    /// Stop remaining phases while retaining independent hard admission.
-    fn stop_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool;
+    /// Record incomplete request-body coverage while retaining independent hard admission.
+    fn record_body_cutoff(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool;
 
     /// Install hard admission and freeze mutation before checking native and
     /// cached lengths. Admission outlives transaction take or removal.

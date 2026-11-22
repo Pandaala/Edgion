@@ -290,7 +290,7 @@ fn excluded_illegal_child_tag_still_fails_the_original_frontend() {
 fn cumulative_budget_can_reject_after_the_baseline_was_admitted() {
     let rules = [RuleBundleMember {
         path: "main.conf",
-        bytes: b"SecAction \"id:1,phase:1,pass,tag:keep\"\nSecAction \"id:2,phase:1,pass,tag:drop\"\n",
+        bytes: b"SecRule REQUEST_BODY \"@contains sample\" \"id:1,phase:2,pass,tag:keep\"\nSecAction \"id:2,phase:1,pass,tag:drop\"\n",
     }];
     let bundles = [RuleBundleSource {
         identity: "test",
@@ -299,8 +299,7 @@ fn cumulative_budget_can_reject_after_the_baseline_was_admitted() {
         phrase_assets: &[],
     }];
     let program = selection("{\"exclude\":{\"tag\":\"drop\"}}").prepare().unwrap();
-    let mut witnessed = false;
-    for cap in 1..512 {
+    let compile = |cap| {
         let mut limits = FrontendLimits::default();
         limits.compiler.max_group_key_record_comparisons = cap;
         let mut admitted = 0;
@@ -317,22 +316,19 @@ fn cumulative_budget_can_reject_after_the_baseline_was_admitted() {
             },
             None,
         );
-        if admitted == 1
-            && matches!(
-                result,
-                Err(WafSelectionCompileError::Frontend(
-                    crate::seclang::FrontendError::Compiler(CompilerError::GroupKeyRecordComparisonLimit { .. })
-                ))
-            )
-        {
-            witnessed = true;
-            break;
-        }
-    }
-    assert!(
-        witnessed,
-        "both passes and selection must share one cumulative work budget"
-    );
+        (admitted, result)
+    };
+    // 153 records for selection and other compiler stages, three for baseline
+    // body classification (two units, one member), two for the selected pass.
+    let exact = 153 + 3 + 2;
+    let (admitted, result) = compile(exact);
+    assert_eq!(admitted, 2);
+    assert!(result.unwrap().0.into_parts().0.requires_complete_request_body());
+    let (admitted, result) = compile(exact - 1);
+    assert_eq!(admitted, 1);
+    assert!(matches!(result, Err(WafSelectionCompileError::Frontend(
+        crate::seclang::FrontendError::Compiler(CompilerError::GroupKeyRecordComparisonLimit { limit })
+    )) if limit == exact - 1));
     let mut limits = FrontendLimits::default();
     limits.compiler.max_compilation_peak_bytes = program.owned_bytes() - 1;
     assert!(matches!(

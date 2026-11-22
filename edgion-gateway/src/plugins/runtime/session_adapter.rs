@@ -2610,8 +2610,8 @@ mod tests;
 pub(crate) mod record_outcome_tests;
 
 impl WafSessionCapability for PingoraSessionAdapter<'_> {
-    fn stop_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
-        self.ctx.stop_waf_inspection(owner, bytes, storage_limit)
+    fn record_body_cutoff(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
+        self.ctx.record_waf_body_cutoff(owner, bytes, storage_limit)
     }
 
     fn install_body_limit(&mut self, owner: &Arc<()>, limit: u64) -> Result<(), BodyReadError> {

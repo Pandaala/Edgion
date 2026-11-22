@@ -227,7 +227,8 @@ fn format_limit_is_owned_by_selected_waf_and_outlives_transaction() {
 }
 
 #[test]
-fn inspection_stop_claims_remaining_phases_and_keeps_hard_admission() {
+fn body_cutoff_keeps_response_phases_hard_admission_and_incomplete_coverage() {
+    let detected = request_headers_outcome("SecAction \"id:1,phase:1,pass,log\"\n", b"/");
     for storage in [false, true] {
         let owner = Arc::new(());
         let mut ctx = EdgionHttpContext::new();
@@ -239,15 +240,21 @@ fn inspection_stop_claims_remaining_phases_and_keeps_hard_admission() {
         ))));
         ctx.set_waf_partial_capture_allowed(true);
         assert!(ctx.install_waf_body_hard_limit(&owner, 64));
-        assert!(!ctx.stop_waf_inspection(&Arc::new(()), 32, storage));
-        assert!(ctx.stop_waf_inspection(&owner, 32, storage));
+        assert_eq!(ctx.claim_waf_phase(&owner, WafPhase::Request), WafPhaseClaim::Execute);
+        assert!(!ctx.record_waf_body_cutoff(&Arc::new(()), 32, storage));
+        assert!(ctx.record_waf_body_cutoff(&owner, 32, storage));
         assert_eq!(ctx.request_body_hard_limit(), 64);
         assert!(ctx.waf_partial_capture_allowed());
-        for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
+        assert_eq!(ctx.claim_waf_phase(&owner, WafPhase::Request), WafPhaseClaim::Skip);
+        for phase in [WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
+            assert_eq!(ctx.claim_waf_phase(&owner, phase), WafPhaseClaim::Execute);
             assert_eq!(ctx.claim_waf_phase(&owner, phase), WafPhaseClaim::Skip);
         }
+        ctx.record_waf_phase_outcome(&owner, WafLogPhase::Logging, 1, &detected);
+        ctx.finalize_waf_for_logging();
         let summary = serde_json::to_value(&ctx.waf.as_ref().unwrap().access_log).unwrap();
         assert_eq!(summary["outcome"], "incomplete");
+        assert_eq!(summary["findings"][0]["rule_id"], 1);
         assert_eq!(summary["inspection_stop"]["admitted_bytes"], 32);
         assert_eq!(
             summary["inspection_stop"]["reason"],

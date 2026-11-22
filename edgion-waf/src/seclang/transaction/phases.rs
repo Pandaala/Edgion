@@ -167,6 +167,23 @@ impl<'generation> Transaction<'generation> {
         self.execute_phase(Phase::RequestBody)
     }
 
+    /// Run phase two after a full-inspection policy cutoff. Rules that require
+    /// the unpublished body are skipped as whole units for the rest of the transaction.
+    pub fn execute_request_body_after_cutoff(&mut self) -> Result<PhaseOutcome, RuntimeError> {
+        self.ensure_json_healthy()?;
+        if self.next_phase() != Some(Phase::RequestBody) {
+            return Err(RuntimeError::PhaseOrder {
+                expected: self.next_phase(),
+                actual: Phase::RequestBody,
+            });
+        }
+        if self.request.body.is_some() || self.request_body_stream.is_some() {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        self.request_body_cutoff = true;
+        self.execute_phase(Phase::RequestBody)
+    }
+
     /// Decide phase two over borrowed prefix bytes without publishing a complete body.
     pub fn execute_request_body_prefix(
         &mut self,
@@ -585,6 +602,7 @@ impl<'generation> Transaction<'generation> {
             };
             if self.tx.removed_units.binary_search(&unit_id).is_ok()
                 || (policy_prunes && self.generation.units[unit_id].expensive_check)
+                || (self.request_body_cutoff && self.generation.units[unit_id].requires_request_body)
             {
                 continue;
             }
@@ -603,10 +621,7 @@ impl<'generation> Transaction<'generation> {
                 if unit.member_count != 1 {
                     return Err(RuntimeError::GenerationInvariant);
                 }
-                if self
-                    .generation
-                    .member_requires_request_body(self.generation.members[unit.member_start])
-                {
+                if unit.requires_request_body {
                     Some(self.evaluate_prefix_member(unit.member_start, prefix, &mut prefix_work)?)
                 } else {
                     None

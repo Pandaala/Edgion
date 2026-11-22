@@ -573,6 +573,7 @@ pub struct Transaction<'generation> {
     capture_keys: Vec<MatchValue>,
     response: Option<ResponseState>,
     request_body_error: Option<BodyError>,
+    request_body_cutoff: bool,
     evaluation_mode: EvaluationMode,
     #[cfg(test)]
     force_json_cursor: bool,
@@ -775,6 +776,7 @@ impl<'generation> Transaction<'generation> {
             capture_keys: Vec::new(),
             response: None,
             request_body_error: None,
+            request_body_cutoff: false,
             evaluation_mode,
             #[cfg(test)]
             force_json_cursor: false,

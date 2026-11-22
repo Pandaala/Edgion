@@ -1455,7 +1455,27 @@ fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
         let mut waf = MockWafSessionCapability::new();
-        waf.expect_stop_inspection().times(1).returning(|_, bytes, storage| {
+        let head = RequestHead::new(
+            b"GET / HTTP/1.1",
+            b"GET",
+            b"/",
+            b"/",
+            b"HTTP/1.1",
+            b"192.0.2.1",
+            b"id",
+            &[],
+        );
+        let mut transaction = Transaction::new_shared_with_policy(
+            Arc::clone(&plugin.shared.generation),
+            head,
+            RuntimeLimits::default(),
+            edgion_waf::seclang::EvaluationMode::Accelerated,
+            plugin.shared.engine_mode,
+            RuleCheckPolicy::default(),
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        waf.expect_record_body_cutoff().times(1).returning(|_, bytes, storage| {
             assert_eq!(bytes, 32);
             assert!(storage);
             true
@@ -1467,6 +1487,14 @@ fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
                     assert!(matches!(code, WafErrorCode::BodyLimit));
                     assert_eq!(status, 413);
                 });
+        } else {
+            waf.expect_record_phase_outcome().times(1).returning(|_, phase, _, _| {
+                assert_eq!(phase, WafLogPhase::RequestBody);
+            });
+            waf.expect_install_transaction().times(1).returning(|_, tx| {
+                assert_eq!(tx.next_phase(), Some(Phase::ResponseHeaders));
+                true
+            });
         }
         session
             .expect_waf()
@@ -1479,6 +1507,7 @@ fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
                 native_prefix: true,
                 storage_limit: true,
             },
+            transaction,
         );
         assert_eq!(
             result,
@@ -1497,13 +1526,17 @@ fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
 #[tokio::test]
 async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_capture() {
     for case in 0..4 {
-        let mut config = super::fixture::config("SecRule REQUEST_BODY \"@contains blocked\" \"id:1,phase:2,deny\"\n");
+        let mut config = super::fixture::config(concat!(
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:1,phase:2,deny\"\n",
+            "SecRule REQUEST_URI \"@streq /restricted\" \"id:2,phase:2,deny,status:409\"\n",
+        ));
+        config.mode = WafMode::On;
         config.request_body.inspection = WafRequestBodyInspection::Full;
         config.request_body.max_inspect_size = (case != 3).then(|| "64".to_owned());
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
         let mut waf = MockWafSessionCapability::new();
-        expect_request_head(&mut session, &mut waf, "/");
+        expect_request_head(&mut session, &mut waf, if case == 2 { "/restricted" } else { "/" });
         let mut ctx = EdgionHttpContext::new();
         ctx.request_body_config.max_body_size_bytes = 128;
         ctx.request_body_config.max_buffered_size_bytes = 32;
@@ -1543,11 +1576,17 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
                         })
                     });
             }
-            waf.expect_stop_inspection()
+            waf.expect_record_body_cutoff()
                 .times(1)
                 .returning(move |_, bytes, storage| {
                     assert_eq!(bytes, if case == 2 { 64 } else { 32 });
                     assert_eq!(storage, case != 2);
+                    true
+                });
+            waf.expect_install_transaction()
+                .times(usize::from(case != 2))
+                .returning(|_, tx| {
+                    assert_eq!(tx.next_phase(), Some(Phase::ResponseHeaders));
                     true
                 });
         }
@@ -1556,13 +1595,16 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
             .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
-            if case == 1 {
-                PluginRunningResult::ErrResponse {
+            match case {
+                1 => PluginRunningResult::ErrResponse {
                     status: 413,
                     body: None,
-                }
-            } else {
-                PluginRunningResult::GoodNext
+                },
+                2 => PluginRunningResult::ErrResponse {
+                    status: 409,
+                    body: None,
+                },
+                _ => PluginRunningResult::GoodNext,
             }
         );
     }
@@ -1659,7 +1701,7 @@ async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_de
     session.expect_capture_request_body_inspection().times(0);
     session.expect_capture_request_body_with_consumer().times(0);
     session.expect_read_request_body().times(0);
-    waf.expect_stop_inspection().times(0);
+    waf.expect_record_body_cutoff().times(0);
     waf.expect_install_transaction().times(0);
     session
         .expect_waf()

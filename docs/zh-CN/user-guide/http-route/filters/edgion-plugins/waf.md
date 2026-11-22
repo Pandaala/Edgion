@@ -61,7 +61,7 @@ spec:
 | `requestBody.inspection` | 否 | `full` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
 | `requestBody.maxInspectSize` | 否 | 网关物理上限 | 正数大小字符串；仅用于 `full`，限制检查窗口 |
-| `requestBody.onLimit` | 否 | `continue` | 达到检查／存储策略上限时停止后续 WAF 阶段；`reject` 则返回 413 |
+| `requestBody.onLimit` | 否 | `continue` | 全量模式达到检查或存储策略上限时，继续执行独立于请求体的规则；选择 `reject` 则返回 413 |
 | `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
@@ -359,8 +359,10 @@ Phase 2 中仅检查头部、URI 或查询参数集合（`ARGS_GET`、`ARGS_GET_
 
 `full` 只在完整文档检查完成后执行正文规则。可通过 `maxInspectSize` 设置更小的检查窗口；
 仅 WAF 消费正文且尚无完整缓存时，新存储容量也会限制窗口。第 N+1 字节用于证明截断，
-恰好 N 字节则必须确认真实 EOF。截断时丢弃未完成的 JSON/XML 结果，并停止所有剩余 WAF 阶段。
-默认 `onLimit: continue` 原样转发正文；`reject` 返回 413，在 `detectionOnly` 下也生效。
+恰好 N 字节则必须确认真实 EOF。截断时丢弃未完成的 JSON/XML 结果。默认的 `onLimit: continue`
+在同一事务中按原顺序执行后续阶段可判定的规则，包括仅检查查询参数（`ARGS_GET`）、请求头或异常评分的规则。
+只要规则或规则链中的任一成员依赖完整请求体，就整条跳过。这也包括使用聚合参数 `ARGS` 或混用正文与其他目标的规则。
+获准转发的请求保留原始正文。`reject` 返回 413，在 `detectionOnly` 下也生效。
 Phase 1 结果保留，访问日志以 `inspection_stop.admitted_bytes` 和 `inspection`／`storage` 原因记录
 窗口截断，不能把它当成完整检查通过。其他完整正文消费者仍要求完整捕获，其存储失败不会被此策略忽略。
 已有完整缓存保留原容量。真实解析、传输和存储失败仍按错误处理；显式窗口大于请求固定的网关物理上限时拒绝执行。

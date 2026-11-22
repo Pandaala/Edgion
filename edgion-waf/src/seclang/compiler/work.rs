@@ -501,6 +501,7 @@ impl CompileWork {
             self.push_record_charge::<CompiledMemberPlan>(member_location)?;
             self.members.push(CompiledMemberPlan {
                 active: false,
+                has_body_macro: false,
                 expensive_aggregate_actions: false,
                 operator_template: None,
                 target_plan: None,
@@ -519,8 +520,10 @@ impl CompileWork {
             });
             return Ok(());
         }
+        let mut has_body_macro = false;
         let operator_template = if let Some(template) = member.operator().and_then(|operator| operator.template()) {
-            let compiled = self.compile_template(template, member.operator().unwrap().location())?;
+            let compiled =
+                self.compile_template(template, member.operator().unwrap().location(), &mut has_body_macro)?;
             self.push_runtime_template(template.identity(), compiled)?;
             Some(compiled)
         } else {
@@ -537,7 +540,7 @@ impl CompileWork {
                     location: action.location(),
                 });
             }
-            self.compile_action(action)?;
+            self.compile_action(action, &mut has_body_macro)?;
         }
         let transformation_start = self.transformations.len();
         for action in member.effective_transformations() {
@@ -574,6 +577,7 @@ impl CompileWork {
         self.push_record_charge::<CompiledMemberPlan>(member_location)?;
         self.members.push(CompiledMemberPlan {
             active,
+            has_body_macro,
             expensive_aggregate_actions: false,
             operator_template,
             target_plan: None,
@@ -603,7 +607,11 @@ impl CompileWork {
         Ok(())
     }
 
-    fn compile_action(&mut self, action: SemanticActionView<'_, '_>) -> Result<(), CompilerError> {
+    fn compile_action(
+        &mut self,
+        action: SemanticActionView<'_, '_>,
+        has_body_macro: &mut bool,
+    ) -> Result<(), CompilerError> {
         if self.actions.len() >= self.limits.max_action_plans {
             return Err(CompilerError::ActionLimit {
                 actual: self.actions.len().saturating_add(1),
@@ -615,7 +623,7 @@ impl CompileWork {
             ActionOperandView::Local(value) => CompiledActionOperand::Local(value),
             ActionOperandView::Transformation(value) => CompiledActionOperand::Transformation(value),
             ActionOperandView::Template(template) => {
-                let id = self.compile_template(template, action.location())?;
+                let id = self.compile_template(template, action.location(), has_body_macro)?;
                 self.push_runtime_template(template.identity(), id)?;
                 CompiledActionOperand::Template(id)
             }
@@ -624,12 +632,12 @@ impl CompileWork {
             }
             ActionOperandView::SetVar(setvar) => {
                 let key_view = setvar.key();
-                let key = self.compile_template_slice(key_view, action.location())?;
+                let key = self.compile_template_slice(key_view, action.location(), has_body_macro)?;
                 self.push_runtime_template(key_view.template_identity(), key)?;
                 let value = setvar
                     .value()
                     .map(|value| {
-                        let id = self.compile_template_slice(value, action.location())?;
+                        let id = self.compile_template_slice(value, action.location(), has_body_macro)?;
                         Ok(id)
                     })
                     .transpose()?;
@@ -740,6 +748,7 @@ impl CompileWork {
         &mut self,
         template: OperandTemplateView<'_, '_>,
         location: SemanticLocation,
+        has_body_macro: &mut bool,
     ) -> Result<usize, CompilerError> {
         let expansion_count = template.expansion_count();
         let id = self.compile_segments(
@@ -753,6 +762,7 @@ impl CompileWork {
                 )
             }),
             location,
+            has_body_macro,
         )?;
         if expansion_count != 0 {
             self.discharge(CompileRequirement::RuntimeMacro, location)?;
@@ -764,6 +774,7 @@ impl CompileWork {
         &mut self,
         template: TemplateSliceView<'_, '_>,
         location: SemanticLocation,
+        has_body_macro: &mut bool,
     ) -> Result<usize, CompilerError> {
         self.compile_segments(
             template.segments().map(|segment| {
@@ -776,6 +787,7 @@ impl CompileWork {
                 )
             }),
             location,
+            has_body_macro,
         )
     }
 
@@ -783,6 +795,7 @@ impl CompileWork {
         &mut self,
         segments: impl Iterator<Item = (&'text str, Option<MacroExpansionView<'text, 'source>>)>,
         location: SemanticLocation,
+        has_body_macro: &mut bool,
     ) -> Result<usize, CompilerError>
     where
         'source: 'text,
@@ -803,6 +816,7 @@ impl CompileWork {
                 });
             }
             let kind = if let Some(expansion) = expansion {
+                *has_body_macro |= expansion.source() == MacroSource::Args;
                 let key = self.push_bytes(expansion.key().map_or(&[][..], |key| key.text().as_bytes()), location)?;
                 reserve_one(&mut self.macros, "compiled macro")?;
                 self.push_record_charge::<CompiledMacroRef>(location)?;

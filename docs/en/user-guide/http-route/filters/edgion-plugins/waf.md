@@ -70,7 +70,7 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `requestBody.inspection` | no | `full` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
 | `requestBody.maxInspectSize` | no | Gateway physical cap | Positive source-byte window; full mode only |
-| `requestBody.onLimit` | no | `continue` | Stop remaining WAF phases on inspection/storage policy cutoff, or `reject` with 413; full mode only |
+| `requestBody.onLimit` | no | `continue` | On full-mode inspection or storage cutoff, continue evaluating rules independent of the request body, or select `reject` to return 413 |
 | `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 For a disruptive `deny` or `block` action, `status` must be a final HTTP status
@@ -442,13 +442,17 @@ SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-ch
   Body mutation after prefix inspection and incompatible streaming processors
   fail closed. Native prefix captures disable upstream retries, including short
   bodies; complete shared captures retain their existing retry policy.
-- Full-mode rules run only after a complete document has been inspected. An
+- Full-mode rules that require the request body run only after complete inspection. An
   optional `maxInspectSize` sets a smaller inspection window. With no other
   complete-body consumer, the new storage capacity can also bound this window.
   One additional byte proves truncation; exactly the window size requires real
-  EOF to count as complete. Incomplete JSON/XML results are discarded, and all
-  remaining WAF phases stop. `onLimit: continue` forwards the original body;
-  `onLimit: reject` returns 413 even in `detectionOnly`. Phase 1 findings remain.
+  EOF to count as complete. Incomplete JSON/XML results are discarded.
+  With `onLimit: continue`, subsequent phases evaluate eligible rules in order using
+  the original transaction, including query-only (`ARGS_GET`), header and anomaly-score
+  rules. A rule or chain that requires a complete request body is skipped as a unit.
+  This includes aggregate `ARGS` and mixed targets that include body data.
+  Allowed requests forward their original body. `onLimit: reject` returns 413 even
+  in `detectionOnly`. Phase 1 findings remain available.
   The access log records `inspection_stop` with the admitted byte count and
   `inspection` or `storage` reason. A cutoff is not a complete clean verdict.
   Complete-body co-consumers still require complete shared capture; their storage

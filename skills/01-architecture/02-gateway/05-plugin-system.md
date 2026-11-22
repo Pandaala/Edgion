@@ -41,11 +41,12 @@ Execution flow notes:
   into in-memory `BodyStorage` before upstream dispatch through the
   canonical `BodyStorage` / Pingora registered-buffer seam, then drains the
   prefix and resumes live forwarding. Prefix sealing is not transport EOS and
-  never publishes a partial complete-body cache. Default `full` requires complete inspection before rule publication; a
+  never publishes a partial complete-body cache. Default `full` publishes body facts only after complete inspection. A
   WAF-only request may use bounded native N+1 capture when its inspection or
   storage window is below the hard cap. A proven policy cutoff discards
-  provisional facts and skips remaining WAF phases; `onLimit` selects continue
-  or reject. Other complete consumers retain complete capture. Existing complete caches are reused and their logical
+  provisional body facts. On `continue`, the transaction evaluates subsequent phases
+  with complete-body-dependent rule units excluded. On `reject`, the Gateway returns
+  413. Other complete consumers retain complete capture. Existing complete caches are reused and their logical
   body is frozen after prefix inspection. See the
   [prefix admission contract](../../04-review/http-body/regression-guards/waf-prefix-before-dispatch.md).
   Optional full-only `requestBody.json` supplies lexical/structure/results limits;

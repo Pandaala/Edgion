@@ -89,6 +89,7 @@ pub(super) struct CompiledActionPlan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompiledMemberPlan {
+    pub(super) has_body_macro: bool,
     pub(super) active: bool,
     pub(super) expensive_aggregate_actions: bool,
     pub(super) operator_template: Option<usize>,
@@ -303,6 +304,7 @@ pub(super) struct CompiledTargetRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompiledTargetPlan {
+    pub(super) requires_request_body: bool,
     pub(super) record_start: usize,
     pub(super) record_count: usize,
 }
@@ -365,6 +367,7 @@ pub(super) enum CompiledScheduleEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompiledRuleUnit {
     pub(super) expensive_check: bool,
+    pub(super) requires_request_body: bool,
     pub(super) id: u64,
     pub(super) phase: Phase,
     pub(super) disruptive: ResolvedDisruptive,
@@ -705,10 +708,7 @@ impl CompiledGeneration {
         let mut summary = RequestBodyExecutionSummary::default();
         for unit in self.rule_units() {
             if unit.record().phase == Phase::RequestBody {
-                let unit = unit.record();
-                summary.requires_request_body |= self.members[unit.member_start..unit.member_start + unit.member_count]
-                    .iter()
-                    .any(|member| self.member_requires_request_body(*member));
+                summary.requires_request_body |= unit.record().requires_request_body;
             }
             match unit.request_body_execution_class() {
                 Some(RequestBodyExecutionClass::StreamingRaw) => summary.streaming_raw_rule_units += 1,
@@ -735,53 +735,30 @@ impl CompiledGeneration {
         self.requires_complete_request_body
     }
 
-    pub(super) fn has_complete_request_body_dependency(&self) -> bool {
-        self.units.iter().any(|unit| {
+    pub(super) fn classify_request_body_dependencies(
+        &mut self,
+        work: &mut CanonicalWork,
+        limits: CompilerLimits,
+    ) -> Result<(), CompilerError> {
+        for unit in &mut self.units {
+            work.charge_records(1, limits)?;
             if unit.phase == Phase::RequestHeaders {
-                return false;
+                continue;
             }
-            self.members[unit.member_start..unit.member_start + unit.member_count]
-                .iter()
-                .any(|member| self.member_requires_request_body(*member))
-        })
-    }
-
-    pub(super) fn member_requires_request_body(&self, member: CompiledMemberPlan) -> bool {
-        member.target_plan.is_some_and(|id| {
-            let plan = self.target_plans[id];
-            self.target_records[plan.record_start..plan.record_start + plan.record_count]
-                .iter()
-                .any(|record| collection_requires_request_body(record.collection))
-        }) || self.member_has_body_macro(member)
-    }
-
-    fn member_has_body_macro(&self, member: CompiledMemberPlan) -> bool {
-        // ARGS macros include parsed body entries after phase one. TX values copied
-        // from body targets are covered at the producing member instead.
-        member
-            .operator_template
-            .is_some_and(|id| self.template_has_body_macro(id))
-            || self.actions[member.action_start..member.action_start + member.action_count]
-                .iter()
-                .any(|action| match action.operand {
-                    CompiledActionOperand::Template(id) => self.template_has_body_macro(id),
-                    CompiledActionOperand::SetVar(id) => {
-                        let setvar = self.setvars[id];
-                        self.template_has_body_macro(setvar.key)
-                            || setvar.value.is_some_and(|id| self.template_has_body_macro(id))
-                    }
-                    _ => false,
-                })
-    }
-
-    fn template_has_body_macro(&self, id: usize) -> bool {
-        let template = self.templates[id];
-        self.segments[template.segment_start..template.segment_start + template.segment_count]
-            .iter()
-            .any(|segment| {
-                matches!(segment.kind, CompiledSegmentKind::Macro(id)
-                if self.macros[id].source == MacroSource::Args)
-            })
+            for member in &self.members[unit.member_start..unit.member_start + unit.member_count] {
+                work.charge_records(1, limits)?;
+                if member.has_body_macro
+                    || member
+                        .target_plan
+                        .is_some_and(|id| self.target_plans[id].requires_request_body)
+                {
+                    unit.requires_request_body = true;
+                    self.requires_complete_request_body = true;
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn check_request_body_prefix(&self) -> Result<(), &'static str> {
@@ -796,17 +773,14 @@ impl CompiledGeneration {
             if !prefix_actions_supported(self, member) {
                 return Err("requestBody.inspection prefix does not support control or state actions; select full");
             }
-            if unit.phase == Phase::RequestBody {
-                if self.member_requires_request_body(member) && !is_prefix_body_member(self, unit.member_start) {
-                    return Err("requestBody.inspection prefix requires positive raw REQUEST_BODY contains/pm rules; select full");
+            if unit.requires_request_body {
+                if unit.phase != Phase::RequestBody {
+                    return Err(
+                        "requestBody.inspection prefix cannot provide later-phase request body values; select full",
+                    );
                 }
-            } else if unit.phase != Phase::RequestHeaders {
-                if let Some(plan) = member.target_plan.map(|id| self.target_plans[id]) {
-                    for record in &self.target_records[plan.record_start..plan.record_start + plan.record_count] {
-                        if collection_requires_request_body(record.collection) {
-                            return Err("requestBody.inspection prefix cannot provide later-phase request body values; select full");
-                        }
-                    }
+                if !is_prefix_body_member(self, unit.member_start) {
+                    return Err("requestBody.inspection prefix requires positive raw REQUEST_BODY contains/pm rules; select full");
                 }
             }
         }
@@ -876,7 +850,7 @@ fn prefix_actions_supported(generation: &CompiledGeneration, member: CompiledMem
         })
 }
 
-fn collection_requires_request_body(collection: CollectionKind) -> bool {
+pub(super) fn collection_requires_request_body(collection: CollectionKind) -> bool {
     matches!(
         collection,
         CollectionKind::RequestBody
@@ -931,7 +905,7 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
     for (member_offset, member) in members.iter().enumerate() {
         // Body macros can occur on body-independent targets or on SecAction,
         // which has no target plan. They still require the parsed publication.
-        if generation.member_has_body_macro(*member) {
+        if member.has_body_macro {
             class = merge_request_body_class(class, RequestBodyExecutionClass::BoundedSnapshot);
         }
         let Some(target_plan_id) = member.target_plan else {

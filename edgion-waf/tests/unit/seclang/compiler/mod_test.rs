@@ -2071,6 +2071,36 @@ fn chain_child_structured_target_requires_snapshot_for_entire_unit() {
 }
 
 #[test]
+fn body_dependency_classification_charges_each_visited_unit_and_chain_member() {
+    let source = concat!(
+        "SecAction \"id:1,phase:1,pass\"\n",
+        "SecRule REQUEST_HEADERS:X \"@streq yes\" \"id:2,phase:2,pass,chain\"\n",
+        "SecRule REQUEST_BODY \"@contains sample\" \"t:none\"\n",
+        "SecRule REQUEST_BODY \"@contains sample\" \"id:3,phase:2,pass,chain\"\n",
+        "SecRule REQUEST_HEADERS:X \"@streq yes\" \"t:none\"\n",
+        "SecAction \"id:4,phase:3,pass,setvar:'tx.saved=%{ARGS.flag}'\"\n",
+    );
+    let mut generation = with_validated(source, |v| {
+        compile_validated(v, None, CompilerLimits::default()).unwrap()
+    });
+    // Four units, no phase-one members, and respectively two, one and one members.
+    let classify = |generation: &mut CompiledGeneration, cap| {
+        let limits = CompilerLimits {
+            max_group_key_record_comparisons: cap,
+            ..CompilerLimits::default()
+        };
+        let mut work = CanonicalWork::default();
+        generation.classify_request_body_dependencies(&mut work, limits)?;
+        Ok(work.record_comparisons)
+    };
+    assert_eq!(classify(&mut generation, 8), Ok(8));
+    assert_eq!(
+        classify(&mut generation, 7),
+        Err(CompilerError::GroupKeyRecordComparisonLimit { limit: 7 })
+    );
+}
+
+#[test]
 fn optional_capture_batches_fall_back_at_required_generation_budgets() {
     let source = concat!(
         "SecRule ARGS \"@rx (evil)\" \"id:1,phase:2,pass,capture\"\n",

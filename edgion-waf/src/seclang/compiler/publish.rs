@@ -84,6 +84,7 @@ impl CompiledGeneration {
                 unit_locations.push(root.rule().location());
                 units.push(CompiledRuleUnit {
                     expensive_check: optional_checks.skips_unit(unit.id()),
+                    requires_request_body: false,
                     id: unit.id(),
                     phase: resolved.phase(),
                     disruptive: resolved.disruptive(),
@@ -378,6 +379,8 @@ impl CompiledGeneration {
             matcher_charged_bytes: work.matcher_charged_bytes,
             peak_bytes: work.peak_bytes,
         };
+        generation.classify_request_body_dependencies(&mut state.canonical_work, limits)?;
+        generation.prefix_validation = generation.check_request_body_prefix();
         generation.inspection_activation =
             inspection_activation::CompiledActivation::compile(&generation, &mut work, &mut state.canonical_work)?;
         generation.json_inspection =
@@ -427,8 +430,6 @@ impl CompiledGeneration {
         generation.compiler_owned_bytes = work.compiler_owned_bytes;
         generation.matcher_charged_bytes = work.matcher_charged_bytes;
         generation.peak_bytes = work.peak_bytes;
-        generation.prefix_validation = generation.check_request_body_prefix();
-        generation.requires_complete_request_body = generation.has_complete_request_body_dependency();
         Ok((generation, state.canonical_work))
     }
 }

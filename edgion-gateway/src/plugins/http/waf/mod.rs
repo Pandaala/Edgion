@@ -145,10 +145,11 @@ impl WafPlugin {
         &self,
         session: &mut dyn PluginSession,
         policy: json_capture::InspectionPolicy,
+        mut transaction: Transaction<'static>,
     ) -> PluginRunningResult {
         if !session
             .waf()
-            .stop_inspection(&self.shared.owner, policy.window, policy.storage_limit)
+            .record_body_cutoff(&self.shared.owner, policy.window, policy.storage_limit)
         {
             return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::GenerationInvariant);
         }
@@ -164,8 +165,28 @@ impl WafPlugin {
                 body: None,
             }
         } else {
-            PluginRunningResult::GoodNext
+            let started = Instant::now();
+            let execution = transaction.execute_request_body_after_cutoff();
+            self.finish_request_body(session, transaction, execution, elapsed_micros(started))
         }
+    }
+
+    fn finish_request_body(
+        &self,
+        session: &mut dyn PluginSession,
+        transaction: Transaction<'static>,
+        execution: Result<PhaseOutcome, RuntimeError>,
+        request_body_us: u64,
+    ) -> PluginRunningResult {
+        crate::observe::metrics::record_waf_execution_micros("request_body", request_body_us);
+        let intervention = match execution {
+            Ok(outcome) => self.record_outcome(session, WafLogPhase::RequestBody, request_body_us, &outcome),
+            Err(error) => return self.runtime_failure(session, WafLogPhase::RequestBody, &error),
+        };
+        if intervention.is_some() {
+            return Self::intervention_result(intervention);
+        }
+        self.restore_transaction(session, transaction, WafLogPhase::RequestBody)
     }
 
     pub(crate) fn owner(&self) -> Arc<()> {
@@ -586,7 +607,9 @@ impl RequestFilter for WafPlugin {
             };
             match inspection {
                 Ok(json_capture::InspectionOutcome::Complete) => {}
-                Ok(json_capture::InspectionOutcome::Limited) => return self.inspection_stop(session, policy),
+                Ok(json_capture::InspectionOutcome::Limited) => {
+                    return self.inspection_stop(session, policy, transaction)
+                }
                 Err(json_capture::JsonCaptureError::Body(error)) => {
                     return self.body_read_failure(session, log, &error)
                 }
@@ -615,7 +638,7 @@ impl RequestFilter for WafPlugin {
                         None if capture.captured_len == 0 => Ok(bytes::Bytes::new()),
                         None => Err(BodyReadError::Incomplete),
                     },
-                    Ok(_) => return self.inspection_stop(session, policy),
+                    Ok(_) => return self.inspection_stop(session, policy, transaction),
                     Err(error) => Err(error),
                 }
             } else {
@@ -634,7 +657,7 @@ impl RequestFilter for WafPlugin {
                     return self.body_read_failure(session, log, &BodyReadError::BufferLimitExceeded { limit: cap });
                 }
                 if available > policy.window {
-                    return self.inspection_stop(session, policy);
+                    return self.inspection_stop(session, policy, transaction);
                 }
                 let Ok(actual) = usize::try_from(available) else {
                     return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::Arithmetic);
@@ -699,17 +722,7 @@ impl RequestFilter for WafPlugin {
         } else {
             transaction.execute_request_body()
         };
-        let request_body_us = elapsed_micros(started);
-        crate::observe::metrics::record_waf_execution_micros("request_body", request_body_us);
-        let phase_two = match execution {
-            Ok(outcome) => self.record_outcome(session, WafLogPhase::RequestBody, request_body_us, &outcome),
-            Err(error) => return self.runtime_failure(session, WafLogPhase::RequestBody, &error),
-        };
-        if phase_two.is_some() {
-            return Self::intervention_result(phase_two);
-        }
-
-        self.restore_transaction(session, transaction, WafLogPhase::RequestBody)
+        self.finish_request_body(session, transaction, execution, elapsed_micros(started))
     }
 }
 

@@ -167,7 +167,11 @@ impl WafRequestContext {
     }
 
     fn claim_phase(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
-        if !Arc::ptr_eq(&self.owner, owner) || self.claimed_phases & phase.bit() != 0 {
+        if !Arc::ptr_eq(&self.owner, owner)
+            || self.claimed_phases & phase.bit() != 0
+            || self.access_log.terminal_error.is_some()
+            || self.access_log.intervention.is_some()
+        {
             return WafPhaseClaim::Skip;
         }
         self.claimed_phases |= phase.bit();
@@ -568,7 +572,10 @@ impl WafAccessLog {
             }
             self.outcome = WafLogOutcome::Blocked;
         } else if recordable != 0 || runtime_omitted != 0 {
-            if !matches!(self.outcome, WafLogOutcome::Blocked | WafLogOutcome::Error) {
+            if !matches!(
+                self.outcome,
+                WafLogOutcome::Blocked | WafLogOutcome::Error | WafLogOutcome::Incomplete
+            ) {
                 self.outcome = WafLogOutcome::Detected;
             }
         } else if phase == WafLogPhase::Logging
@@ -3182,7 +3189,7 @@ impl EdgionHttpContext {
         true
     }
 
-    pub(crate) fn stop_waf_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
+    pub(crate) fn record_waf_body_cutoff(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
         let Some(waf) = self.waf.as_deref_mut() else {
             return false;
         };
@@ -3192,9 +3199,6 @@ impl EdgionHttpContext {
         {
             return false;
         }
-        waf.claimed_phases = u8::MAX;
-        waf.transaction = None;
-        waf.refresh_runtime_charge();
         waf.access_log.outcome = WafLogOutcome::Incomplete;
         waf.access_log.inspection_stop = Some(WafInspectionStopLog {
             admitted_bytes: bytes,

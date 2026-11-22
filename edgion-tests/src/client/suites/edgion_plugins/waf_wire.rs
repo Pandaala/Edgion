@@ -424,7 +424,7 @@ async fn paused_format_overflow(
 pub(super) fn inspection_limit_case(action: &'static str) -> TestCase {
     TestCase::new(
         "waf_inspection_limits",
-        "Full inspection stops without changing forwarded bytes",
+        "Inspection cutoff preserves eligible response rules and forwarded bytes",
         move |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
@@ -479,6 +479,7 @@ pub(super) fn inspection_limit_case(action: &'static str) -> TestCase {
                                             .post(format!("http://{host}:{}/waf-wire", ctx.http_port))
                                             .header("content-type", content_type)
                                             .header("x-waf-inspection-phase", action)
+                                            .header("x-waf-check-response", if unknown { "yes" } else { "no" })
                                             .body(payload)
                                             .send()
                                             .await
@@ -486,7 +487,7 @@ pub(super) fn inspection_limit_case(action: &'static str) -> TestCase {
                                         let hard = content_type != "text/plain" && size > 128;
                                         let expected = if hard || (size > 32 && action == "reject") {
                                             413
-                                        } else if size <= 32 {
+                                        } else if action == "reject" || unknown {
                                             407
                                         } else {
                                             200

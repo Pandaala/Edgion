@@ -57,8 +57,8 @@ registered request-body buffer and request relay contracts.
 - Full mode publishes only complete documents. When its effective inspection
   window is below the hard cap and the selected WAF is the sole body consumer,
   it may use the canonical native N+1 capture lane. A policy cutoff discards
-  provisional JSON/XML state and stops all remaining WAF phases; it does not
-  publish a partial document. Other complete consumers retain complete capture.
+  provisional JSON/XML state. Continue preserves the transaction for eligible
+  rules in subsequent phases. Other complete consumers retain complete capture.
 - Phase two alone does not imply body consumption. Compiler target and macro
   dependency analysis is shared by prefix eligibility, execution, and capture
   planning. Body-independent phase-two rules use ordinary evaluation and may
@@ -199,11 +199,26 @@ that source only after completion requires it. Never eagerly copy a JSON-only
 source or expose partial storage as a complete request snapshot.
 
 `stop_by_policy` does not feed EOF, publish results or poison the transaction as
-abandoned. Genuine latched and deferred syntax errors remain failures. The
-request context claims all remaining phases, records bounded inspection-stop
-metadata and retains the independently installed hard body guard. A policy stop
+abandoned. Genuine latched and deferred syntax errors remain failures.
+For `waf-01`, claiming every remaining phase at cutoff also suppressed
+body-independent checks and the inbound anomaly-score decision. Continue now
+retains transaction scores and evaluates the ordinary schedule, skipping whole
+units with a direct complete-request-body dependency, including chains, mixed
+targets and body macros. Aggregate ARGS requires the complete request body.
+Compilation records body dependencies while lowering macro segments and copying
+canonical targets. Classifying units charges each visited unit and member to
+the shared record budget before inspection, including both selection passes.
+Reject returns 413. Both paths record bounded inspection-stop metadata and
+retain the independently installed hard body guard. A policy stop
 must not be labeled a complete clean result. Re-evaluate this contract whenever
 consumer composition, capture admission, parser fallback or phase ownership changes.
+
+Cutoff regressions passed in the engine library suite (923 passed, six ignored)
+and the Gateway's WAF-filtered library suite (101 passed). The tests cover
+retained scores, atomic chain exclusion, later phases and incomplete access-log
+coverage. The WafDynamic wire run (`testing_20261122_103052`) passed, including
+eligible response-header denial and original-body digest checks after cutoff
+across all four downstream/upstream HTTP/1.1 and HTTP/2 combinations.
 
 ## Unified policy acceptance (2026-10-10)
 

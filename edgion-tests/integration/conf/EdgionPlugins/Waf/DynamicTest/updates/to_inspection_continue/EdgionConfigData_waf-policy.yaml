@@ -11,5 +11,5 @@ spec:
         baseline:
           bundleRefs:
             - name: waf-rules-inspection-continue
-              expectedDigest: aad3b8788f7b3e45e738bc0b81b9d72a71f85e32d006d8d45bc258d56db3c8c5
+              expectedDigest: ef911e3d87aa29e16166ace6abfeeadf066dd00cb7c9777761ebc1704d30af9d
       defaultProfile: baseline

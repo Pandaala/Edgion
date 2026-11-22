@@ -2929,6 +2929,74 @@ fn request_body_publication_extends_args_and_executes_phase_two_once() {
 }
 
 #[test]
+fn cutoff_preserves_phase_order_scores_and_only_runs_body_independent_units() {
+    let generation = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,setvar:tx.score=1\"\n",
+        "SecRule REQUEST_HEADERS:X-Test|REQUEST_BODY \"@streq sample\" \"id:2,phase:2,deny\"\n",
+        "SecRule REQUEST_HEADERS:X-Test \"@streq sample\" \"id:3,phase:2,pass,chain,setvar:tx.score=99\"\n",
+        "SecRule &ARGS \"@eq 0\" \"t:none\"\n",
+        "SecRule REQUEST_BODY_LENGTH \"!@eq 1\" \"id:10,phase:2,deny\"\n",
+        "SecAction \"id:11,phase:2,pass,setvar:'tx.score=%{ARGS.flag}'\"\n",
+        "SecRule ARGS_GET:flag \"@streq yes\" \"id:4,phase:2,pass,setvar:tx.score=+1\"\n",
+        "SecRule TX:score \"@eq 2\" \"id:5,phase:2,deny,status:409\"\n",
+        "SecRule &ARGS \"@eq 0\" \"id:6,phase:3,pass\"\n",
+        "SecAction \"id:7,phase:3,pass\"\n",
+        "SecAction \"id:8,phase:4,pass\"\n",
+        "SecAction \"id:9,phase:5,pass\"\n",
+    ));
+    let headers = [RequestHeader::new(b"X-Test", b"sample")];
+    for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+        let mut tx = Transaction::new_with_policy(
+            &generation,
+            request(&headers, b"/?flag=yes"),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            mode,
+            RuleCheckPolicy::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            tx.execute_request_body_after_cutoff(),
+            Err(RuntimeError::PhaseOrder { .. })
+        ));
+        tx.execute_request_headers().unwrap();
+        let phase_two = tx.execute_request_body_after_cutoff().unwrap();
+        assert_eq!(phase_two.evaluated_units, 2);
+        assert_eq!(
+            phase_two
+                .findings
+                .iter()
+                .map(|finding| finding.rule_id)
+                .collect::<Vec<_>>(),
+            [4, 5]
+        );
+        if mode == RuleEngineMode::On {
+            assert_eq!(
+                phase_two.intervention,
+                Some(Intervention {
+                    rule_id: 5,
+                    status: 409
+                })
+            );
+            continue;
+        }
+        assert_eq!(phase_two.intervention, None);
+        tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+        let phase_three = tx.execute_response_headers().unwrap();
+        assert_eq!(phase_three.evaluated_units, 1);
+        assert_eq!(phase_three.findings[0].rule_id, 7);
+        assert_eq!(
+            tx.execute_response_window(ResponseWindow::new(b"", true))
+                .unwrap()
+                .findings[0]
+                .rule_id,
+            8
+        );
+        assert_eq!(tx.execute_logging().unwrap().findings[0].rule_id, 9);
+    }
+}
+
+#[test]
 fn prefix_mixes_header_and_body_rules_in_schedule_order() {
     let headers = [RequestHeader::new(b"X-Test", b"blocked")];
     for targets in [
