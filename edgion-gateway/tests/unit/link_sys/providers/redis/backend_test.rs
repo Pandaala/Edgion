@@ -77,10 +77,29 @@ fn cluster_server_error_becomes_an_error_and_moved_stays_a_redirect() {
     let ok = redis::parse_redis_value(b"+OK\r\n").unwrap();
     assert!(normalize_command_value(Ok(ok)).is_ok());
     let moved = redis::parse_redis_value(b"-MOVED 3999 127.0.0.1:6380\r\n").unwrap();
-    let normalized = normalize_command_value(Ok(moved));
-    assert_eq!(moved_target(&normalized).unwrap(), Some(("127.0.0.1".into(), 6380)));
+    let retry = |value| cluster_retry(&normalize_command_value(Ok(value)).unwrap_err()).unwrap();
+    assert_eq!(
+        retry(moved),
+        Some(ClusterRetry::Redirect {
+            host: "127.0.0.1".into(),
+            port: 6380,
+            asking: false
+        })
+    );
     let ask = redis::parse_redis_value(b"-ASK 3999 127.0.0.1:6381\r\n").unwrap();
-    assert_eq!(moved_target(&normalize_command_value(Ok(ask))).unwrap(), None);
+    assert_eq!(
+        retry(ask),
+        Some(ClusterRetry::Redirect {
+            host: "127.0.0.1".into(),
+            port: 6381,
+            asking: true
+        })
+    );
+    let again = redis::parse_redis_value(b"-TRYAGAIN Multiple keys request during rehashing of slot\r\n").unwrap();
+    assert_eq!(retry(again), Some(ClusterRetry::TryAgain));
+    let down = redis::parse_redis_value(b"-CLUSTERDOWN The cluster is down\r\n").unwrap();
+    assert_eq!(retry(down), None);
+    assert_eq!(cluster_retry(&timed_out()).unwrap(), None);
 }
 
 #[test]

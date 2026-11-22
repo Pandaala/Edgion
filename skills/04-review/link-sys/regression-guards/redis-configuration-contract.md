@@ -34,8 +34,13 @@ Every operator-facing Redis field has one documented runtime meaning. The suppor
   never echo the submitted endpoint.
 
 Redis has a fixed infinite connection-recovery policy so a published client can
-recover after an outage. Ordinary commands have one execution attempt and are
-not transparently replayed when the outcome is unknown. Only Cluster `MOVED` is followed, bounded by `maxRedirects` and the operation deadline. ASK, TRYAGAIN and CLUSTERDOWN fail the operation.
+recover after an outage. An unknown command outcome is never replayed. For
+`new-02-redis-cluster-ask-tryagain-fail-commands-during-resharding`, the
+previous MOVED-only handling failed commands rejected during slot migration.
+Each Cluster command now shares one extra-attempt limit across MOVED, ASK and
+TRYAGAIN. ASKING must succeed on the same private connection before the
+redirected command is sent. TRYAGAIN waits briefly and routes again using the
+key. CLUSTERDOWN, other server errors and ambiguous I/O do not enter this loop.
 
 ## Removed configuration
 
@@ -81,10 +86,18 @@ prepared actual-owner TLS (`PreparedLinkSysTls` / `PreparedOtlpTls`) under the
 shared [resource reference contract](../../../01-architecture/00-common/06-resource-reference-contract.md).
 
 The Gateway sets connection/response deadlines and zero Cluster retries. The
-operation deadline includes MOVED and NOSCRIPT fallback; no uncertain command
+operation deadline includes migration retries and NOSCRIPT fallback; no uncertain command
 is replayed. Multi-key Cluster operations use one node so CROSSSLOT cannot
 partially execute through client fanout. Tests cover mapping, all-or-nothing
 endpoint validation, topology, TLS, credentials and fingerprint behavior.
 
 Historical redis-configuration-contract and D0013 established these invariants.
 Revalidate source APIs, endpoint routing and live scenarios when upgrading clients.
+
+For new-02, the Redis topology suite passed all ten scenarios. In
+`cluster_migration_follows_ask_retries_tryagain_and_preserves_uncertain_writes`,
+a split-slot DEL exhausted two extra attempts after three Redis TRYAGAIN
+replies, respected a shorter operation deadline, and succeeded once both keys
+had moved. Dropping the reply after an ASK-redirected INCR left the counter at
+one. Redirect preparation errors and budget expiry bypass published-client
+recovery; only the business-command result enters its failure classifier.

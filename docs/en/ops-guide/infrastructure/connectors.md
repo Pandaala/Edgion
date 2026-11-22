@@ -285,7 +285,7 @@ spec:
 |-----------|------|---------|-------------|
 | `pool.size` | Integer | `8` | Standalone and Sentinel target connection count, from 1 through 64. The client is published after at least one connection is established and the first probe succeeds. A short pool stays published and keeps recovering. Cluster ignores this field. |
 | `timeout.connect` | Duration | `5s` | Connection timeout; must be greater than zero and no more than `10s`. |
-| `timeout.command` | Duration | `5s` | Deadline for one operation, including Cluster MOVED redirects and a NOSCRIPT fallback. Greater than zero and no more than `30s`. |
+| `timeout.command` | Duration | `5s` | Deadline for one operation, including Cluster migration retries and a NOSCRIPT fallback. Greater than zero and no more than `30s`. |
 
 Redis durations use the Gateway API duration syntax, such as `500ms`, `3s`, or
 `10s`. The connector continuously retries connection establishment with a fixed
@@ -302,7 +302,7 @@ callers must decide whether repeating their operation is safe.
 | `topology.cluster` | Object | none | Optional Cluster routing configuration. |
 | `topology.sentinel.masterName` | String | **Required** | Master name monitored by Sentinel. |
 | `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). A missing port defaults to `26379`. |
-| `topology.cluster.maxRedirects` | Integer | `5` | Maximum additional MOVED redirects, from 0 through 64. ASK, TRYAGAIN, and CLUSTERDOWN are returned without another attempt. |
+| `topology.cluster.maxRedirects` | Integer | `5` | Maximum additional attempts per command, shared by MOVED, ASK and TRYAGAIN (0–64). Zero returns the first error. |
 
 When `topology` is omitted, the connector runs in standalone mode. When
 `mode=sentinel` but `sentinel` is missing, the status reports
@@ -340,8 +340,9 @@ defense in depth and does not replace a Gateway Pod `NetworkPolicy`. See
 [Egress policy](#egress-policy-ssrf-protection) for the shared settings and address classes.
 
 Standalone and Sentinel use `pool.size`. Cluster uses one multiplexed topology client and ignores `pool.size`.
-An operation has one `timeout.command` budget. Unknown outcomes are never replayed. Only MOVED is followed,
-up to `maxRedirects`. Multi-key commands must stay in one Cluster hash slot; cross-slot operations do not fan out.
+An operation has one `timeout.command` budget. During resharding, ASK sends only the current command to the
+importing node after ASKING. TRYAGAIN waits briefly before routing the command again. CLUSTERDOWN and
+unknown write outcomes fail immediately. Multi-key commands must stay in one Cluster hash slot; cross-slot operations do not fan out.
 Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling and probe duration add latency.
 System TLS trust uses the Gateway System CA bundle (the OS CA bundle at a fixed path). For a private CA, configure an explicit CA reference.
 Sentinel publishes the address confirmed as master by a unique plurality of reachable sentinels; a tie does not publish. Each Sentinel votes once, identified by its run ID (`SENTINEL MYID`, Redis 6.2+), even when it is reachable by both a configured name and a learned IP; a Sentinel that does not answer `SENTINEL MYID` casts no vote. Sentinel nodes share data-node credentials. After publication, Cluster recovery dials the current known

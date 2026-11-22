@@ -19,8 +19,9 @@ An older `establish` attempt cannot publish after a newer attempt starts or
 after retirement. Partial pool recovery doubles the 100 ms–30 s backoff. Only a
 complete recovery returns to 100 ms. Jitter stays at the wait site.
 
-Ordinary commands still have one deadline. A lost reply is not replayed. Only
-MOVED is followed, and only up to `maxRedirects`. redis-rs
+Ordinary commands have one deadline. A lost reply is not replayed. MOVED
+shares the migration retry budget defined in the
+[Redis configuration contract](redis-configuration-contract.md). redis-rs
 `RedisError::redirect_node` returns `(host:port, slot)`. The slot is not a TCP
 port; the host and port are parsed from the address before the canonical dial.
 
@@ -40,8 +41,7 @@ on the backoff curve. `establish_epoch` drops a stale publication.
 
 The 16-primary cap can omit a later primary when the first 16 known primaries
 and every configured seed are unreachable. Slot refresh still returns the full
-primary inventory from whichever candidate answers. ASK, TRYAGAIN, and
-CLUSTERDOWN remain unretried. This page does not claim every cell of the
+primary inventory from whichever candidate answers. This page does not claim every cell of the
 original acceptance matrix has a live fixture; seed loss, MOVED limits, lost
 INCR/EVAL replies, Sentinel failover, and cross-slot DEL are the live checks.
 

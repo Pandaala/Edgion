@@ -263,7 +263,7 @@ spec:
 |------|------|--------|------|
 | `pool.size` | Integer | `8` | standalone 与 Sentinel 的目标连接数，范围 1–64。至少一条连接建立且首次探测成功后即发布；连接数不足时客户端保持发布并继续恢复。Cluster 忽略该字段。 |
 | `timeout.connect` | Duration | `5s` | 连接超时，必须大于零且不超过 `10s`。 |
-| `timeout.command` | Duration | `5s` | 单次操作的总期限，包含 Cluster MOVED 重定向和 NOSCRIPT 回退。必须大于零且不超过 `30s`。 |
+| `timeout.command` | Duration | `5s` | 单次操作的总期限，包含 Cluster 迁槽重试和 NOSCRIPT 回退。必须大于零且不超过 `30s`。 |
 
 Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连接器以固定的
 有界指数退避持续恢复连接，但不会在连接失败且执行结果未知时透明重放普通命令；调用方
@@ -278,7 +278,7 @@ Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连
 | `topology.cluster` | Object | none | 可选的 Cluster 路由配置。 |
 | `topology.sentinel.masterName` | String | **必填** | Sentinel 监控的主节点名称。 |
 | `topology.sentinel.sentinels` | Array\<String\> | **必填** | Sentinel 地址（`host:port`）。省略端口时默认 `26379`。 |
-| `topology.cluster.maxRedirects` | Integer | `5` | 额外跟随的 MOVED 次数，范围 0–64。ASK、TRYAGAIN 和 CLUSTERDOWN 直接失败，不再尝试。 |
+| `topology.cluster.maxRedirects` | Integer | `5` | 每条命令额外尝试的总次数，范围 0–64，由 MOVED、ASK 和 TRYAGAIN 共用。设为 0 时直接返回首次错误。 |
 
 省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel`
 块时，状态报告 `Accepted=False/Invalid`。Cluster 模式仅在覆盖 `maxRedirects` 时需要
@@ -308,7 +308,7 @@ redis-rs 建立连接前会立即对每个解析地址分类。生产模式始�
 连接器级覆盖。此防护属于纵深防御，不能替代 Gateway Pod 的 `NetworkPolicy`。共享配置和地址
 分类详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。
 
-`pool.size` 只作用于 standalone 和 Sentinel。Cluster 使用一个多路复用拓扑客户端并忽略该字段。一次操作共用 `timeout.command` 总期限；执行结果未知时不重放。只跟随 MOVED，次数不超过 `maxRedirects`。多键命令必须位于同一个 Cluster hash slot，跨 slot 操作不会拆分到多个节点。健康检查以名义 5 秒周期主动发送 PING/ROLE，调度和探测耗时会额外增加检测延迟。系统信任使用 Gateway 的 System CA 包（固定路径的 OS CA 包）；私有 CA 请显式配置 CA 引用。Sentinel 发布在可达 Sentinel 中获得唯一相对多数、且 ROLE 确认为 master 的地址；票数并列时这一轮不发布。每个 Sentinel 按其 run ID（`SENTINEL MYID`，需 Redis 6.2+）只计一票，即使它同时可通过配置的域名和学习到的 IP 访问；不响应 `SENTINEL MYID` 的 Sentinel 不计票。Sentinel 与数据节点共用凭据。客户端发布后，Cluster 恢复会同时拨号当前已知主节点和配置的 seed，因此摘掉最初的 seed 不会阻止拓扑刷新。新一代必须先建立真实连接，普通替换才会生效。强制刷新仍先退役旧实例。
+`pool.size` 只作用于 standalone 和 Sentinel。Cluster 使用一个多路复用拓扑客户端并忽略该字段。一次操作共用 `timeout.command` 总期限；执行结果未知时不重放。迁槽期间，ASK 仅将当前命令发送到临时目标节点，并在同一连接上先执行 ASKING。TRYAGAIN 短暂退避后按键重新路由。CLUSTERDOWN 直接返回错误。多键命令必须位于同一个 Cluster hash slot，跨 slot 操作不会拆分到多个节点。健康检查以名义 5 秒周期主动发送 PING/ROLE，调度和探测耗时会额外增加检测延迟。系统信任使用 Gateway 的 System CA 包（固定路径的 OS CA 包）；私有 CA 请显式配置 CA 引用。Sentinel 发布在可达 Sentinel 中获得唯一相对多数、且 ROLE 确认为 master 的地址；票数并列时这一轮不发布。每个 Sentinel 按其 run ID（`SENTINEL MYID`，需 Redis 6.2+）只计一票，即使它同时可通过配置的域名和学习到的 IP 访问；不响应 `SENTINEL MYID` 的 Sentinel 不计票。Sentinel 与数据节点共用凭据。客户端发布后，Cluster 恢复会同时拨号当前已知主节点和配置的 seed，因此摘掉最初的 seed 不会阻止拓扑刷新。新一代必须先建立真实连接，普通替换才会生效。强制刷新仍先退役旧实例。
 
 > **说明**：`topology.sentinel.password`（独立于 Redis 节点认证的 Sentinel 自身密码）字段已被移除——该字段在运行时从未被消费（no-op）。如果现有 CR 的 `topology.sentinel` 下包含 `password:` 字段，Kubernetes API server 在重新 apply 时会静默裁剪该字段，不会导致解析错误。
 

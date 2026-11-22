@@ -635,9 +635,10 @@ their existing retirement behavior.
 
 Standalone and Sentinel use `pool.size` (1..64, default 8). Cluster uses one
 multiplexed topology client and ignores `pool.size`. Operations have one total
-`timeout.command` budget, including MOVED and NOSCRIPT fallback. Unknown outcomes
-are never replayed; ASK, TRYAGAIN and CLUSTERDOWN fail the operation. Only MOVED
-is followed, up to `maxRedirects` (default 5). Multi-key commands must stay in one
+`timeout.command` budget, including redirects, backoff and NOSCRIPT fallback.
+Each command shares `maxRedirects` additional attempts (default 5) across MOVED,
+ASK and TRYAGAIN. ASK uses ASKING on a private target connection. TRYAGAIN backs
+off briefly before routing by key again. CLUSTERDOWN and unknown outcomes fail the operation. Multi-key commands must stay in one
 Cluster hash slot; cross-slot operations do not fan out.
 
 Health uses active PING/ROLE probes at a nominal five-second cadence. Scheduling

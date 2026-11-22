@@ -95,7 +95,7 @@ async fn executed_increment_with_lost_reply_is_not_replayed() {
     direct.init_for_test().await.unwrap();
     let key = format!("migration:lost-reply:{}", std::process::id());
     direct.set(&key, "0", Some(Duration::from_secs(60))).await.unwrap();
-    let proxy = DropProxy::spawn("127.0.0.1:16420", b"INCR").await;
+    let proxy = DropProxy::spawn(16420, b"INCR").await;
     let address = proxy.address;
     let submissions = proxy.submissions.clone();
     let proxied = client(json!({"endpoints": [address.to_string()], "pool": {"size": 1},
@@ -117,7 +117,7 @@ async fn executed_unlock_with_lost_reply_is_not_replayed() {
     let direct = client(json!({"endpoints": ["127.0.0.1:16420"], "pool": {"size": 1}}));
     direct.init_for_test().await.unwrap();
     let key = format!("migration:lost-lua:{}", std::process::id());
-    let proxy = DropProxy::spawn("127.0.0.1:16420", b"EVAL").await;
+    let proxy = DropProxy::spawn(16420, b"EVAL").await;
     let submissions = proxy.submissions.clone();
     let proxied = client(json!({"endpoints": [proxy.address.to_string()], "pool": {"size": 1},
         "timeout": {"connect": "1s", "command": "1s"}}));
@@ -178,7 +178,7 @@ struct DropProxy {
 }
 
 impl DropProxy {
-    async fn spawn(upstream: &'static str, marker: &'static [u8]) -> Self {
+    async fn spawn(upstream_port: u16, marker: &'static [u8]) -> Self {
         use std::sync::atomic::{AtomicBool, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::{TcpListener, TcpStream};
@@ -193,7 +193,7 @@ impl DropProxy {
                 let (downstream, _) = listener.accept().await.unwrap();
                 let observed = observed.clone();
                 tasks.spawn(async move {
-                    let upstream = TcpStream::connect(upstream).await.unwrap();
+                    let upstream = TcpStream::connect(("127.0.0.1", upstream_port)).await.unwrap();
                     let (mut dr, mut dw) = downstream.into_split();
                     let (mut ur, mut uw) = upstream.into_split();
                     let drop_reply = AtomicBool::new(false);
@@ -567,6 +567,189 @@ async fn cluster_seed_loss_reestablishes_from_known_primaries() {
     }
     assert_eq!(client.get(&key).await.unwrap().as_deref(), Some("after"));
     client.shutdown().await.unwrap();
+}
+
+/// Ownership never changes in this fixture. Delete each test key through its
+/// live ASK route before clearing the two migration markers, even on unwind.
+struct MigratingSlot<'a> {
+    source: u16,
+    importing: u16,
+    slot: String,
+    keys: [&'a str; 2],
+}
+
+impl Drop for MigratingSlot<'_> {
+    fn drop(&mut self) {
+        let mut failed = false;
+        for key in self.keys {
+            failed |= !fixture_output(self.source, &["-c", "DEL", key]).status.success();
+        }
+        for port in [self.source, self.importing] {
+            failed |= !fixture_output(port, &["CLUSTER", "SETSLOT", &self.slot, "STABLE"])
+                .status
+                .success();
+        }
+        if failed {
+            if std::thread::panicking() {
+                eprintln!("failed to restore migrating slot {}", self.slot);
+            } else {
+                panic!("failed to restore migrating slot {}", self.slot);
+            }
+        }
+    }
+}
+
+fn tryagain_count(port: u16) -> u64 {
+    fixture_command(port, &["INFO", "errorstats"])
+        .lines()
+        .find_map(|line| line.strip_prefix("errorstat_TRYAGAIN:count="))
+        .map_or(0, |count| count.parse().unwrap())
+}
+
+// Point only the importing node's advertised client port through the
+// reply-dropping proxy. Redis's actual listening port and cluster bus stay up.
+struct AnnouncedPort<'a> {
+    importing: u16,
+    source: u16,
+    missing_key: &'a str,
+    previous: String,
+}
+
+impl AnnouncedPort<'_> {
+    fn set(&self, port: &str) -> bool {
+        if !fixture_output(self.importing, &["CONFIG", "SET", "cluster-announce-port", port])
+            .status
+            .success()
+        {
+            return false;
+        }
+        let expected = format!("127.0.0.1:{port}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let reply = fixture_text(&fixture_output(self.source, &["GET", self.missing_key]));
+            if reply.contains("ASK ") && reply.trim_end().ends_with(&expected) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+}
+
+impl Drop for AnnouncedPort<'_> {
+    fn drop(&mut self) {
+        if !self.set(&self.previous) {
+            if std::thread::panicking() {
+                eprintln!("failed to restore Redis announcement {}", self.previous);
+            } else {
+                panic!("failed to restore Redis announcement {}", self.previous);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires docker-compose.topologies.yaml"]
+async fn cluster_migration_follows_ask_retries_tryagain_and_preserves_uncertain_writes() {
+    let _serial = TOPOLOGY_LOCK.lock().await;
+    init_crypto();
+    let tag = format!("{{reshard-{}}}", std::process::id());
+    let staying = format!("{tag}:staying");
+    let moving = format!("{tag}:moving");
+    let slot: u16 = fixture_command(16400, &["CLUSTER", "KEYSLOT", &staying])
+        .trim()
+        .parse()
+        .unwrap();
+    let nodes = fixture_command(16400, &["CLUSTER", "NODES"]);
+    let (source, source_id) = slot_owner(&nodes, slot).unwrap();
+    let (importing, importing_id) = parse_masters(&nodes)
+        .into_iter()
+        .find(|(port, _)| *port != source)
+        .unwrap();
+    let cluster = |max_redirects, command_timeout| {
+        client(json!({
+            "endpoints": [format!("127.0.0.1:{source}")],
+            "topology": {"mode": "cluster", "cluster": {"maxRedirects": max_redirects}},
+            "timeout": {"connect": "1s", "command": command_timeout}
+        }))
+    };
+    let limited = cluster(2, "5s");
+    let following = cluster(64, "5s");
+    let short_deadline = cluster(64, "250ms");
+    limited.init_for_test().await.unwrap();
+    following.init_for_test().await.unwrap();
+    short_deadline.init_for_test().await.unwrap();
+    let migration = MigratingSlot {
+        source,
+        importing,
+        slot: slot.to_string(),
+        keys: [&staying, &moving],
+    };
+    for key in migration.keys {
+        fixture_command(source, &["SET", key, "0", "EX", "120"]);
+    }
+    fixture_command(
+        importing,
+        &["CLUSTER", "SETSLOT", &migration.slot, "IMPORTING", &source_id],
+    );
+    fixture_command(
+        source,
+        &["CLUSTER", "SETSLOT", &migration.slot, "MIGRATING", &importing_id],
+    );
+    let move_key = |key| {
+        fixture_command(
+            source,
+            &["MIGRATE", "127.0.0.1", &importing.to_string(), key, "0", "1000"],
+        );
+    };
+    move_key(&moving);
+    assert_eq!(following.incr(&moving).await.unwrap(), 1);
+    assert_eq!(following.get(&moving).await.unwrap().as_deref(), Some("1"));
+    assert_eq!(following.get(&staying).await.unwrap().as_deref(), Some("0"));
+
+    let before = tryagain_count(source);
+    assert_eq!(
+        limited.del(&migration.keys).await.unwrap_err().to_string(),
+        "Redis command failed"
+    );
+    assert_eq!(tryagain_count(source) - before, 3, "one submission plus two retries");
+    let before = tryagain_count(source);
+    assert_eq!(
+        short_deadline.del(&migration.keys).await.unwrap_err().to_string(),
+        "Redis operation timed out"
+    );
+    assert!((1..65).contains(&(tryagain_count(source) - before)));
+    let before = tryagain_count(source);
+    let finish_move = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tryagain_count(source) == before {
+            assert!(tokio::time::Instant::now() < deadline, "DEL never received TRYAGAIN");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        move_key(&staying);
+    };
+    let (deleted, ()) = tokio::join!(following.del(&migration.keys), finish_move);
+    assert_eq!(deleted.unwrap(), 2);
+
+    let proxy = DropProxy::spawn(importing, b"INCR").await;
+    let config = fixture_command(importing, &["CONFIG", "GET", "cluster-announce-port"]);
+    let announcement = AnnouncedPort {
+        importing,
+        source,
+        missing_key: &moving,
+        previous: config.lines().nth(1).unwrap().to_owned(),
+    };
+    assert!(
+        announcement.set(&proxy.address.port().to_string()),
+        "ASK did not reach the proxy"
+    );
+    assert!(following.incr(&moving).await.is_err());
+    drop(announcement);
+    assert_eq!(proxy.submissions.load(Ordering::SeqCst), 1);
+    assert_eq!(following.get(&moving).await.unwrap().as_deref(), Some("1"));
+    short_deadline.shutdown().await.unwrap();
+    limited.shutdown().await.unwrap();
+    following.shutdown().await.unwrap();
 }
 
 struct SlotRestore {

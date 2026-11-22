@@ -356,21 +356,10 @@ impl RedisBackend {
                 return Err(unavailable());
             }
             let snapshot = self.snapshot.load_full().ok_or_else(unavailable)?;
-            let mut result = match &*snapshot {
+            let result = match &*snapshot {
                 Snapshot::Pool { pool, .. } => pool.exec(cmd).await,
-                Snapshot::Cluster { connection, .. } => {
-                    normalize_command_value(connection.clone().route_command(cmd.clone(), command_route(cmd)?).await)
-                }
+                Snapshot::Cluster { connection, .. } => self.exec_cluster(connection, cmd, resolver, deadline).await?,
             };
-            if matches!(&*snapshot, Snapshot::Cluster { .. }) {
-                for _ in 0..self.transport.max_redirects {
-                    let Some((host, port)) = moved_target(&result)? else {
-                        break;
-                    };
-                    let mut connection = self.transport.connect(&host, port, false, resolver.clone()).await?;
-                    result = normalize_command_value(cmd.query_async(&mut connection).await);
-                }
-            }
             if let Err(error) = &result {
                 let _publication = self.publication.lock();
                 let snapshot_current = self
@@ -385,6 +374,50 @@ impl RedisBackend {
             result
         };
         timeout_at(deadline, operation).await.map_err(|_| timed_out())?
+    }
+
+    // Only the inner business-command result contributes to published-client recovery.
+    // Redirect setup and local deadline failures propagate directly to the caller.
+    async fn exec_cluster(
+        &self,
+        connection: &redis::cluster_async::ClusterConnection,
+        cmd: &Cmd,
+        resolver: RedisEgressResolver,
+        deadline: Instant,
+    ) -> RedisResult<RedisResult<Value>> {
+        let route = command_route(cmd)?;
+        let routed = || async { connection.clone().route_command(cmd.clone(), route.clone()).await };
+        let mut result = normalize_command_value(routed().await);
+        for _ in 0..self.transport.max_redirects {
+            let Err(error) = &result else { break };
+            result = match cluster_retry(error)? {
+                Some(ClusterRetry::Redirect { host, port, asking }) => {
+                    let mut direct = self.transport.connect(&host, port, false, resolver.clone()).await?;
+                    if asking {
+                        // This fresh connection is private to the redirected command.
+                        let reply: Value = redis::cmd("ASKING").query_async(&mut direct).await?;
+                        if reply != Value::Okay {
+                            return Err(unavailable());
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(timed_out());
+                    }
+                    normalize_command_value(cmd.query_async(&mut direct).await)
+                }
+                Some(ClusterRetry::TryAgain) => {
+                    use rand::Rng;
+                    let delay = Duration::from_millis(rand::rng().random_range(15..=25));
+                    tokio::time::sleep(delay).await;
+                    if Instant::now() >= deadline {
+                        return Err(timed_out());
+                    }
+                    normalize_command_value(routed().await)
+                }
+                None => break,
+            };
+        }
+        Ok(result)
     }
 
     pub async fn probe(&self, resolver: RedisEgressResolver) -> bool {
@@ -692,20 +725,23 @@ async fn primaries_from_connection(
     Err(last_error)
 }
 
-/// Follow only a parsed MOVED target. A malformed redirect is an error.
-/// ASK and other results do not produce a target.
-pub(super) fn moved_target(result: &RedisResult<Value>) -> RedisResult<Option<(String, u16)>> {
-    let Err(error) = result else {
-        return Ok(None);
+#[derive(Debug, PartialEq)]
+enum ClusterRetry {
+    Redirect { host: String, port: u16, asking: bool },
+    TryAgain,
+}
+
+fn cluster_retry(error: &redis::RedisError) -> RedisResult<Option<ClusterRetry>> {
+    use redis::{ErrorKind::Server, ServerErrorKind};
+    let asking = match error.kind() {
+        Server(ServerErrorKind::Moved) => false,
+        Server(ServerErrorKind::Ask) => true,
+        Server(ServerErrorKind::TryAgain) => return Ok(Some(ClusterRetry::TryAgain)),
+        _ => return Ok(None),
     };
-    if !matches!(error.retry_method(), redis::RetryMethod::MovedRedirect) {
-        return Ok(None);
-    }
-    let Some((address, _slot)) = error.redirect_node() else {
-        return Err(unavailable());
-    };
-    // redis-rs returns (host:port, slot), not (host, port).
-    Ok(Some(moved_endpoint(address)?))
+    let (address, _) = error.redirect_node().ok_or_else(unavailable)?;
+    let (host, port) = moved_endpoint(address)?;
+    Ok(Some(ClusterRetry::Redirect { host, port, asking }))
 }
 
 /// A certificate rejection, recognized from the dependency's error text. The
