@@ -162,6 +162,10 @@ change suppression, bounded waits), `coordinator_test.rs`
 `DnsResolution` (L7 in every mode, TCP in every mode, UDP in `system` mode) and the
 `DnsResolutionFlap` dynamic scenario.
 
+For `externalname-default-dns-resolution-mode`, keep the mode annotation absent on
+the `dns-l4-gateway` Service. The TCP echo and endpoint-table membership checks
+together verify that a TCP backend inherits the default and uses Gateway-local DNS.
+
 Re-evaluate when a new event source can change a target key, when request paths gain a
 way to create entries, or when the coordinator's slice partition changes.
 
