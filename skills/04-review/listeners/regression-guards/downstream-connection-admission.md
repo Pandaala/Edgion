@@ -64,8 +64,8 @@ Review invariants and accepted limits:
   last `Arc<ClientSession>` drops.
 - `edgion_downstream_connections_active` counts admitted listener sockets (after
   a successful chain); internal counters also include sockets still in admission.
-- Memory-pressure shedding is tracked in `tasks/todo/gateway-overload-manager.md`;
-  per-client concurrency limits in gw-plugrt-05. Idle HTTP/2, slow HTTP/1 headers
+- Memory-pressure shedding is outside the scope of listener socket admission.
+  Per-client concurrency limits are covered by gw-plugrt-05. Idle HTTP/2, slow HTTP/1 headers
   and the h2c preface peek can hold a slot without a deadline; tracked in
   `tasks/todo/downstream-slot-hold-deadlines.md`.
 
