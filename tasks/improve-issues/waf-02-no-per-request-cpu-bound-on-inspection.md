@@ -67,7 +67,7 @@ are also at risk. Gateway performance-baseline work is now explicitly untracked 
 ## Notes
 Checked `skills/04-review/waf/regression-guards/chain-ordinary-work-accumulates-per-unit.md` (fixes chain
 fan-out, explicitly keeps the per-unit bound), `native-injection-operators-use-bounded-detection.md`, and
-the former DFA-state-layout task (phrase DFA only; now listed as untracked in `skills/04-review/waf/SKILL.md`). Related but distinct: [process-wide HTTP request admission](../todo/gateway-http-request-admission.md) and `gw-ext-03` (Wasm on Tokio workers). Throughput figures above are an order-of-magnitude
+the former DFA-state-layout task (phrase DFA only; now listed as untracked in `skills/04-review/waf/SKILL.md`). Related but distinct: [decision on process-wide HTTP request concurrency](../../skills/04-review/listeners/intentional-design/http-request-concurrency.md) and `gw-ext-03` (Wasm on Tokio workers). Throughput figures above are an order-of-magnitude
 estimate from rule counts and limits; a release benchmark of one 4 MiB urlencoded argument against the
 standard profile would quantify it.
 

@@ -107,7 +107,6 @@ Re-evaluate when Pingora changes accept ownership, stream wrapping, or the
 ## Resolution references
 
 - arch-02: the locked Pingora fork at `f516659` attaches the connection permit
-  to the accepted stream. The remaining work is deferred to
-  [process-wide HTTP request admission](../../../../tasks/todo/gateway-http-request-admission.md)
-  and [memory-pressure shedding](../../../../tasks/todo/gateway-overload-manager.md).
+  to the accepted stream. The project [declined a fixed HTTP request ceiling](../intentional-design/http-request-concurrency.md).
+  [Memory-pressure shedding](../../../../tasks/todo/gateway-overload-manager.md) remains open.
 - gw-plugrt-05: per-listener concurrency cap resolved here; per-IP limiting remains open.

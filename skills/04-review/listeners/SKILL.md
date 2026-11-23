@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Process-wide HTTP request concurrency](intentional-design/http-request-concurrency.md)
 - [Explicit Linux host tuning baseline](intentional-design/linux-host-tuning-baseline.md)
 - [Gateway recreation requires a data-plane restart](intentional-design/gateway-recreation-requires-restart.md)
 - [Serial connection admission with optional Redis limits](intentional-design/bounded-serial-connection-admission.md)
