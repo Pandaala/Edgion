@@ -110,10 +110,9 @@ growth limits change.
   growth is charged per reservation. `proxy_set_header_map_pairs` and local responses
   were the realistic panic paths.
 - The cap is per plugin. Two hostile Wasm entries on one route could push the request
-  map (with a large HTTP/2 request) or the response map past 6,554. That residual and the unpatched fork root (`../pingora/AGENTS.md`,
-  "Ownership and fix policy") are tracked in
-  `tasks/todo/header-map-insert-max-size-residuals.md`; the fork records the limitation
-  in `../pingora/edgion-changes/review/upstream-limitations.md`.
+  map (with a large HTTP/2 request) or the response map past 6,554. The
+  [decision on cumulative plugin writes](../../ext-proc/regression-guards/header-mutation-operation-cap.md#alternatives-and-limits)
+  records the accepted risk and when to reconsider a shared budget.
 - An HTTP/2 upstream response map that already arrives near the limit is a separate
   root: `tasks/block/core-01-upstream-h2-response-header-map-near-max-size.md`.
 

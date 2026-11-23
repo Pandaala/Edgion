@@ -92,10 +92,14 @@ trailers cap each operation list separately before cloning and validate the fina
   request map (request-headers plus buffered request-body phase) and 256 to the response
   map or a fresh local reply. With at most 256 HTTP/1 or about 1,900 HTTP/2 downstream
   request headers, or an HTTP/1 upstream response (at most 256), one entry stays below
-  6,554. Roughly 9-13 hostile ExtProc entries on one route could reach it. That residual,
-  other callers that can feed many names into `insert_header` (DSL `set_header` with
-  raised `maxCallCount` / `maxLoopIterations`), and the unpatched fork root are tracked
-  in `tasks/todo/header-map-insert-max-size-residuals.md`.
+  6,554. The operator-configuration risk in `header-map-insert-max-size-residuals`
+  is accepted for chains of ExtProc or Wasm entries that cumulatively add enough
+  distinct names, and for DSL scripts that derive header names from input with
+  raised execution limits. A subsequent Pingora insert can still panic the request
+  task. These configurations are expected to be rare. The decision keeps the
+  existing per-plugin limits and avoids enforcing a shared budget across immediate
+  and deferred writes or adding a DSL-specific write quota. Revisit if ordinary
+  configurations encounter this failure or the fork adopts fallible insertion.
 - **Fork root.** Patching `insert_header_value` to `try_insert` was not done; the fork's
   ownership policy (`../pingora/AGENTS.md`, "Ownership and fix policy") leaves
   upstream-inherited code to the normal upstream fix. The fork records the limitation in

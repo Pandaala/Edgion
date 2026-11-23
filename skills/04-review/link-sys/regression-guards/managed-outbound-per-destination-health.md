@@ -64,15 +64,17 @@ the locked `admit()` call; a success after failures clears it and re-checks
 
 - **Upstream-authority mode (deliberate scope).** A Service anchor whose
   EdgionBackendTrafficPolicy sets `upstreamAuthority` dials through
-  `AnchorPinnedResolver` and reqwest's per-authority pool (HTTP/2 multiplexes
-  all calls on one connection), so the endpoint is not chosen per call. Such
+  `AnchorPinnedResolver` and reqwest's per-authority pool (HTTP/2 can multiplex
+  calls on an existing connection), so the endpoint is not chosen per call. Such
   calls and their retries skip passive recording because success and failure
-  cannot be attributed to a destination (gw-plug3-01b). Only active probes
-  using `healthCheckHost` update the shared pool verdict. Static URLs also
-  have no endpoint socket but still participate in passive ejection. Resolver filtering was
-  rejected because it cannot eject a pod behind an established connection and
-  cannot carry a probe lease. Per-endpoint authority clients are tracked in
-  `tasks/todo/gw-plug3-01b-upstream-authority-per-endpoint-health.md`.
+  cannot be attributed to a destination. Active probes update the shared pool
+  verdict and use `healthCheckHost` when configured. Repeated probe failures
+  can suspend the pool even if another pod is healthy. Static URLs still
+  participate in passive ejection.
+  For gw-plug3-01b, per-endpoint clients and probes were declined to keep
+  connection management simple. A retry can reach the same pod. Filtering
+  resolver results only affects new connections. Revisit if authority calls
+  must avoid an unhealthy pod even when a pooled connection to it already exists.
 - No panic routing: with every destination unusable the call fails fast. A panic
   threshold would be a new failure-policy shape (design rule F freeze); for
   fail-closed auth consumers it adds latency without security benefit.
