@@ -108,10 +108,10 @@ worker, exhaust memory, or crash the worker, i.e. a denial of service for every 
 
 ## Alternatives and limits
 
-- Ordinary operator work is per rule unit, not per transaction; total request CPU is therefore
-  `units x max_operator_work_bytes` in the worst case. That is a tracked gateway-level gap
-  (`tasks/improve-issues/waf-02-*`), not a violation of this page, and the chosen per-unit scope is recorded
-  in [chain ordinary work](../regression-guards/chain-ordinary-work-accumulates-per-unit.md).
+- Ordinary operator work is charged per rule unit. Across evaluated units, the upper bound on
+  charged work scales with the unit count and `max_operator_work_bytes`. See the
+  [accepted budget scope](../intentional-design/ordinary-rule-work-budget-scope.md) and the
+  [chain accounting guard](../regression-guards/chain-ordinary-work-accumulates-per-unit.md).
 - Operator rule sets are semi-trusted: compile-time limits protect Controller availability, not
   confidentiality. A rule set can still express a WAF that blocks nothing (see `waf4-02`).
 - Gateway-side status codes and panic handling belong to the Gateway. The

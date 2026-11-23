@@ -17,9 +17,8 @@ clients of that listener. This is an accepted L4 limitation: the gateway does
 not try to distinguish forged sources, evict sessions under pressure, or
 shorten the lifetime of sessions without a backend reply.
 
-The decision covers only spoofed-source admission. Separate tasks cover
-[session cap and idle timeout configuration](../../../../tasks/todo/udp-session-cap-and-idle-timeout.md)
-and [receive-buffer memory](../../../../tasks/todo/udp-session-receive-buffer-footprint.md).
+The decision covers only spoofed-source admission. Session cap and idle
+timeout configuration and receive-buffer memory are separate concerns.
 
 ## Rationale and evidence
 
@@ -86,8 +85,7 @@ Re-evaluate if:
 ## Resolution references
 
 - `gw-core3-05` (P2, CONFIRMED, re-verified STILL-VALID on `feature-10-28`):
-  spoofed-source admission accepted on 2026-11-07. The two follow-up tasks
-  above cover configuration and buffer memory.
+  spoofed-source admission accepted on 2026-11-07.
 - `gw-core-05` option 3 (single serve task head-of-line latency), merged into
   `gw-core3-05` on 2026-11-06: receive-loop isolation remains deferred.
   Revisit if slow new-session admission causes unacceptable latency or loss

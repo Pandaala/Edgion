@@ -41,6 +41,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Intentional design
 
+- [Per-unit scope of ordinary rule work budgets](intentional-design/ordinary-rule-work-budget-scope.md)
 - [Retain bounded geometric growth for JSON token scratch](intentional-design/json-token-geometric-growth.md)
 
 ## Reviewed optimization design
