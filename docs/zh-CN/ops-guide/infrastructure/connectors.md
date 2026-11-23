@@ -913,7 +913,7 @@ Webhook 连接器（以及共用同一个 `ExternalHttpConnection` 的 ForwardAu
 
 - **被动检查**：目的地连续失败 `unhealthyThreshold` 次后被摘除。列出的失败状态码、传输错误以及超时（`countTimeout` 为 true 时）共用同一个计数器，一次成功即清零。超过 `maxResponseBytes` 的响应不计入目的地的失败。摘除一定会结束：经过 `ejectionTime × 摘除次数`（上限为 `maxEjectionTime`）后，放行一个半开请求探测该目的地；成功则恢复，失败则以更长时间再次摘除。同一时间最多摘除池中 `maxEjectionPercent` 的目的地，但至少允许摘除一个。
 - **主动检查**：每个周期探测所有目的地。连续 `unhealthyThreshold` 次探测失败的目的地会被跳过，直到连续 `healthyThreshold` 次成功。主动探测成功也会解除被动摘除。主动与被动是相互独立的信号，因此如果探测路径正常而真实调用失败，主动检查可能反复解除被动摘除。
-- **上游 authority**：如果 `Service` 目标的 EdgionBackendTrafficPolicy 设置了 `upstreamAuthority`，调用通过客户端连接池拨号，无法按调用选择端点。这类调用共用一个池级健康状态，摘除同样有时限；主动探测使用策略中的 `healthCheckHost`。
+- **上游 authority**：如果 `Service` 目标的 EdgionBackendTrafficPolicy 设置了 `upstreamAuthority`，调用通过客户端连接池拨号，无法按调用选择端点。被动健康检查会忽略这类调用及其重试的结果。主动探测达到阈值时可将整个池标记为不可用或恢复可用。配置了 `healthCheckHost` 时，主动探测使用该主机名。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|

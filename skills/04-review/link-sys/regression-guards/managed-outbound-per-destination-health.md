@@ -15,7 +15,7 @@ knowledge_type: regression-guards
 `backends::outlier_detection::PassiveEjectionState` plus an independent active
 verdict. The call path (`call.rs`) selects one usable destination per attempt.
 
-Required behavior:
+For attempts with an attributable destination:
 
 - One failing endpoint is skipped; it never gates the rest of the pool. A call
   fails fast as `Unhealthy` only when no destination is usable.
@@ -66,8 +66,10 @@ the locked `admit()` call; a success after failures clears it and re-checks
   EdgionBackendTrafficPolicy sets `upstreamAuthority` dials through
   `AnchorPinnedResolver` and reqwest's per-authority pool (HTTP/2 multiplexes
   all calls on one connection), so the endpoint is not chosen per call. Such
-  calls share one pool-level destination with the same bounded ejection and
-  half-open probe; active probes use `healthCheckHost`. Resolver filtering was
+  calls and their retries skip passive recording because success and failure
+  cannot be attributed to a destination (gw-plug3-01b). Only active probes
+  using `healthCheckHost` update the shared pool verdict. Static URLs also
+  have no endpoint socket but still participate in passive ejection. Resolver filtering was
   rejected because it cannot eject a pod behind an established connection and
   cannot carry a probe lease. Per-endpoint authority clients are tracked in
   `tasks/todo/gw-plug3-01b-upstream-authority-per-endpoint-health.md`.

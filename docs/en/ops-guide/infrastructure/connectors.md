@@ -1038,9 +1038,9 @@ destination is usable, the call fails fast as unhealthy.
   ejection.
 - **Upstream authority**: a `Service` target whose EdgionBackendTrafficPolicy
   sets `upstreamAuthority` dials through the client's connection pool, so its
-  endpoint cannot be chosen per call. Such calls share one pool-level health
-  state with the same bounded ejection; active probes use the policy's
-  `healthCheckHost`.
+  endpoint cannot be chosen per call. Passive health checks therefore ignore
+  these attempts, including retries. Active probes use the policy's
+  `healthCheckHost` when configured and can mark the whole pool unhealthy or healthy again.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

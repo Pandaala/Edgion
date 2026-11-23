@@ -13,7 +13,7 @@
 //!
 //! Upstream-authority calls dial through the pinned resolver and the client
 //! connection pool, so their destination is not chosen here. They share one
-//! pool-level destination with the same bounded-ejection semantics.
+//! pool-level destination for active probes only.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -188,7 +188,7 @@ impl OutboundHealth {
                 (Arc::clone(&dest), Arc::from(vec![dest]))
             }
             HealthTarget::Service { .. } => (
-                Arc::new(DestHealth::new(None, String::new(), true, config)),
+                Arc::new(DestHealth::new(None, String::new(), true, None)),
                 Arc::from(Vec::new()),
             ),
         };
@@ -296,7 +296,8 @@ impl OutboundHealth {
     /// Record the passive verdict of one attempt against its destination.
     pub(crate) fn record(&self, pick: Pick, outcome: AttemptOutcome) {
         let Pick { dest, probe } = pick;
-        if self.passive.is_none() {
+        // Only attributable destinations receive the client's passive configuration.
+        if dest.state.config().is_none() {
             return;
         }
         match outcome {

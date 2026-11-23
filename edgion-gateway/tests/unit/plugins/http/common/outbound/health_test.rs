@@ -237,15 +237,21 @@ fn churn_carries_state_of_remaining_endpoints_and_prunes_departed_ones() {
 }
 
 #[test]
-fn authority_calls_share_the_bounded_pool_destination() {
-    let health = pool(&[addr(1)], Some(&passive(1, 50)));
-    let pick = health.pick_pool().unwrap();
-    health.record(pick, AttemptOutcome::Failure);
+fn authority_attempts_and_retries_only_observe_active_pool_health() {
+    let health = pool(&[addr(1), addr(2)], Some(&passive(1, 50)));
+    let first = health.pick_pool().unwrap();
+    let retry = first.without_probe();
+    health.record(first, AttemptOutcome::Failure);
+    health.record(retry.readmit().unwrap(), AttemptOutcome::Failure);
+    assert!(!health.pool.failures_pending.load(Ordering::Acquire));
+    let in_flight = health.pick_pool().unwrap();
+
+    let check = active(1, 1);
+    health.record_active(health.pool(), &check, false);
+    health.record(in_flight, AttemptOutcome::Success);
+    assert!(retry.readmit().is_none());
     assert_eq!(health.pick_pool().err(), Some(PickError::Unhealthy));
-    assert!(health.pick(&[]).is_ok(), "pool state does not eject endpoints");
-    health.pool.state.expire_deadlines_for_test();
-    let probe = health.pick_pool().unwrap();
-    assert!(probe.probe.is_some());
-    health.record(probe, AttemptOutcome::Success);
+    assert!(health.pick(&[]).is_ok());
+    health.record_active(health.pool(), &check, true);
     assert!(health.pick_pool().is_ok());
 }
