@@ -79,7 +79,7 @@ backend unavailability.
      Gateway config and make it wait briefly with a deadline instead of `try_acquire`.
 2. **GraphQL**: remove `EVALUATIONS` altogether. The per-request work is already bounded by
    tokens, work and recursion. If CPU fairness matters, rely on the process overload protection
-   (see `arch-02`) rather than a 4-slot global gate. At minimum, do not hold the permit across the
+   (see the deferred [process-wide HTTP request admission](../todo/gateway-http-request-admission.md) task) rather than a 4-slot global gate. At minimum, do not hold the permit across the
    body read, and parse once per request with the result shared through ctx across GraphQL plugins.
 3. Recommendation: (1) + (2). Keep the per-exchange hard caps (1 MiB JSON, 512 KiB message,
    depth/node limits). They are the real safety mechanism.
@@ -96,7 +96,7 @@ backend unavailability.
   admission lifetime it imposes.
 - GraphQL `GRAPHQL_ADMISSION_BUSY` is listed in `graphql-errors.md:19`. No review page justifies the
   value 4 or holding the permit across the body read.
-- Related: `arch-02-no-process-level-overload-protection.md` (the missing global mechanism these
+- Related: [process-wide HTTP request admission](../todo/gateway-http-request-admission.md) (the missing global mechanism these
   local gates stand in for).
 
 ## Verification (independent)

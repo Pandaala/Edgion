@@ -55,7 +55,7 @@ is slow, i.e. under the flood it is meant to stop.
 
 ## Related findings
 
-- arch-02 (process-level connection admission / overload manager).
+- [Implemented socket admission](../../skills/04-review/listeners/regression-guards/downstream-connection-admission.md) and deferred [Gateway memory-pressure shedding](../todo/gateway-overload-manager.md).
 
 ## Verification (independent)
 

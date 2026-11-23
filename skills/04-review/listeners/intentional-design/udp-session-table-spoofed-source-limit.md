@@ -17,8 +17,9 @@ clients of that listener. This is an accepted L4 limitation: the gateway does
 not try to distinguish forged sources, evict sessions under pressure, or
 shorten the lifetime of sessions without a backend reply.
 
-The decision covers only spoofed-source admission. Session cap and idle
-timeout configuration and receive-buffer memory are separate concerns.
+The decision covers only spoofed-source admission. The
+[UDP proxy](../../../../edgion-gateway/src/routes/udp/edgion_udp.rs) owns the
+session cap, idle timeout and receive buffers.
 
 ## Rationale and evidence
 

@@ -106,8 +106,8 @@ Re-evaluate when Pingora changes accept ownership, stream wrapping, or the
 
 ## Resolution references
 
-- arch-02 (no process-level overload protection): connection admission
-  implemented 2026-11-06; the finding closes once the fork commit is published
-  and Edgion's lockfile points at it. Memory-pressure shedding is deferred to
-  `tasks/todo/gateway-overload-manager.md`.
+- arch-02: the locked Pingora fork at `f516659` attaches the connection permit
+  to the accepted stream. The remaining work is deferred to
+  [process-wide HTTP request admission](../../../../tasks/todo/gateway-http-request-admission.md)
+  and [memory-pressure shedding](../../../../tasks/todo/gateway-overload-manager.md).
 - gw-plugrt-05: per-listener concurrency cap resolved here; per-IP limiting remains open.

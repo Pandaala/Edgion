@@ -80,7 +80,7 @@ Service.
   (outbound TLS/egress resolver). Nothing records the cap as an accepted tradeoff.
 - `docs/en/user-guide/http-route/filters/edgion-plugins/ext-proc.md` does not document the
   64-stream ceiling, so operators cannot plan around it.
-- Related: `arch-02-no-process-level-overload-protection.md`. A gateway-level overload
+- Related: [Gateway memory-pressure shedding](../todo/gateway-overload-manager.md). A gateway-level overload
   manager would be the right owner for global shedding instead of this per-target constant.
 
 ## Verification (independent)

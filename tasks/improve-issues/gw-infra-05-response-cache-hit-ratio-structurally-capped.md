@@ -79,8 +79,7 @@ private preadmitted arena, capacity-based ledger charge (to avoid memset), the d
 retirement atomically clears visibility". It treats these as safety properties, but it does not consider hit
 ratio, the default==max ceiling, or the absence of stampede protection. Shrinking after EOS keeps the
 "no memset / no reallocation during push" property that page protects. Not tracked in `tasks/`.
-`tasks/improve-issues/arch-02-no-process-level-overload-protection.md` mentions response-cache bytes only as
-one local bound.
+The separate [Gateway memory-pressure shedding](../todo/gateway-overload-manager.md) task covers aggregate process pressure.
 
 ## Related findings
 
