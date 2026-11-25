@@ -69,11 +69,12 @@ is a bug" rule also gets a line there.
   ManagedOutboundClient entry and shares the private managed construction core.
   Elasticsearch now supplies typed headers to the canonical owning build entry,
   retaining actual source and captured TLS without exposing a raw builder.
+- The operator-configured Elasticsearch LinkSys client honors proxy environment
+  variables, uses the default resolver and follows up to ten redirects. This
+  provider accepts the risk that a 307 or 308 can replay bulk log data to a
+  different destination. Revisit if ordinary requests can select the endpoint.
 - **Operator-CLI caveat**: `edgion-cli` deliberately sets
-  `disable_proxy: false`. Elasticsearch also currently retains that default and
-  Redirect::Limit(10); its TLS-reference migration preserves existing transport
-  behavior, not a new general exemption or proxy/egress acceptance. Rule 3's
-  proxy-env disable exists to stop a *server*
+  `disable_proxy: false`. Rule 3's proxy-env disable exists to stop a *server*
   from being steered through an attacker-influenced proxy; the CLI runs as the
   operator on the operator's own machine, where honoring `HTTP(S)_PROXY` is a
   requirement, not a leak. `redirect: Deny` still applies — the admin API never
