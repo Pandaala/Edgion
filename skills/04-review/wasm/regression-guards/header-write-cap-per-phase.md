@@ -113,8 +113,9 @@ growth limits change.
   map (with a large HTTP/2 request) or the response map past 6,554. The
   [decision on cumulative plugin writes](../../ext-proc/regression-guards/header-mutation-operation-cap.md#alternatives-and-limits)
   records the accepted risk and when to reconsider a shared budget.
-- An HTTP/2 upstream response map that already arrives near the limit is a separate
-  root: `tasks/block/core-01-upstream-h2-response-header-map-near-max-size.md`.
+- An HTTP/2 upstream response map can arrive near capacity before any guest writes
+  (core-01). The Pingora fork tracks the underlying insertion failure in
+  `../pingora/edgion-changes/review/upstream-limitations.md`.
 
 ## Verification and re-evaluation
 

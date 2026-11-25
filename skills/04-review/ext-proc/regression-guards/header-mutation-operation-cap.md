@@ -104,8 +104,10 @@ trailers cap each operation list separately before cloning and validate the fina
   ownership policy (`../pingora/AGENTS.md`, "Ownership and fix policy") leaves
   upstream-inherited code to the normal upstream fix. The fork records the limitation in
   `../pingora/edgion-changes/review/upstream-limitations.md`.
-- An HTTP/2 upstream response map that already arrives near the limit is a separate
-  root: `tasks/block/core-01-upstream-h2-response-header-map-near-max-size.md`.
+- An HTTP/2 upstream response map can arrive near capacity before any plugin
+  mutation (core-01). A subsequent Server or Date insertion can then panic.
+  This path was identified by source inspection. The Pingora limitation above
+  tracks the underlying insertion failure.
 
 ## Verification and re-evaluation
 
