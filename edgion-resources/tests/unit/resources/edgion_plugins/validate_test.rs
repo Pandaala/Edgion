@@ -659,13 +659,23 @@ fn unsupported_types_decode_without_poisoning_a_resource_list_and_remain_invalid
 }
 
 #[test]
-fn unsupported_fallback_does_not_accept_malformed_known_configs_or_tags() {
+fn entry_fallback_requires_a_string_type_and_valid_entry_controls() {
     for input in [
         json!({"config":{}}),
         json!({"type":123, "config":{}}),
-        json!({"type":"RequestHeaderModifier", "config":{"remove":123}}),
+        json!({"type":0, "config":{}}),
+        json!({"type":{"RequestHeaderModifier":null}, "config":{}}),
+        json!({"type":{"Unknown":null}, "config":{}}),
+        json!({"type":"LdapAuth", "enable":1, "config":{"ldapPort":"invalid"}}),
+        json!({"type":"LdapAuth", "conditions":false, "config":{"ldapPort":"invalid"}}),
     ] {
         assert!(serde_json::from_value::<RequestFilterEntry>(input).is_err());
+    }
+    for input in [
+        r#"{"type":"LdapAuth","type":"LdapAuth","config":{}}"#,
+        r#"{"type":"LdapAuth","config":{},"config":{}}"#,
+    ] {
+        assert!(serde_json::from_str::<RequestFilterEntry>(input).is_err());
     }
     for input in [
         r#"{"config":{"nested":[1,2]},"type":"FuturePlugin"}"#,
@@ -675,6 +685,67 @@ fn unsupported_fallback_does_not_accept_malformed_known_configs_or_tags() {
         let entry: RequestFilterEntry = serde_json::from_str(input).unwrap();
         assert!(matches!(entry.plugin, EdgionPlugin::Unsupported));
     }
+}
+
+#[test]
+fn failed_config_transports_only_a_canonical_policy_name() {
+    let entry: RequestFilterEntry = serde_json::from_value(json!({
+        "type":"LdapAuth", "config":{"ldapPort":"must-not-survive"}
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap(),
+        json!({"type":"InvalidConfig","config":{"pluginType":"LdapAuth"}})
+    );
+    for config in [
+        json!({"pluginType": "must-not-survive"}),
+        json!({"pluginType":"LdapAuth","secret":"must-not-survive"}),
+        json!({}),
+    ] {
+        let forged: RequestFilterEntry =
+            serde_json::from_value(json!({"type":"InvalidConfig","config":config})).unwrap();
+        assert!(forged.plugin.is_non_executable());
+        assert_eq!(forged.plugin.policy_type_name(), "InvalidConfig");
+        assert!(!serde_json::to_string(&forged).unwrap().contains("must-not-survive"));
+    }
+}
+
+#[test]
+fn malformed_http_plugin_configs_remain_indexed_invalid_across_sync() {
+    let entries = json!([
+        {"type":"RequestHeaderModifier","config":{}},
+        {"type":"LdapAuth","config":{"ldapHost":"ldap","baseDn":"dc=test","attribute":"uid","ldapPort":"must-not-survive"},"enable":false},
+        {"type":"RequestHeaderModifier","config":{"remove":123}}
+    ]);
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        let list: kube::core::ObjectList<EdgionPlugins> = serde_json::from_value(json!({
+            "apiVersion":"edgion.io/v1", "kind":"EdgionPluginsList", "metadata":{},
+            "items":[
+                {"metadata":{"name":"mixed"}, "spec":{stage:entries}},
+                {"metadata":{"name":"valid"}, "spec":{}}
+            ]
+        }))
+        .unwrap();
+        let expected = [
+            format!("{stage}[1]: invalid plugin config"),
+            format!("{stage}[2]: invalid plugin config"),
+        ];
+        assert_eq!(list.items[0].unsupported_plugin_errors(), expected);
+        assert!(list.items[1].validate_plugins().is_empty());
+        let serialized = serde_json::to_string(&list.items[0]).unwrap();
+        assert!(!serialized.contains("must-not-survive"));
+        let roundtrip: EdgionPlugins = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.unsupported_plugin_errors(), expected);
+    }
+    let duplicate: RequestFilterEntry =
+        serde_json::from_str(r#"{"type":"RequestHeaderModifier","config":{"remove":["x-old"],"remove":["x-new"]}}"#)
+            .unwrap();
+    assert!(matches!(duplicate.plugin, EdgionPlugin::InvalidConfig(_)));
 }
 
 #[test]

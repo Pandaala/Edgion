@@ -88,8 +88,10 @@ fn plugin_crd_types_are_open_strings_in_every_stage() {
 #[test]
 fn unsupported_sentinel_is_not_a_supported_plugin_or_policy_name() {
     assert!(!rust_variant_type_names().contains("Unsupported"));
+    assert!(!rust_variant_type_names().contains("InvalidConfig"));
     use edgion_resources::resources::plugin_policy::{canonical_type_names, PluginFamily};
     for family in [PluginFamily::Http, PluginFamily::Stream, PluginFamily::TlsRoute] {
         assert!(!canonical_type_names(family).contains("Unsupported"));
+        assert!(!canonical_type_names(family).contains("InvalidConfig"));
     }
 }

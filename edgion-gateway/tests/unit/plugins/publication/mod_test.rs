@@ -909,26 +909,33 @@ async fn ai_admission_uses_effective_policy_and_current_route_facts() {
 }
 
 #[tokio::test]
-async fn unsupported_plugin_update_replaces_previous_runtime_and_correction_recovers() {
+async fn non_executable_plugin_update_replaces_previous_runtime_and_correction_recovers() {
     for full in [true, false] {
         let publisher = publisher();
         update_source(&publisher, plugin("none", true), full);
         assert!(view(&publisher).is_activatable);
-        let invalid: EdgionPlugins = serde_json::from_value(json!({
-            "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
-            "metadata":{"namespace":"apps", "name":"plugins"},
-            "spec":{"requestPlugins":[{"type":"FuturePlugin", "config":{}}]}
-        }))
-        .unwrap();
-        update_source(&publisher, Arc::new(invalid), full);
-        let rejected = view(&publisher);
-        assert!(!rejected.is_activatable);
-        assert!(matches!(
-            first_result(&rejected).await,
-            PluginRunningResult::ErrResponse { status: 500, .. }
-        ));
-        update_source(&publisher, plugin("none", true), full);
-        assert!(view(&publisher).is_activatable);
+        for entry in [
+            json!({"type":"FuturePlugin", "config":{}}),
+            json!({"type":"LdapAuth", "config":{
+                "ldapHost":"ldap.example.com","baseDn":"dc=example","attribute":"uid","ldapPort":"invalid"
+            }}),
+        ] {
+            let invalid: EdgionPlugins = serde_json::from_value(json!({
+                "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+                "metadata":{"namespace":"apps", "name":"plugins"},
+                "spec":{"requestPlugins":[entry]}
+            }))
+            .unwrap();
+            update_source(&publisher, Arc::new(invalid), full);
+            let rejected = view(&publisher);
+            assert!(!rejected.is_activatable);
+            assert!(matches!(
+                first_result(&rejected).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            update_source(&publisher, plugin("none", true), full);
+            assert!(view(&publisher).is_activatable);
+        }
     }
 }
 

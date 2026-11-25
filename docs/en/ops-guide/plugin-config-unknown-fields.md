@@ -32,6 +32,18 @@ Credential substructures remain strict. Security-sensitive ConfigData variants
 (`ProxyProtocolTrust`, `WafRuleBundle`, and `WafPolicy`) reject unknown config fields.
 For an admission gate, use `POST /api/v1/validate/{kind}` before apply.
 
+The Admin API rejects a POST or PUT with HTTP 400 if a known HTTP plugin's
+`config` cannot be decoded, for example when `LdapAuth.ldapPort` contains text.
+The stored resource and its serving configuration remain intact. The read-only
+validate endpoint reports this error in `validationErrors` even when the
+Controller runs in Kubernetes mode without a local CRD validator. Kubernetes
+applies its installed CRD when a resource is submitted to its API. If an invalid
+config is already present in a filesystem, etcd or Kubernetes source, the
+Controller can still read that `EdgionPlugins` and the other objects in its list.
+It reports `Accepted=False` with the stage and zero-based entry index. The
+Gateway rejects traffic using the invalid plugin chain even if that entry is
+disabled. Correct the indicated entry in the submitted manifest and reapply it.
+
 Unknown extension **types** have different semantics. LinkSys `spec.type` and
 EdgionConfigData `spec.data.type` are open CRD strings, but a type unsupported by
 the running binary reports `Accepted=False/Invalid`. The typed decoder discards

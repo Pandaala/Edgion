@@ -120,7 +120,7 @@ pub const HTTP_PLUGIN_STAGE_EXCEPTIONS: &[(&str, StageSet)] = &[
 /// DSL is the only directly configurable async upstream-response plugin.
 /// ExtProc response processing is owned by its request-stage entry.
 pub fn applicable_stages_by_name(type_name: &str) -> StageSet {
-    if type_name == "Unsupported" {
+    if matches!(type_name, "Unsupported" | "InvalidConfig") {
         return StageSet::new(false, false, false, false);
     }
     let mut i = 0;
@@ -228,7 +228,9 @@ pub fn collect_rate_limit_dependency_errors_with_aliases<'a>(
                 continue;
             }
             let mut targets = entries.iter().enumerate().filter(|(candidate_index, candidate)| {
-                candidate.is_enabled() && alias_at(*candidate_index) == Some(reference.plugin_alias.as_str())
+                candidate.is_enabled()
+                    && !candidate.plugin.is_non_executable()
+                    && alias_at(*candidate_index) == Some(reference.plugin_alias.as_str())
             });
             let target = targets.next();
             let reason = match target {
@@ -411,29 +413,60 @@ impl EdgionPlugins {
         self.validate_plugins_with_waf(false)
     }
 
-    /// Unknown types invalidate the source even when disabled or policy-masked.
-    pub fn unsupported_plugin_errors(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-        macro_rules! scan {
-            ($entries:expr, $label:literal) => {
-                for (index, entry) in $entries.iter().flatten().enumerate() {
-                    if matches!(entry.plugin, EdgionPlugin::Unsupported) {
-                        errors.push(format!("{}[{}]: unsupported plugin type", $label, index));
-                    }
-                }
+    /// Only entries that can render a dye header can clobber another entry's header.
+    pub fn dye_header_collision_error(&self) -> Option<String> {
+        macro_rules! active_dyes {
+            ($entries:expr) => {
+                $entries
+                    .iter()
+                    .flatten()
+                    .filter(|entry| entry.is_enabled() && !entry.plugin.is_non_executable())
+                    .map(|entry| entry.dye.as_ref())
             };
         }
-        scan!(self.spec.request_plugins, "requestPlugins");
-        scan!(
-            self.spec.upstream_response_filter_plugins,
-            "upstreamResponseFilterPlugins"
-        );
-        scan!(
-            self.spec.upstream_response_body_filter_plugins,
-            "upstreamResponseBodyFilterPlugins"
-        );
-        scan!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
-        errors
+        dye_set_clobber_error(
+            active_dyes!(self.spec.request_plugins)
+                .chain(active_dyes!(self.spec.upstream_response_filter_plugins))
+                .chain(active_dyes!(self.spec.upstream_response_body_filter_plugins))
+                .chain(active_dyes!(self.spec.upstream_response_plugins)),
+        )
+    }
+
+    fn stage_plugins(&self) -> impl Iterator<Item = (&'static str, usize, &EdgionPlugin)> {
+        macro_rules! entries {
+            ($entries:expr, $stage:literal) => {
+                $entries
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(index, entry)| ($stage, index, &entry.plugin))
+            };
+        }
+        entries!(self.spec.request_plugins, "requestPlugins")
+            .chain(entries!(
+                self.spec.upstream_response_filter_plugins,
+                "upstreamResponseFilterPlugins"
+            ))
+            .chain(entries!(
+                self.spec.upstream_response_body_filter_plugins,
+                "upstreamResponseBodyFilterPlugins"
+            ))
+            .chain(entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins"))
+    }
+
+    /// Writable ingress cannot persist a marker in place of the operator's known config.
+    pub fn has_undecodable_plugin_config(&self) -> bool {
+        self.stage_plugins()
+            .any(|(_, _, plugin)| matches!(plugin, EdgionPlugin::InvalidConfig(_)))
+    }
+
+    /// Entry decoding failures invalidate the source even when disabled or policy-masked.
+    pub fn unsupported_plugin_errors(&self) -> Vec<String> {
+        self.stage_plugins()
+            .filter_map(|(stage, index, plugin)| {
+                plugin.decode_error().map(|error| format!("{stage}[{index}]: {error}"))
+            })
+            .collect()
     }
 
     fn validate_plugins_with_waf(&self, include_waf: bool) -> Vec<String> {
@@ -454,7 +487,7 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         if let Some(conds) = entry.conditions.as_ref() {
@@ -489,7 +522,7 @@ impl EdgionPlugins {
                     for (i, entry) in entries.iter().enumerate() {
                         // Inert entries are skipped, matching the entry-level
                         // conditions pass and gateway `compile_body_entries`.
-                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         if let Some(conds) = entry.body.as_ref().and_then(|b| b.conditions.as_ref()) {
@@ -506,7 +539,7 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         if let Some(dye) = entry.dye.as_ref() {
@@ -536,7 +569,7 @@ impl EdgionPlugins {
             .iter()
             .flatten()
             .map(|entry| {
-                if entry.is_enabled() && !matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                if entry.is_enabled() && !entry.plugin.is_non_executable() {
                     if let EdgionPlugin::RegionRoute(config) = &entry.plugin {
                         config.structural_validation_error()
                     } else {
@@ -597,7 +630,7 @@ impl EdgionPlugins {
                     // Per-stage-array alias accumulator; see `duplicate_alias_error`.
                     let mut seen_aliases = std::collections::HashSet::new();
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         let name = entry.plugin.type_name();
@@ -723,45 +756,7 @@ impl EdgionPlugins {
             errors.push("EdgionPlugins may contain at most one enabled LinkSys-backed CredentialInjector".to_string());
         }
 
-        // Pass 2b: resource-level dye "set clobber" check. A failure rule's
-        // response header must not equal (case-insensitively) any success
-        // rule's response header across ANY entry in this resource — success
-        // renders with Set semantics and would silently wipe an appended
-        // failure value queued earlier by a different entry. Runs once over
-        // all four stage arrays chained (only active entries participate,
-        // matching the inert-entry rule used throughout this pass).
-        let all_dye_suites = self
-            .spec
-            .request_plugins
-            .iter()
-            .flatten()
-            .filter(|e| e.is_enabled())
-            .map(|e| e.dye.as_ref())
-            .chain(
-                self.spec
-                    .upstream_response_filter_plugins
-                    .iter()
-                    .flatten()
-                    .filter(|e| e.is_enabled())
-                    .map(|e| e.dye.as_ref()),
-            )
-            .chain(
-                self.spec
-                    .upstream_response_body_filter_plugins
-                    .iter()
-                    .flatten()
-                    .filter(|e| e.is_enabled())
-                    .map(|e| e.dye.as_ref()),
-            )
-            .chain(
-                self.spec
-                    .upstream_response_plugins
-                    .iter()
-                    .flatten()
-                    .filter(|e| e.is_enabled())
-                    .map(|e| e.dye.as_ref()),
-            );
-        if let Some(err) = dye_set_clobber_error(all_dye_suites) {
+        if let Some(err) = self.dye_header_collision_error() {
             errors.push(err);
         }
 
@@ -774,7 +769,7 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal, $stage:expr) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         let config_invalid = if matches!($stage, BodyStage::Request) {

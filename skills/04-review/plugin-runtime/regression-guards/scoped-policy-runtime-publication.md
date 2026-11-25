@@ -82,6 +82,12 @@ separate; the request's SNI/Host checks use its captured full Gateway index.
 
 ## Invalid-generation regression boundary
 
+When a known HTTP entry fails config decoding, its marker carries only the
+canonical plugin name through conf_sync. Gateway demand, masking and Block
+attribution use that name. A named Block keeps its configured status;
+allowing or bypassing the plugin still leaves the configuration-error gate
+active. Unknown plugin names continue to follow the class fallback.
+
 D0095's old whole-resource retention could publish the previous runtime after
 compiling a new Block/Bypass with unrelated invalid DSL/WAF. Both delta updates
 and full sync could therefore restore obsolete execution policy.

@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Identity forwarded after a direct bind](intentional-design/direct-bind-identity.md)
 - [LDAP Auth Per-Request Connection — Accepted with Operational Bounds](intentional-design/per-request-connection-accepted.md)
 - [edgion-ldap Codec and DN Leniency — Accepted Design](intentional-design/codec-and-dn-leniency.md)
 

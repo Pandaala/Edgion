@@ -6,7 +6,43 @@ use super::dye::{DyeOutcome, DyeStage, DyeSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::edgion_plugin::EdgionPlugin;
+use super::edgion_plugin::{EdgionPlugin, InvalidPluginConfig};
+
+/// Decode the flattened plugin while the enclosing stage entry handles its
+/// controls. Only a string-tagged envelope can become a configuration-error
+/// sentinel. Replay preserves duplicate keys for the typed decoder.
+fn deserialize_entry_plugin<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<EdgionPlugin, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "return the typed plugin without allocating a temporary box"
+    )]
+    enum Wire {
+        // Serde also accepts a singleton map as an enum discriminator. The
+        // plugin API requires a string even if the map names a real plugin.
+        ObjectTag {
+            #[serde(rename = "type")]
+            _kind: ObjectTag,
+        },
+        Typed(EdgionPlugin),
+        Invalid {
+            #[serde(rename = "type")]
+            kind: String,
+            #[serde(rename = "config", default)]
+            _config: Option<serde::de::IgnoredAny>,
+        },
+    }
+
+    #[derive(Deserialize)]
+    struct ObjectTag {}
+
+    match Wire::deserialize(deserializer)? {
+        Wire::ObjectTag { .. } => Err(serde::de::Error::custom("plugin type must be a string")),
+        Wire::Typed(plugin) => Ok(plugin),
+        Wire::Invalid { kind, .. } => Ok(EdgionPlugin::InvalidConfig(InvalidPluginConfig::from_type_name(&kind))),
+    }
+}
 
 /// Helper functions for serde defaults
 pub(super) fn default_true() -> bool {
@@ -124,7 +160,7 @@ pub struct PluginEntry {
     pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_entry_plugin")]
     pub plugin: EdgionPlugin,
 }
 
@@ -220,7 +256,7 @@ pub struct RequestFilterEntry {
     pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_entry_plugin")]
     pub plugin: EdgionPlugin,
 }
 
@@ -309,7 +345,7 @@ pub struct UpstreamResponseFilterEntry {
     pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_entry_plugin")]
     pub plugin: EdgionPlugin,
 }
 
@@ -400,7 +436,7 @@ pub struct UpstreamResponseBodyFilterEntry {
     pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_entry_plugin")]
     pub plugin: EdgionPlugin,
 }
 
@@ -497,7 +533,7 @@ pub struct UpstreamResponseEntry {
     pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "deserialize_entry_plugin")]
     pub plugin: EdgionPlugin,
 }
 

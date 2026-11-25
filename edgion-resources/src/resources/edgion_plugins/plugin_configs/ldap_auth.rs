@@ -176,9 +176,7 @@ fn default_ldap_port() -> u16 {
 
 /// A present `null` (what an empty templated value renders to) reads as an
 /// empty list and a `null` item as an empty entry; validation rejects both
-/// with a per-resource status. They must neither mean "no requirement" nor
-/// fail decoding: a decode error would drop the whole EdgionPlugins object
-/// (and break the Kubernetes list).
+/// with a group-specific status. Neither represents an absent requirement.
 fn deserialize_group_list<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
     let groups = Option::<Vec<Option<String>>>::deserialize(deserializer)?.unwrap_or_default();
     Ok(Some(groups.into_iter().map(Option::unwrap_or_default).collect()))

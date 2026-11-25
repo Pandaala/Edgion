@@ -33,15 +33,13 @@ the polarity is always written down, so it can never be inferred wrongly.
 
 Modelling it as `Option<RestrictionMode>` + a `check_fields` branch (rather than
 a serde-required field) keeps the error on the normal plugin-validation path, so
-a missing `mode` produces a readable `Accepted=False` reason instead of failing
-the whole EdgionPlugins resource's deserialization.
+a missing `mode` produces a field-specific `Accepted=False` reason on an enabled entry.
 
 This covers a *missing* `mode` only. A *stale value* (`Blacklist` / `Whitelist`)
-is still a serde unknown-variant error and so fails the resource's
-deserialization — `RestrictionMode` deliberately carries no `#[serde(other)]`
-fallback, because silently mapping an unrecognised polarity onto some default is
-the exact hazard this entry is about. The serde message names both valid
-variants, and pre-release there is no back-compat burden.
+fails typed config decoding. The HTTP stage entry carries the
+[invalid config marker](../../resources/intentional-design/unknown-plugin-variant-strict-enum.md)
+and the Controller reports the stage and index. `RestrictionMode` deliberately
+has no default for an unrecognised polarity.
 
 **2. An explicit field beats inferred polarity for readability**
 

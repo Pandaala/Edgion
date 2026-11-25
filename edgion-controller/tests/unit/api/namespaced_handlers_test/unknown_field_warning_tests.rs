@@ -276,3 +276,78 @@ async fn unsupported_extensions_create_and_update_preserve_required_config_envel
         assert!(updated.0.warnings.is_empty());
     }
 }
+
+#[tokio::test]
+async fn undecodable_http_plugin_config_never_replaces_the_authored_source() {
+    let (mut state, tmp) = make_fs_state().await;
+    let crds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    Arc::get_mut(&mut state).unwrap().schema_validator =
+        Arc::new(crate::conf_mgr::SchemaValidator::from_crd_dir(&crds).unwrap());
+    // The shared request-stage CRD declares KeyAuth.hideCredentials as a boolean.
+    // The same key is advisory for IpRestriction, which does not consume it.
+    let advisory = serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+        "metadata":{"name":"advisory","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"IpRestriction","config":{"defaultAction":"allow","hideCredentials":"unknown"}}]}
+    });
+    let (_, _, result) = create_namespaced(
+        State(state.clone()),
+        Path(("EdgionPlugins".into(), "default".into())),
+        Bytes::from(advisory.to_string()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.0.warnings, vec!["requestPlugins[0].config.hideCredentials"]);
+    let file = tmp.path().join("default/EdgionPlugins_default_auth-chain.yaml");
+    let malformed = |stage: &str, config: serde_json::Value| {
+        Bytes::from(
+            serde_json::json!({
+                "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+                "metadata":{"name":"auth-chain","namespace":"default"},
+                "spec":{stage:[{"type":"KeyAuth","enable":false,"config":config}]}
+            })
+            .to_string(),
+        )
+    };
+    let create_path = || Path(("EdgionPlugins".into(), "default".into()));
+    let update_path = || Path(("EdgionPlugins".into(), "default".into(), "auth-chain".into()));
+    let structurally_invalid = serde_json::json!({"hideCredentials":"bad"});
+    assert_eq!(
+        create_namespaced(
+            State(state.clone()),
+            create_path(),
+            malformed("requestPlugins", structurally_invalid.clone())
+        )
+        .await
+        .err(),
+        Some(StatusCode::BAD_REQUEST)
+    );
+    assert!(!file.exists());
+    let _ = create_namespaced(
+        State(state.clone()),
+        create_path(),
+        plugins_body_clean("auth-chain", "default"),
+    )
+    .await
+    .unwrap();
+    let original = tokio::fs::read(&file).await.unwrap();
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        assert_eq!(
+            update_namespaced(
+                State(state.clone()),
+                update_path(),
+                HeaderMap::new(),
+                malformed(stage, structurally_invalid.clone())
+            )
+            .await
+            .err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(tokio::fs::read(&file).await.unwrap(), original);
+    }
+}

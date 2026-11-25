@@ -76,6 +76,10 @@ request, response-header, response-body, then async-response order determines
 the status. Stream and TLSRoute Block deny admission; an HTTP status has no
 meaning at those stages.
 
+If an enabled, known HTTP plugin has an undecodable config, a Block on its
+name still returns the configured status. An allow or bypass for that name
+leaves the chain's configuration-error response (HTTP 500) in effect.
+
 **Bypass** skips the restricted implementation and continues the chain. Bypassing
 an authentication plugin also removes its authentication check. Policy does not
 remove code from the binary, govern native Gateway API filters, or govern the

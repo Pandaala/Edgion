@@ -20,6 +20,7 @@ enum Phase {
     Absent,
     Valid,
     Invalid(&'static str),
+    InvalidConfig,
     MergedRegex,
     Disabled,
 }
@@ -34,6 +35,7 @@ fn plugin(phase: Phase) -> Value {
     });
     match phase {
         Phase::Invalid(field) => config[field] = json!("Bad Name"),
+        Phase::InvalidConfig => config["allowCredentials"] = json!({"invalid": true}),
         Phase::MergedRegex => {
             config["allowCredentials"] = json!(false);
             config["allowOriginsByRegex"] = json!([r"(?P<sub>[a-z]+)\.example\.com", r"(?P<sub>[a-z]+)\.example\.org"]);
@@ -72,17 +74,24 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             entry["enable"].as_bool().unwrap_or(true) == expected_entry["enable"].as_bool().unwrap_or(true),
             "Controller has a different enable state"
         );
-        for field in ["allowMethods", "allowHeaders", "exposeHeaders", "allowOriginsByRegex"] {
+        if matches!(phase, Phase::InvalidConfig) {
             ensure!(
-                entry["config"][field] == expected_entry["config"][field],
-                "Controller has a different {field}"
+                entry["type"] == "InvalidConfig" && entry["config"] == json!({"pluginType":"Cors"}),
+                "Controller did not publish the invalid config marker"
             );
+        } else {
+            for field in ["allowMethods", "allowHeaders", "exposeHeaders", "allowOriginsByRegex"] {
+                ensure!(
+                    entry["config"][field] == expected_entry["config"][field],
+                    "Controller has a different {field}"
+                );
+            }
         }
         let accepted = crate::dynamic::status::conditions(resource)?
             .iter()
             .find(|c| c["type"] == "Accepted")
             .context("missing Accepted condition")?;
-        let invalid = matches!(phase, Phase::Invalid(_) | Phase::MergedRegex);
+        let invalid = matches!(phase, Phase::Invalid(_) | Phase::InvalidConfig | Phase::MergedRegex);
         if let Some(generation) = resource["metadata"]["generation"].as_i64() {
             ensure!(accepted["observedGeneration"] == generation, "stale Accepted condition");
         }
@@ -98,6 +107,14 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
                     .is_some_and(|message| message.contains(field)),
                 "missing field diagnostic"
             );
+        } else if matches!(phase, Phase::InvalidConfig) {
+            ensure!(
+                accepted["reason"] == "Invalid"
+                    && accepted["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("requestPlugins[0]")),
+                "missing indexed config error"
+            );
         } else if matches!(phase, Phase::MergedRegex) {
             ensure!(accepted["reason"] == "Invalid", "unexpected invalid reason");
             ensure!(
@@ -110,7 +127,11 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
     }
 
     for method in [Method::GET, Method::OPTIONS] {
-        if !matches!(phase, Phase::Valid | Phase::Invalid(_) | Phase::MergedRegex) && method == Method::OPTIONS {
+        if !matches!(
+            phase,
+            Phase::Valid | Phase::Invalid(_) | Phase::InvalidConfig | Phase::MergedRegex
+        ) && method == Method::OPTIONS
+        {
             continue;
         }
         let preflight = method == Method::OPTIONS;
@@ -126,7 +147,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
         let response = request.send().await?;
         let expected = match phase {
             Phase::Absent => 404,
-            Phase::Invalid(_) | Phase::MergedRegex => 500,
+            Phase::Invalid(_) | Phase::InvalidConfig | Phase::MergedRegex => 500,
             Phase::Valid if preflight => 204,
             _ => 200,
         };
@@ -203,6 +224,14 @@ static PHASES: &[PhaseSuite] = &[
         factory: || Box::new(Suite(Phase::Valid)),
     },
     PhaseSuite {
+        name: "admin_rejected",
+        factory: || Box::new(Suite(Phase::Valid)),
+    },
+    PhaseSuite {
+        name: "invalid_config",
+        factory: || Box::new(Suite(Phase::InvalidConfig)),
+    },
+    PhaseSuite {
         name: "methods",
         factory: || Box::new(Suite(Phase::Invalid("allowMethods"))),
     },
@@ -246,6 +275,8 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
             for (name, phase) in [
                 ("valid", Phase::Valid),
+                ("invalid_config", Phase::InvalidConfig),
+                ("valid", Phase::Valid),
                 ("methods", Phase::Invalid("allowMethods")),
                 ("headers", Phase::Invalid("allowHeaders")),
                 ("expose", Phase::Invalid("exposeHeaders")),
@@ -253,6 +284,34 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 ("disabled", Phase::Disabled),
                 ("valid", Phase::Valid),
             ] {
+                if matches!(phase, Phase::InvalidConfig) {
+                    let malformed = yaml_serde::to_string(&plugin(phase))?;
+                    let response = client
+                        .update("EdgionPlugins", Some(NS), NAME, malformed.clone())
+                        .await?;
+                    ensure!(
+                        response.status().as_u16() == 400,
+                        "Admin accepted an undecodable config"
+                    );
+                    // Once the previous configuration is verified, the Kubernetes runner
+                    // patches the persisted resource directly at this phase barrier.
+                    ctx.wait_phase(SCENARIO, "admin_rejected", Duration::from_secs(20))
+                        .await?;
+                    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+                        let work_dir =
+                            std::env::var_os("EDGION_WORK_DIR").context("missing integration work directory")?;
+                        let path = std::path::Path::new(&work_dir)
+                            .join("config")
+                            .join(NS)
+                            .join(format!("EdgionPlugins_{NS}_{NAME}.yaml"));
+                        ensure!(path.is_file(), "missing scenario-owned plugin source");
+                        let pending = path.with_extension("pending");
+                        tokio::fs::write(&pending, malformed).await?;
+                        tokio::fs::rename(pending, &path).await?;
+                    }
+                    ctx.wait_phase(SCENARIO, name, Duration::from_secs(30)).await?;
+                    continue;
+                }
                 crate::dynamic::apply::apply_yaml_documents(
                     &client,
                     &ctx.resolve("phase.yaml"),

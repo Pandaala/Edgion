@@ -246,7 +246,7 @@ case "$*" in
   *"get gatewayclasses.gateway.networking.k8s.io params-flap-class"*)
     printf '%s' "${FAKE_LIVE_RESOURCE_VERSION:-101}"
     ;;
-  *"get httproutes.gateway.networking.k8s.io -n edgion-default spw-route"*)
+  *"get httproutes.gateway.networking.k8s.io -n edgion-default spw-route"*|*"get httproutes.gateway.networking.k8s.io -n edgion-default cors-validation-dynamic"*)
     printf '%s' "${FAKE_LIVE_RESOURCE_VERSION:-101}"
     ;;
   *"/configclient/edgionplugins/list"*)
@@ -265,7 +265,8 @@ case "$*" in
     ;;
   *"/configclient/httproute/list"*)
     gateway_rv="${FAKE_GATEWAY_RESOURCE_VERSION:-${FAKE_LIVE_RESOURCE_VERSION:-101}}"
-    printf '{"success":true,"count":1,"data":['
+    printf '{"success":true,"count":2,"data":['
+    printf '{"metadata":{"namespace":"edgion-default","name":"cors-validation-dynamic","resourceVersion":"%s"}},' "${gateway_rv}"
     printf '{"metadata":{"namespace":"edgion-default","name":"spw-route","resourceVersion":"%s"}}' "${gateway_rv}"
     printf ']}\n'
     ;;
@@ -285,21 +286,25 @@ case "$*" in
     scenario_id=""
     for argument in "$@"; do
       case "${argument}" in
-        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitLocalDynamic|GcParamsFlap|SpWeighted|SharedHttpPolicyAdmission)
+        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitLocalDynamic|GcParamsFlap|SpWeighted|SharedHttpPolicyAdmission|CorsValidation)
           scenario_id="${argument}"
           ;;
       esac
     done
     printf 'RUN:%s\n' "${scenario_id}" >> "${KUBECTL_LOG}"
-    if [[ "${scenario_id}" == "SpWeighted" ]]; then
-      for phase in initial zero_weight final; do
-        printf '@@DYNAMIC_PHASE SpWeighted %s\n' "${phase}"
+    if [[ "${scenario_id}" == "SpWeighted" || "${scenario_id}" == "CorsValidation" ]]; then
+      phases=(initial zero_weight final)
+      if [[ "${scenario_id}" == "CorsValidation" ]]; then
+        phases=(valid admin_rejected invalid_config valid)
+      fi
+      for phase in "${phases[@]}"; do
+        printf '@@DYNAMIC_PHASE %s %s\n' "${scenario_id}" "${phase}"
         if [[ "${FAKE_DYNAMIC_HANG:-false}" == "true" ]]; then
           while true; do sleep 1; done
         fi
         IFS= read -r acknowledgement
         printf 'ACK:%s\n' "${acknowledgement}" >> "${KUBECTL_LOG}"
-        [[ "${acknowledgement}" == "@@DYNAMIC_PHASE_ACK SpWeighted ${phase} OK" ]] || exit 9
+        [[ "${acknowledgement}" == "@@DYNAMIC_PHASE_ACK ${scenario_id} ${phase} OK" ]] || exit 9
       done
     fi
     if [[ "${FAKE_DYNAMIC_FAILURE:-}" == "${scenario_id}" ]]; then
@@ -447,6 +452,22 @@ assert_contains "${TEMP_DIR}/cluster-scoped.log" "@@DYNAMIC_RESULT GcParamsFlap 
 [[ "$(grep -c 'CALL:delete edgiongatewayclassconfigs.edgion.io params-flap-egc --ignore-not-found --wait=true' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "reset-absent cluster resource was not deleted before and after execution"
 assert_not_contains "${KUBECTL_LOG}" "get gatewayclasses.gateway.networking.k8s.io -n -"
+
+: > "${KUBECTL_LOG}"
+cors_manifest="${TEMP_DIR}/cors-scenarios.tsv"
+grep '^CorsValidation[[:space:]]' "${SCRIPT_DIR}/../k8s_dynamic_scenarios.tsv" > "${cors_manifest}"
+write_fixture "${SAFE_CONF}/EdgionPlugins/Cors/DynamicTest/initial/resource.yaml" "cors-validation-dynamic"
+PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+  DYNAMIC_MANIFEST="${cors_manifest}" FAKE_DYNAMIC_REGISTRY="CorsValidation" \
+  SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
+  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario CorsValidation \
+  > "${TEMP_DIR}/cors-phases.log" 2>&1 || fail "CORS source patch barrier failed"
+assert_contains "${TEMP_DIR}/cors-phases.log" "@@DYNAMIC_RESULT CorsValidation PASS 0"
+[[ "$(grep -c '^CALL:patch edgionplugins.edgion.io cors-validation-dynamic -n edgion-default' "${KUBECTL_LOG}")" -eq 1 ]] \
+  || fail "expected exactly one direct CORS source patch"
+assert_contains "${KUBECTL_LOG}" '"path":"/spec/requestPlugins/0/config/allowCredentials","value":{"invalid":true}'
+assert_contains "${KUBECTL_LOG}" 'ACK:@@DYNAMIC_PHASE_ACK CorsValidation admin_rejected OK'
+assert_contains "${KUBECTL_LOG}" 'ACK:@@DYNAMIC_PHASE_ACK CorsValidation invalid_config OK'
 
 : > "${KUBECTL_LOG}"
 PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \

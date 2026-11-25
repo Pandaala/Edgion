@@ -17,6 +17,23 @@ use super::common::{
 };
 use super::types::*;
 
+/// The watcher can publish a fail-closed marker for a stored resource. Reject
+/// that lossy conversion before an Admin write can overwrite the source.
+fn admit_http_plugins(state: &AdminState, content: &str) -> Result<String, StatusCode> {
+    let is_k8s = state.is_k8s_mode();
+    let plugins: EdgionPlugins = parse_resource_and_update_version(content, !is_k8s)?;
+    if plugins.has_undecodable_plugin_config() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    validate_resource(
+        &state.schema_validator,
+        edgion_resources::ResourceKind::EdgionPlugins,
+        &plugins,
+        is_k8s,
+    )?;
+    serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 /// Pagination query parameters for list endpoints.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -240,8 +257,7 @@ pub async fn create_namespaced(
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::EdgionPlugins => {
-            let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            let json_content = admit_http_plugins(&state, &content)?;
             warnings = unknown_field_warnings(kind, &content);
             if !warnings.is_empty() {
                 tracing::warn!(
@@ -254,7 +270,6 @@ pub async fn create_namespaced(
                     "Resource contains keys not recognized by the schema"
                 );
             }
-            let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
@@ -590,8 +605,7 @@ pub async fn update_namespaced(
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::EdgionPlugins => {
-            let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            let json_content = admit_http_plugins(&state, &content)?;
             warnings = unknown_field_warnings(kind, &content);
             if !warnings.is_empty() {
                 tracing::warn!(
@@ -604,7 +618,6 @@ pub async fn update_namespaced(
                     "Resource contains keys not recognized by the schema"
                 );
             }
-            let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one_if_version(
                     kind.as_str(),

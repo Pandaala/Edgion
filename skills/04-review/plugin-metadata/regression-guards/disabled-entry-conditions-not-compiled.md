@@ -11,13 +11,20 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-An entry-level `enable: false` on EdgionPlugins is **semantically inert**: it is
+For a successfully decoded, supported entry, `enable: false` on EdgionPlugins is **semantically inert**: it is
 not built, not run, and its dormant `conditions` (regex / `timeRange`) and inner
 config MUST NOT produce a preparse error or flip the resource to
 `Accepted=False`. Both the schema layer (`validate_plugins` Pass 1) and the
 Gateway (`compile_plugin_conditions`) now skip disabled entries before compiling
 conditions, matching what Pass 2 / `add_from_*` already did for config / alias /
 stage / dependency resolution.
+
+An unknown type or an undecodable HTTP plugin config hits the
+[source validity check](../../resources/intentional-design/unknown-plugin-variant-strict-enum.md)
+before the enable switch. The inert-entry rule applies after this check.
+Once reported, a non-executable entry cannot claim a Redis overflow alias or
+contribute a dye response-header collision. Controller validation and Gateway
+compilation check these relationships across enabled, executable entries.
 
 Fix suggestions of the form "compile/validate conditions for every entry
 regardless of `enable` so problems surface early" are **not accepted** — a parked

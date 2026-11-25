@@ -4222,7 +4222,7 @@ fn ep_ref_bearing_variants_are_classified() {
     // EdgionConfigData refs; everything else must map to false.
     fn carries_config_data_ref(p: &EdgionPlugin) -> bool {
         match p {
-            EdgionPlugin::Unsupported => false,
+            EdgionPlugin::Unsupported | EdgionPlugin::InvalidConfig(_) => false,
             EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::RequestAccessPolicy(_)
@@ -7342,26 +7342,39 @@ async fn condition_tree_body_and_dye_walk_both_passes_and_clear_removed_refs() {
 }
 
 #[test]
-fn unsupported_plugin_reports_invalid_status_even_when_disabled() {
+fn non_executable_plugin_reports_invalid_status_even_when_disabled() {
     let (ctx, _) = make_ctx_with_secrets(HashMap::new());
-    let mut ep: EdgionPlugins = serde_json::from_value(serde_json::json!({
-        "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
-        "metadata":{"name":"unknown", "namespace":"default"},
-        "spec":{"requestPlugins":[{"type":"FuturePlugin", "enable":false, "config":{}}]}
-    }))
-    .unwrap();
-    let errors = EdgionPluginsHandler.preparse(&mut ep, &ctx);
-    assert_eq!(errors, vec!["requestPlugins[0]: unsupported plugin type"]);
-    EdgionPluginsHandler.update_status(&mut ep, &ctx, &errors);
-    let status = serde_json::to_value(ep.status).unwrap();
-    let accepted = status["conditions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|condition| condition["type"] == "Accepted")
+    for (entry, error) in [
+        (
+            serde_json::json!({"type":"FuturePlugin", "enable":false, "config":{}}),
+            "unsupported plugin type",
+        ),
+        (
+            serde_json::json!({"type":"LdapAuth", "enable":false, "config":{
+                "ldapHost":"ldap.example.com","baseDn":"dc=example","attribute":"uid","ldapPort":"invalid"
+            }}),
+            "invalid plugin config",
+        ),
+    ] {
+        let mut ep: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins",
+            "metadata":{"name":"invalid", "namespace":"default"},
+            "spec":{"requestPlugins":[entry]}
+        }))
         .unwrap();
-    assert_eq!(accepted["status"], "False");
-    assert_eq!(accepted["reason"], "Invalid");
+        let errors = EdgionPluginsHandler.preparse(&mut ep, &ctx);
+        assert_eq!(errors, vec![format!("requestPlugins[0]: {error}")]);
+        EdgionPluginsHandler.update_status(&mut ep, &ctx, &errors);
+        let status = serde_json::to_value(ep.status).unwrap();
+        let accepted = status["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|condition| condition["type"] == "Accepted")
+            .unwrap();
+        assert_eq!(accepted["status"], "False");
+        assert_eq!(accepted["reason"], "Invalid");
+    }
 }
 
 #[tokio::test]

@@ -27,6 +27,15 @@ fail-open（失败即放行），而不是无害的空操作。
 （`ProxyProtocolTrust`、`WafRuleBundle`、`WafPolicy`）会拒绝未知配置字段。
 如需准入检查，可在 apply 前调用 `POST /api/v1/validate/{kind}`。
 
+如果已知 HTTP 插件的 `config` 无法解码，例如 `LdapAuth` 的 `ldapPort` 填成了文本，
+Admin API 的 POST 和 PUT 会返回 HTTP 400，保留已有资源及其生效配置。即使 Controller
+在 Kubernetes 模式下没有加载本地 CRD 校验器，只读校验接口也会通过 `validationErrors`
+报告这类错误。向 Kubernetes API 提交清单时，由集群实际安装的 CRD 执行结构校验。
+如果文件系统、etcd 或 Kubernetes 中已经存有这类配置，Controller 仍能读取这份
+`EdgionPlugins` 及同一列表中的其他资源，并在问题资源上报告
+`Accepted=False`，指出阶段和从零开始的条目下标。即使禁用了该条目，Gateway 也会拒绝
+使用这条无效插件链的流量。请在提交的清单中修正对应条目后重新应用。
+
 未知扩展**类型**的语义不同。LinkSys 的 `spec.type` 和 EdgionConfigData 的
 `spec.data.type` 是开放的 CRD 字符串，但当前二进制不支持的类型会报告
 `Accepted=False/Invalid`。类型化解码器丢弃其名称和配置，同步无效标记以撤下旧客户端或

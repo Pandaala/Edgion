@@ -40,9 +40,18 @@ Use cases:
 4. LDAP Simple Bind verification
 5. On success, inject upstream headers and continue forwarding
 
-A username containing a control character (including TAB and NUL) is rejected
-with `401` before any LDAP request. In search mode, steps 3-4 are replaced by the
+Both modes trim surrounding whitespace from the username, including leading or
+trailing tabs. If the trimmed username is empty or still contains a control
+character (such as an embedded TAB or a NUL), the gateway returns `401` before
+contacting LDAP. In search mode, steps 3-4 are replaced by the
 flow in [Search Mode](#search-mode).
+
+In bind mode, after successful authentication, the gateway writes the username from the credentials
+to `credentialIdentifierHeader` (default `X-Credential-Identifier`), trimming
+surrounding whitespace and preserving case. For example, if the directory
+stores `uid=alice` and accepts a login as `ALICE`, the upstream receives
+`ALICE`. If your upstream ACL matches the stored username exactly, use search
+mode with `attribute: uid`. The header then carries the entry's value, `alice`.
 
 ## Configuration Parameters
 
@@ -318,7 +327,7 @@ config:
 | LDAP service unreachable/timeout | `503` | Service unavailable |
 | StartTLS refused by the server (non-zero result code) | `503` | Counted as `starttls_rejected`, separate from `unreachable` |
 | LDAP destination denied by egress policy | `503` | Same generic body as unreachable |
-| Username contains a control character | `401` | Rejected before any LDAP request |
+| Trimmed username contains a control character | `401` | Rejected before any LDAP request |
 | Search mode: username longer than 1024 bytes | `401` | Rejected before any LDAP request |
 | Group requirements: correct password, not a member | `403` | `403 Forbidden`; checked only after a successful user bind |
 | Search mode: unknown, ambiguous or unsuitable user entry | `401` | Same as a wrong password |

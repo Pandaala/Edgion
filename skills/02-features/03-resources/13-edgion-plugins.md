@@ -212,7 +212,7 @@ by the field name.
 
 ### `enable: false` means bypass, not reject
 
-An entry-level `enable: false` is **semantically inert**: the entry is not
+For a successfully decoded, supported entry, `enable: false` is **semantically inert**: the entry is not
 built, not run, and cannot invalidate the containing resource through its
 dormant inner configuration. Both the Controller schema layer
 (`EdgionPlugins::validate_plugins`) and the Gateway compilation
@@ -234,7 +234,8 @@ distinction is:
 | Entry state | Built / run | Inner config + conditions validated | Effect on the resource |
 |-------------|-------------|-------------------------------------|------------------------|
 | enabled and valid | yes | yes | none |
-| disabled (`enable: false`) | no | no | none (stays `Accepted=True`) |
+| disabled, typed entry (`enable: false`) | no | no | none (stays `Accepted=True`) |
+| unknown HTTP type or undecodable HTTP plugin config, even if disabled | no | decode marker reported by stage and index | `Accepted=False`; resource fails closed |
 | enabled and invalid | no | yes | resource fails closed (HTTP 500 per request) |
 
 ## Secret Dependencies

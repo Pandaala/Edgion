@@ -67,6 +67,42 @@ fn ai_ordering_resource(types: &[&str]) -> EdgionPlugins {
 }
 
 #[test]
+fn undecodable_entries_do_not_claim_aliases_or_dye_headers() {
+    use serde_json::json;
+
+    let valid = json!({"requestPlugins": [
+        {"type":"RateLimitLocal","alias":"local","config":{"rate":50,"onLimitExceeded":"Continue"}},
+        {"type":"RateLimitRedis","conditions":{"run":{"allOf":[{"type":"rateLimitExceeded","pluginAlias":"local"}]}},
+         "config":{"redisRef":"apps/cache","quotas":[{"name":"default","key":[],"policies":[{"rate":1,"interval":"1h"}]}]}},
+        {"type":"Canary","config":{"enable":true,"activeProfile":"stable","profiles":{"stable":{"name":"app"}},"onInvalid":"fallback"},
+         "dye":{"response":[{"name":"X-Dye","on":["success"]}]}}
+    ]});
+    let invalid = json!({"type":"Cors","alias":"local","config":{"allowCredentials":{}},
+        "dye":{"response":[{"name":"x-dye","on":["fallback"]}]}});
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+        "upstreamResponsePlugins",
+    ] {
+        let mut spec = valid.clone();
+        let entries = spec
+            .as_object_mut()
+            .unwrap()
+            .entry(stage)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap();
+        let index = entries.len();
+        entries.push(invalid.clone());
+        let resource = EdgionPlugins::new("parity", serde_json::from_value(spec).unwrap());
+        let expected = [format!("{stage}[{index}]: invalid plugin config")];
+        assert_eq!(resource.validate_plugins(), expected);
+        assert_eq!(compile_plugins(&resource).preparse_errors, expected);
+    }
+}
+
+#[test]
 fn request_mirror_standard_validation_has_controller_gateway_parity() {
     let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
         "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",

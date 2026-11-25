@@ -31,7 +31,7 @@ impl PluginGeneration {
                 if let Some(entries) = $entries.as_mut() {
                     let mut aliases = HashSet::new();
                     for (index, entry) in entries.iter_mut().enumerate() {
-                        if !entry.is_enabled() || matches!(entry.plugin, edgion_resources::EdgionPlugin::Unsupported) {
+                        if !entry.is_enabled() || entry.plugin.is_non_executable() {
                             continue;
                         }
                         let error = entry
@@ -86,9 +86,9 @@ impl PluginGeneration {
             ($entries:expr) => {
                 for entry in $entries.iter().flatten().filter(|entry| entry.is_enabled()) {
                     if let Some(action) =
-                        policy.and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.type_name()))
+                        policy.and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.policy_type_name()))
                     {
-                        actions.push((entry.plugin.type_name(), action));
+                        actions.push((entry.plugin.policy_type_name(), action));
                     }
                 }
             };
@@ -109,7 +109,7 @@ impl PluginGeneration {
                 for (index, entry) in $entries.iter().flatten().enumerate() {
                     if entry.is_enabled()
                         && policy
-                            .and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.type_name()))
+                            .and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.policy_type_name()))
                             .is_none()
                     {
                         needed.insert(EntrySlot {
@@ -164,7 +164,7 @@ impl PluginGeneration {
                         continue;
                     }
                     if policy
-                        .and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.type_name()))
+                        .and_then(|p| p.action_for(PluginFamily::Http, entry.plugin.policy_type_name()))
                         .is_some()
                     {
                         entry.enable = false;

@@ -165,6 +165,10 @@ pub enum EdgionPlugin {
     Canary(CanaryConfig),
     /// Wasm filter (proxy-wasm ABI guest module executed via wasmtime)
     Wasm(WasmConfig),
+    /// Known HTTP plugin whose configuration did not decode. The rejected
+    /// payload is discarded before status generation or conf_sync.
+    #[schemars(skip)]
+    InvalidConfig(InvalidPluginConfig),
     /// Non-executable marker for a plugin type this binary does not support.
     /// Validation rejects the containing resource, including disabled entries.
     #[serde(other, deserialize_with = "crate::resources::common::discard_unsupported_config")]
@@ -174,6 +178,39 @@ pub enum EdgionPlugin {
     // Cache(CacheConfig),
     // Transform(TransformConfig),
     // ...
+}
+
+/// A failed HTTP config retains only a name from the binary's policy catalog.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidPluginConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_type: Option<&'static str>,
+}
+
+impl InvalidPluginConfig {
+    pub(super) fn from_type_name(name: &str) -> Self {
+        use crate::resources::plugin_policy::{canonical_type_names, PluginFamily};
+        use std::{collections::BTreeSet, sync::LazyLock};
+
+        static HTTP_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| canonical_type_names(PluginFamily::Http));
+        Self {
+            plugin_type: HTTP_NAMES.get(name).map(String::as_str),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InvalidPluginConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            plugin_type: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self::from_type_name(wire.plugin_type.as_deref().unwrap_or_default()))
+    }
 }
 
 /// Which async plugin stage a body requirement is being asked about.
@@ -186,6 +223,27 @@ pub enum BodyStage {
 }
 
 impl EdgionPlugin {
+    /// Name used for GatewayClass policy lookup and attribution, including failed configs.
+    pub fn policy_type_name(&self) -> &'static str {
+        match self {
+            Self::InvalidConfig(marker) => marker.plugin_type.unwrap_or("InvalidConfig"),
+            _ => self.type_name(),
+        }
+    }
+
+    /// Whether this entry invalidates its source before enable or policy filtering.
+    pub fn is_non_executable(&self) -> bool {
+        self.decode_error().is_some()
+    }
+
+    pub(super) fn decode_error(&self) -> Option<&'static str> {
+        match self {
+            Self::Unsupported => Some("unsupported plugin type"),
+            Self::InvalidConfig(_) => Some("invalid plugin config"),
+            _ => None,
+        }
+    }
+
     /// Whether this typed plugin conflicts with a separate protocol conversion owner.
     /// Gateway publication additionally requires successful executable construction.
     pub fn is_ai_conversion_owner(&self) -> bool {
@@ -243,6 +301,7 @@ impl EdgionPlugin {
             | Self::GeoIpLocation(_)
             | Self::Canary(_)
             | Self::Wasm(_)
+            | Self::InvalidConfig(_)
             | Self::Unsupported => false,
         }
     }
@@ -260,7 +319,7 @@ impl EdgionPlugin {
         use super::body_requirement::BodyRequirement;
         use EdgionPlugin::*;
         match self {
-            EdgionPlugin::Unsupported => None,
+            EdgionPlugin::InvalidConfig(_) | EdgionPlugin::Unsupported => None,
             // HMAC consumes the REQUEST body only, and only when Digest
             // verification is on. Never at the response stage.
             HmacAuth(cfg) if cfg.validate_request_body && stage == BodyStage::Request => {
@@ -432,6 +491,7 @@ impl EdgionPlugin {
     /// Get the plugin type name
     pub fn type_name(&self) -> &'static str {
         match self {
+            EdgionPlugin::InvalidConfig(_) => "InvalidConfig",
             EdgionPlugin::Unsupported => "Unsupported",
             EdgionPlugin::RequestHeaderModifier(_) => "RequestHeaderModifier",
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
@@ -518,7 +578,7 @@ impl EdgionPlugin {
             return &[];
         }
         match self {
-            EdgionPlugin::Unsupported => &[],
+            EdgionPlugin::InvalidConfig(_) | EdgionPlugin::Unsupported => &[],
             EdgionPlugin::Canary(c) => {
                 // The internal kill switch pauses selection, not the entry's
                 // anti-spoof ownership. Keep its valid request dye plan installed.
@@ -637,6 +697,7 @@ impl EdgionPlugin {
     /// the wire contract cannot drift from the type list.
     pub fn dye_type_prefix(&self) -> &'static str {
         match self {
+            EdgionPlugin::InvalidConfig(_) => "invalid_config",
             EdgionPlugin::Unsupported => "unsupported",
             EdgionPlugin::Canary(_) => "canary",
             EdgionPlugin::DynamicInternalUpstream(_) => "dynamic_internal_upstream",
@@ -717,7 +778,7 @@ impl EdgionPlugin {
                 .collect()
         }
         match self {
-            EdgionPlugin::Unsupported => Vec::new(),
+            EdgionPlugin::InvalidConfig(_) | EdgionPlugin::Unsupported => Vec::new(),
             EdgionPlugin::ProxyRewrite(c) => c.host_from_header.iter().map(|source| source.name.clone()).collect(),
             // DirectEndpoint / DynamicInternalUpstream / DynamicExternalUpstream:
             // a single `from: KeyGet` field.
@@ -814,7 +875,7 @@ impl EdgionPlugin {
     pub fn validation_error(&self) -> Option<String> {
         use crate::resources::edgion_plugins::PluginValidation;
         match self {
-            EdgionPlugin::Unsupported => Some("unsupported plugin type".to_string()),
+            EdgionPlugin::InvalidConfig(_) | EdgionPlugin::Unsupported => self.decode_error().map(str::to_string),
             EdgionPlugin::CtxSet(c) => c.validation_error(),
             EdgionPlugin::WebhookKeyGet(c) => c.validation_error(),
             EdgionPlugin::AiProxy(c) => c.validation_error(),

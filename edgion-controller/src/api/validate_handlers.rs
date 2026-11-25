@@ -10,7 +10,7 @@
 //! 1. [`extract_resource_metadata`] on the raw body (same early sanity check
 //!    the write path performs);
 //! 2. the original Gateway API source document is checked against its
-//!    registered schema before typed parsing; other kinds retain the existing
+//!    registered schema before typed parsing. Other kinds retain the existing
 //!    typed-then-schema order;
 //! 3. a typed parse via [`parse_resource_and_update_version`] with
 //!    `update_version: false` — no version bump, nothing persisted. The

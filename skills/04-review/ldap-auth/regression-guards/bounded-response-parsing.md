@@ -166,11 +166,16 @@ The `ldap` cargo feature was removed. LDAP now compiles unconditionally because
 the `client` feature, tokio's I/O traits and `zeroize` (`alloc` only))
 ([optional subsystem features](../../packaging/intentional-design/gateway-optional-subsystem-features.md)).
 
-**Open limitation: interoperability.** OpenLDAP is covered by the integration
-suites. No Active Directory or Samba AD DC bind (rc 0, rc 49 with the `data 52e`
-diagnostic) has been run against this implementation; no environment was
-available on 2026-11-09. AD-specific tails are skipped by length; a Notice
-of Disconnection (message ID 0) fails the bind closed.
+**Samba AD DC simple bind** (`ldap-auth-follow-ups` item 6, 2026-11-25).
+At `20a6807df`, a temporary Rust client linked the workspace `edgion-ldap`
+and called `BindSession::simple_bind` on separate TCP connections to Samba
+4.17.12-Debian. The disposable DC allowed cleartext simple binds on a port
+published to host loopback. With the same test account DN, the correct password
+returned `LdapResult.result_code == 0` and a wrong password returned `49`.
+A test relay checked the `diagnosticMessage` field of the latter BindResponse
+for `data 52e` and forwarded the same bytes to the client. This run covers
+Samba simple bind only. Windows AD DS, search mode, TLS and the Gateway HTTP
+path were outside its scope.
 
 ## Verification and re-evaluation
 
@@ -221,7 +226,7 @@ Re-evaluate when any of these change:
 - A buffered reader or speculative read is introduced in `client.rs`.
 - Any recursive helper is introduced in `edgion-ldap`.
 - The LDAP client starts dialing or resolving by itself.
-- An AD/Samba interoperability run becomes available.
+- A Windows AD DS bind is tested or a directory returns a new BindResponse shape.
 
 ## Resolution references
 

@@ -92,8 +92,8 @@ following invariants hold and must keep holding:
    403 `Deny not in required group` + delay, no identity header; re-bind rc 49
    → generic 401 `service_bind_fail`; other re-bind/search failures → 503
    `search_fail`. An explicit `[]` or `null` list is rejected by validation
-   (`null` decodes as an empty list on purpose: a decode error would drop the
-   whole EdgionPlugins object and break the Kubernetes list).
+   (`null` decodes as an empty list so validation can identify the group
+   requirement; other unparseable configurations receive the HTTP entry error).
    Moving the group step before the user bind was rejected at review: it gave
    existing users a password-free 503 (existence oracle) and membership timing.
 
@@ -145,15 +145,13 @@ following invariants hold and must keep holding:
   the docs lose the prerequisite.
 - **401 vs 403 confirms a non-member's password.** Accepted product decision
   (Kong parity); docs point to putting the group in `searchFilter` instead.
-- **Bind mode forwards the client's spelling.** In bind mode the identity
-  header carries the trimmed username as typed (`ALICE` for `uid=alice`), since
-  no entry is read; search mode forwards the canonical value. Tracked in
-  `tasks/todo/ldap-auth-follow-ups.md`.
+- For the identity forwarded without a search, see the
+  [direct-bind identity decision](../intentional-design/direct-bind-identity.md).
 - **No pool.** Three round trips (five with group requirements on a
   successful login) on one per-request connection
   ([per-request connection](../intentional-design/per-request-connection-accepted.md)).
-- **Interop.** OpenLDAP verified; no Active Directory run yet
-  (`tasks/todo/ldap-auth-follow-ups.md`).
+- **Interop.** Search mode has been verified with OpenLDAP. The
+  [Samba AD DC verification](bounded-response-parsing.md) covers simple bind only.
 
 ## Verification and re-evaluation
 

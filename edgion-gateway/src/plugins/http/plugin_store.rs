@@ -279,25 +279,25 @@ pub(crate) fn compile_plugins_with_cache(
 ) -> Arc<CompiledPlugins> {
     let mut spec = clone_for_compilation(ep, |_| true);
     let mut runtime = PluginRuntime::new();
-    let unsupported_errors = ep.unsupported_plugin_errors();
-    if !unsupported_errors.is_empty() {
-        errors.extend(unsupported_errors);
-        runtime.record_unsupported_plugin();
+    let decode_errors = ep.unsupported_plugin_errors();
+    if !decode_errors.is_empty() {
+        errors.extend(decode_errors);
         // Keep entry indices stable for the generation cache, but do not build
         // conditions, dependencies, or filters for non-executable sentinels.
-        macro_rules! disable_unsupported {
+        macro_rules! disable_non_executable {
             ($entries:expr) => {
                 for entry in $entries.iter_mut().flatten() {
-                    if matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                    if entry.plugin.is_non_executable() {
+                        runtime.record_non_executable_entry(&entry.plugin);
                         entry.enable = false;
                     }
                 }
             };
         }
-        disable_unsupported!(spec.spec.request_plugins);
-        disable_unsupported!(spec.spec.upstream_response_filter_plugins);
-        disable_unsupported!(spec.spec.upstream_response_body_filter_plugins);
-        disable_unsupported!(spec.spec.upstream_response_plugins);
+        disable_non_executable!(spec.spec.request_plugins);
+        disable_non_executable!(spec.spec.upstream_response_filter_plugins);
+        disable_non_executable!(spec.spec.upstream_response_body_filter_plugins);
+        disable_non_executable!(spec.spec.upstream_response_plugins);
     }
 
     runtime.configure_request_id_scope(
@@ -360,46 +360,7 @@ pub(crate) fn compile_plugins_with_cache(
     }
 
     errors.extend(runtime.add_resource_filters_with_cache(&spec, cache));
-    // Resource-level dye "set clobber" check: a failure rule's response
-    // header must not equal (case-insensitively) any success rule's response
-    // header across ANY entry in this resource — success renders with Set
-    // semantics and would silently wipe an appended failure value queued
-    // earlier by a different entry. Runs once over all four stage arrays
-    // chained, mirroring the schema-layer `EdgionPlugins::validate_plugins`
-    // check (only active, effective enabled entries participate, matching
-    // `add_from_*` above).
-    let all_dye_suites = spec
-        .spec
-        .request_plugins
-        .iter()
-        .flatten()
-        .filter(|e| e.is_enabled())
-        .map(|e| e.dye.as_ref())
-        .chain(
-            spec.spec
-                .upstream_response_filter_plugins
-                .iter()
-                .flatten()
-                .filter(|e| e.is_enabled())
-                .map(|e| e.dye.as_ref()),
-        )
-        .chain(
-            spec.spec
-                .upstream_response_body_filter_plugins
-                .iter()
-                .flatten()
-                .filter(|e| e.is_enabled())
-                .map(|e| e.dye.as_ref()),
-        )
-        .chain(
-            spec.spec
-                .upstream_response_plugins
-                .iter()
-                .flatten()
-                .filter(|e| e.is_enabled())
-                .map(|e| e.dye.as_ref()),
-        );
-    if let Some(err) = edgion_resources::resources::edgion_plugins::dye_set_clobber_error(all_dye_suites) {
+    if let Some(err) = spec.dye_header_collision_error() {
         errors.push(err);
     }
 

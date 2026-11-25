@@ -656,6 +656,18 @@ run_phase_endpoint_inventory() {
   fi
 }
 
+run_phase_action() {
+  local scenario_id="$1"
+  local phase="$2"
+  if [[ "${scenario_id}/${phase}" == "CorsValidation/admin_rejected" ]]; then
+    kubectl patch edgionplugins.edgion.io cors-validation-dynamic -n edgion-default \
+      --request-timeout=10s --type=json \
+      -p '[{"op":"test","path":"/spec/requestPlugins/0/type","value":"Cors"},{"op":"replace","path":"/spec/requestPlugins/0/config/allowCredentials","value":{"invalid":true}}]'
+  else
+    run_phase_endpoint_inventory "${scenario_id}" "${phase}"
+  fi
+}
+
 run_scenario_with_phase_barriers() {
   local scenario_id="$1"
   local line=""
@@ -663,7 +675,7 @@ run_scenario_with_phase_barriers() {
   local marker_scenario=""
   local marker_phase=""
   local marker_extra=""
-  local endpoint_failed=false
+  local phase_failed=false
   local exec_rc=0
   local watchdog_rc=0
   local input_fifo=""
@@ -761,14 +773,14 @@ run_scenario_with_phase_barriers() {
         if [[ "${marker}" != "@@DYNAMIC_PHASE" || "${marker_scenario}" != "${scenario_id}" \
           || -z "${marker_phase}" || -n "${marker_extra}" ]]; then
           echo "ERROR: malformed dynamic phase marker: ${line}" >&2
-          endpoint_failed=true
+          phase_failed=true
           printf '@@DYNAMIC_PHASE_ACK %s %s ERROR\n' "${scenario_id}" "${marker_phase:-unknown}" >&9
           continue
         fi
-        if run_phase_endpoint_inventory "${scenario_id}" "${marker_phase}"; then
+        if run_phase_action "${scenario_id}" "${marker_phase}"; then
           printf '@@DYNAMIC_PHASE_ACK %s %s OK\n' "${scenario_id}" "${marker_phase}" >&9
         else
-          endpoint_failed=true
+          phase_failed=true
           printf '@@DYNAMIC_PHASE_ACK %s %s ERROR\n' "${scenario_id}" "${marker_phase}" >&9
         fi
         ;;
@@ -798,7 +810,7 @@ run_scenario_with_phase_barriers() {
   exec 9>&-
   rm -rf -- "${LOCAL_PHASE_DIR}"
   LOCAL_PHASE_DIR=""
-  if [[ "${endpoint_failed}" == "true" && "${exec_rc}" -eq 0 ]]; then
+  if [[ "${phase_failed}" == "true" && "${exec_rc}" -eq 0 ]]; then
     exec_rc=1
   fi
   return "${exec_rc}"
@@ -968,7 +980,7 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   if [[ "${scenario_rc}" -eq 0 ]] && restore_scenario_initial "${scenario_id}"; then
     mark_scenario_clean "${scenario_id}"
     mark_scenario_dirty "${scenario_id}"
-    if [[ -f "${CONF_ROOT}/${SCENARIO_CONF_PATH}/endpoint-inventory.tsv" ]]; then
+    if [[ "${scenario_id}" == "CorsValidation" || -f "${CONF_ROOT}/${SCENARIO_CONF_PATH}/endpoint-inventory.tsv" ]]; then
       if run_scenario_with_phase_barriers "${scenario_id}"; then
         :
       else

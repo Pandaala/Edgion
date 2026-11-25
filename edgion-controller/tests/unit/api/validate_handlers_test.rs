@@ -425,3 +425,25 @@ async fn yaml_and_json_bodies_behave_identically() {
     let body = resp.0.data.expect("ok_body always carries data");
     assert!(body.ok);
 }
+
+#[tokio::test]
+async fn http_plugin_decode_failure_has_an_indexed_validation_error() {
+    let (mut state, _tmp) = make_state().await;
+    let crds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    Arc::get_mut(&mut state).unwrap().schema_validator = Arc::new(SchemaValidator::from_crd_dir(&crds).unwrap());
+    let raw = serde_json::json!({
+        "apiVersion":"edgion.io/v1", "kind":"EdgionPlugins", "metadata":{"name":"bad","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"KeyAuth","config":{"hideCredentials":"invalid"}}]}
+    });
+    let verdict = validate_kind(State(state), Path("EdgionPlugins".into()), Bytes::from(raw.to_string()))
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+    assert!(!verdict.ok);
+    assert!(verdict
+        .validation_errors
+        .iter()
+        .any(|error| error.contains("requestPlugins[0]")));
+}

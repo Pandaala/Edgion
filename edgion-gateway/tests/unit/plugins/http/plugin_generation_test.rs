@@ -454,7 +454,49 @@ async fn latest_source_block_precedes_restricted_retained_candidate_entries() {
 }
 
 #[tokio::test]
-async fn unsupported_types_fail_closed_even_when_disabled_or_policy_masked() {
+async fn malformed_known_config_keeps_its_named_policy_after_sync() {
+    let source = resource(json!({"requestPlugins": [{"type": "LdapAuth", "config": {"ldapPort": "invalid"}}]}));
+    let synced: EdgionPlugins = serde_json::from_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let mut generation = PluginGeneration::new(synced);
+    let block = PluginPolicyConfig {
+        deny: vec![PluginPolicyEntryConfig {
+            name: "http/LdapAuth".into(),
+            action: Some(PolicyActionKind::Block),
+            block_status: Some(451),
+        }],
+        ..Default::default()
+    }
+    .compile()
+    .unwrap();
+    let allow = PluginPolicyConfig {
+        allow: Some(vec!["http/LdapAuth".into()]),
+        ..Default::default()
+    }
+    .compile()
+    .unwrap();
+    let bypass = restriction(&["LdapAuth"], PolicyActionKind::Bypass);
+    assert_eq!(
+        generation.policy_actions(Some(&block)),
+        [("LdapAuth", PluginPolicyAction::Block { status: 451 })]
+    );
+    assert!(generation.policy_actions(Some(&allow)).is_empty());
+    assert_eq!(
+        generation.policy_actions(Some(&bypass)),
+        [("LdapAuth", PluginPolicyAction::Bypass)]
+    );
+    for (policy, status) in [(&block, 451), (&allow, 500), (&bypass, 500)] {
+        let view = generation.compile(Some(policy));
+        assert!(!view.is_activatable);
+        let gate = view.plugin_runtime.request_plugins_iter().next().unwrap();
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("PolicyTest");
+        assert!(matches!(gate.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: actual, .. } if actual == status));
+    }
+}
+
+#[tokio::test]
+async fn non_executable_entries_fail_closed_even_when_disabled_or_policy_masked() {
     let bypass = PluginPolicyConfig {
         allow: Some(Vec::new()),
         denied_action: PolicyActionKind::Bypass,
@@ -470,20 +512,27 @@ async fn unsupported_types_fail_closed_even_when_disabled_or_policy_masked() {
     ] {
         for enabled in [true, false] {
             for policy in [None, Some(&bypass)] {
-                let source = resource(json!({stage: [{"type":"FuturePlugin", "enable":enabled, "config":{}}]}));
-                let expected = source.validate_plugins();
-                let mut generation = PluginGeneration::new(source);
-                let view = generation.compile(policy);
-                assert!(!view.is_activatable);
-                assert!(!view.retain_previous_on_invalid_update);
-                assert_eq!(view.preparse_errors, expected);
-                let gate = view.plugin_runtime.request_plugins_iter().next().unwrap();
-                let mut session = MockPluginSession::new();
-                let mut log = PluginLog::new("UnsupportedTest");
-                assert!(matches!(
-                    gate.run_request(&mut session, &mut log).await,
-                    PluginRunningResult::ErrResponse { status: 500, .. }
-                ));
+                for entry in [
+                    json!({"type":"FuturePlugin", "enable":enabled, "config":{}}),
+                    json!({"type":"LdapAuth", "enable":enabled, "config":{
+                        "ldapHost":"ldap.example.com","baseDn":"dc=example","attribute":"uid","ldapPort":"invalid"
+                    }}),
+                ] {
+                    let source = resource(json!({stage: [entry]}));
+                    let expected = source.validate_plugins();
+                    let mut generation = PluginGeneration::new(source);
+                    let view = generation.compile(policy);
+                    assert!(!view.is_activatable);
+                    assert!(!view.retain_previous_on_invalid_update);
+                    assert_eq!(view.preparse_errors, expected);
+                    let gate = view.plugin_runtime.request_plugins_iter().next().unwrap();
+                    let mut session = MockPluginSession::new();
+                    let mut log = PluginLog::new("UnsupportedTest");
+                    assert!(matches!(
+                        gate.run_request(&mut session, &mut log).await,
+                        PluginRunningResult::ErrResponse { status: 500, .. }
+                    ));
+                }
             }
         }
     }
