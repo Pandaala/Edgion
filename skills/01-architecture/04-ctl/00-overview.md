@@ -31,6 +31,7 @@ The CLI target name `center` refers to the Controller's ConfCenter data source. 
 | Command | center | server | client |
 |------|--------|--------|--------|
 | get | Supported | Supported | Supported |
+| diagnostics | Supported | Not supported | Not supported |
 | apply | Supported | Not supported | Not supported |
 | delete | Supported | Not supported | Not supported |
 

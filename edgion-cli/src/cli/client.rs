@@ -348,6 +348,31 @@ impl EdgionClient {
         })
     }
 
+    pub(crate) async fn diagnostics(&self, report: super::DiagnosticReport) -> Result<Value> {
+        let path = match report {
+            super::DiagnosticReport::Conflicts => "/api/v1/diagnostics/conf-conflicts",
+            super::DiagnosticReport::UnknownFields => "/api/v1/diagnostics/unknown-fields",
+        };
+        let url = self.build_url(path);
+        let response = self.send_request(self.client.get(&url), &url).await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::CONFLICT {
+            return Err(diagnostics_conflict_error(response).await);
+        }
+        if !status.is_success() {
+            bail!("Controller diagnostics request failed with HTTP {status}");
+        }
+        let envelope: Value = response
+            .json()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("Failed to read Controller diagnostics JSON")?;
+        if envelope["success"] != true || !report.matches_data(&envelope["data"]) {
+            bail!("Controller did not return a successful {report:?} diagnostics report");
+        }
+        Ok(envelope)
+    }
+
     /// GET request - list all resources of a kind (cross-namespace)
     pub async fn list_all(&self, kind: &str, limit: Option<u32>, continue_token: Option<&str>) -> Result<Response> {
         let base = match self.target {
@@ -550,14 +575,52 @@ impl EdgionClient {
     }
 }
 
+/// Display the advertised address without forwarding credentials or choosing
+/// a transport for an operator who may be connecting through a TLS proxy.
+async fn diagnostics_conflict_error(mut response: Response) -> anyhow::Error {
+    let fallback = anyhow::anyhow!("Controller diagnostics request failed with HTTP 409 Conflict");
+    let mut body = Vec::new();
+    const MAX_HINT_BYTES: usize = 4096;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if chunk.len() <= MAX_HINT_BYTES - body.len() => body.extend_from_slice(&chunk),
+            Ok(None) => break,
+            _ => return fallback,
+        }
+    }
+    let Ok(hint) = serde_json::from_slice::<Value>(&body) else {
+        return fallback;
+    };
+    if hint["error"] != "not leader" {
+        return fallback;
+    }
+    if let Some(address) = hint["leader"].as_str().and_then(leader_hint_address) {
+        return anyhow::anyhow!("{fallback}: not leader; retry on the leader at {address}");
+    }
+    anyhow::anyhow!("{fallback}: not leader; retry on the active Controller")
+}
+
+fn leader_hint_address(raw: &str) -> Option<String> {
+    if raw.contains("://") {
+        return http_origin(raw);
+    }
+    let (host, port) = raw.rsplit_once(':')?;
+    if !host.bytes().all(|c| c.is_ascii_alphanumeric() || b".-:[]".contains(&c)) {
+        return None;
+    }
+    let host = url::Host::parse(host).ok()?;
+    let port = port.parse::<u16>().ok()?;
+    Some(format!("{host}:{port}"))
+}
+
+fn http_origin(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.origin().ascii_serialization())
+}
+
 /// Project an endpoint to its HTTP(S) origin without credentials or request data.
 pub(crate) fn diagnostic_origin(raw: &str) -> String {
-    match reqwest::Url::parse(raw) {
-        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
-            url.origin().ascii_serialization()
-        }
-        _ => "<invalid endpoint>".to_string(),
-    }
+    http_origin(raw).unwrap_or_else(|| "<invalid endpoint>".to_string())
 }
 
 /// Format network error with detailed diagnostics.

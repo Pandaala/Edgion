@@ -56,7 +56,7 @@ edgion-cli --server https://edgion-controller.example.com:12101 --ca-cert ./corp
 
 | Target | 组件 | 默认端口 | 支持的命令 | 说明 |
 |--------|------|----------|------------|------|
-| `center` | Controller/ConfCenter | 12101 | get, apply, delete | 完整 CRUD 操作 |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete, diagnostics | 资源管理与配置诊断 |
 | `server` | Controller/ConfigServer | 12101 | get (只读) | 查看 ConfigServer 缓存 |
 | `client` | Gateway/ConfigClient | 12001 | get (只读) | 查看 Gateway 缓存 |
 
@@ -184,6 +184,26 @@ edgion-cli get service backend-svc -n default -o json
 | referencegrant | ReferenceGrant |
 | backendtlspolicy | BackendTLSPolicy |
 | edgiongatewayconfig | Edgion Gateway 配置 |
+
+### diagnostics - 查询 Controller 配置诊断
+
+```bash
+edgion-cli diagnostics conflicts
+edgion-cli diagnostics unknown-fields
+```
+
+使用默认的 `center` 目标和具有 `diagnostics` 权限的令牌。两个命令都输出 Controller
+返回的 JSON。`data.conflicts` 列出重复资源实际生效的配置文件以及被覆盖的文件，在
+FileSystem 以外的模式下为空。
+
+查询未知字段时，`data.total` 是包含未知字段的资源数，`data.truncated` 表示是否省略了资源条目。
+每个条目的 `paths` 最多列出 20 条路径，多出的路径以 `(+N more)` 标记。
+即使 `data.truncated` 为 false，超过 512 字节的路径也会缩短。报告覆盖 EdgionPlugins、
+EdgionStreamPlugins、具有类型化配置的 EdgionConfigData 和 LinkSys。通过 Admin API 写入时被剔除的未知字段
+会在当次写入响应中报告。详见[未知配置字段检测](./plugin-config-unknown-fields.md)。
+
+查询成功时退出码为 0，即使报告中列出了问题。查询失败时退出码非零。
+若 etcd 备用节点返回主节点提示，请连接当前主 Controller 后重试。
 
 ### apply - 应用配置
 

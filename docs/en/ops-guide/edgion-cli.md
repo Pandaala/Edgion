@@ -67,7 +67,7 @@ Validation is lazy: the first request returns `401` (unknown token) or `403`
 
 | Target | Component | Default Port | Supported Commands | Description |
 |--------|----------|-------------|-------------------|-------------|
-| `center` | Controller/ConfCenter | 12101 | get, apply, delete | Full CRUD operations |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete, diagnostics | Resource management and configuration diagnostics |
 | `server` | Controller/ConfigServer | 12101 | get (read-only) | View ConfigServer cache |
 | `client` | Gateway/ConfigClient | 12001 | get (read-only) | View Gateway cache |
 
@@ -207,6 +207,30 @@ edgion-cli get service backend-svc -n default -o json
 | referencegrant | ReferenceGrant |
 | backendtlspolicy | BackendTLSPolicy |
 | edgiongatewayconfig | Edgion Gateway configuration |
+
+### diagnostics - Inspect Controller configuration
+
+```bash
+edgion-cli diagnostics conflicts
+edgion-cli diagnostics unknown-fields
+```
+
+Use the default `center` target and a token with the `diagnostics` permission.
+Both commands print the Controller's JSON response. `data.conflicts` lists the
+winning and shadowed configuration files for each duplicate resource. It is empty
+outside FileSystem mode.
+
+For unknown fields, `data.total` counts affected resources and `data.truncated`
+indicates whether any resource entries were omitted. Within each entry, `paths`
+shows up to 20 paths, followed by `(+N more)` if additional paths were omitted.
+Paths longer than 512 bytes are shortened even when `data.truncated` is false.
+The report covers EdgionPlugins, EdgionStreamPlugins, typed EdgionConfigData and
+LinkSys. Unknown fields stripped during an Admin API write appear in its write
+response. See [unknown config field detection](./plugin-config-unknown-fields.md).
+
+A successful query exits with status 0 even when it finds issues. Failed queries
+exit with a nonzero status. If an etcd standby returns a leader hint, retry
+against the active Controller.
 
 ### apply - Apply Configuration
 

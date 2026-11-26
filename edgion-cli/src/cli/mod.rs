@@ -7,6 +7,7 @@ pub mod token;
 use anyhow::Result;
 use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use client::{EdgionClient, ServerTrust};
@@ -133,6 +134,12 @@ pub enum Commands {
         all: bool,
     },
 
+    /// Read a Controller diagnostics report as JSON
+    Diagnostics {
+        #[command(subcommand)]
+        report: DiagnosticReport,
+    },
+
     /// Delete a resource
     Delete {
         /// Resource kind (required if not using --file)
@@ -178,6 +185,47 @@ pub enum Commands {
 
     /// Inspect inline WAF rules locally (no authentication or network).
     Waf(commands::waf::WafArgs),
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+pub enum DiagnosticReport {
+    /// List configuration files defining the same resource
+    Conflicts,
+    /// List resources containing unrecognized configuration fields
+    UnknownFields,
+}
+
+impl DiagnosticReport {
+    fn matches_data(self, data: &serde_json::Value) -> bool {
+        use serde_json::Value;
+
+        fn string_list(value: &Value) -> bool {
+            value.as_array().is_some_and(|items| items.iter().all(Value::is_string))
+        }
+
+        match self {
+            Self::Conflicts => data["conflicts"].as_array().is_some_and(|items| {
+                items.iter().all(|item| {
+                    item["kind"].is_string()
+                        && item["key"].is_string()
+                        && item["winner"].is_string()
+                        && string_list(&item["losers"])
+                })
+            }),
+            Self::UnknownFields => {
+                data["total"].is_u64()
+                    && data["truncated"].is_boolean()
+                    && data["items"].as_array().is_some_and(|items| {
+                        items.iter().all(|item| {
+                            item["kind"].is_string()
+                                && item["namespace"].is_string()
+                                && item["name"].is_string()
+                                && string_list(&item["paths"])
+                        })
+                    })
+            }
+        }
+    }
 }
 
 impl Cli {
@@ -233,6 +281,10 @@ impl Cli {
             }
         }
 
+        if matches!(self.command, Commands::Diagnostics { .. }) && self.target != TargetType::Center {
+            anyhow::bail!("diagnostics requires --target center");
+        }
+
         // Resolve the bearer token (token-only auth):
         //   --token flag > EDGION_TOKEN env var > ~/.edgion/token file.
         // When a token is resolved we inject it as a static Bearer and skip
@@ -264,6 +316,18 @@ impl Cli {
     /// Dispatch the subcommand after the client is authenticated.
     async fn dispatch(&self, client: EdgionClient) -> Result<()> {
         match &self.command {
+            Commands::Diagnostics { report } => {
+                let report = client.diagnostics(*report).await?;
+                let mut stdout = io::stdout().lock();
+                let written = serde_json::to_writer_pretty(&mut stdout, &report)
+                    .map_err(io::Error::from)
+                    .and_then(|()| stdout.write_all(b"\n"))
+                    .and_then(|()| stdout.flush());
+                match written {
+                    Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+                    result => Ok(result?),
+                }
+            }
             Commands::Apply { file, dry_run } => {
                 if self.target != TargetType::Center {
                     anyhow::bail!("apply command only supported for 'center' target");
