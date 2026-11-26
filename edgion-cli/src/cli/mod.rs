@@ -134,6 +134,9 @@ pub enum Commands {
         all: bool,
     },
 
+    /// Read Controller instance information and readiness as JSON
+    ServerInfo,
+
     /// Read a Controller diagnostics report as JSON
     Diagnostics {
         #[command(subcommand)]
@@ -284,6 +287,9 @@ impl Cli {
         if matches!(self.command, Commands::Diagnostics { .. }) && self.target != TargetType::Center {
             anyhow::bail!("diagnostics requires --target center");
         }
+        if matches!(self.command, Commands::ServerInfo) && self.target != TargetType::Center {
+            anyhow::bail!("server-info requires --target center");
+        }
 
         // Resolve the bearer token (token-only auth):
         //   --token flag > EDGION_TOKEN env var > ~/.edgion/token file.
@@ -316,18 +322,8 @@ impl Cli {
     /// Dispatch the subcommand after the client is authenticated.
     async fn dispatch(&self, client: EdgionClient) -> Result<()> {
         match &self.command {
-            Commands::Diagnostics { report } => {
-                let report = client.diagnostics(*report).await?;
-                let mut stdout = io::stdout().lock();
-                let written = serde_json::to_writer_pretty(&mut stdout, &report)
-                    .map_err(io::Error::from)
-                    .and_then(|()| stdout.write_all(b"\n"))
-                    .and_then(|()| stdout.flush());
-                match written {
-                    Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-                    result => Ok(result?),
-                }
-            }
+            Commands::ServerInfo => print_report(&client.server_info().await?),
+            Commands::Diagnostics { report } => print_report(&client.diagnostics(*report).await?),
             Commands::Apply { file, dry_run } => {
                 if self.target != TargetType::Center {
                     anyhow::bail!("apply command only supported for 'center' target");
@@ -386,6 +382,18 @@ impl Cli {
                 unreachable!() // all handled before dispatch
             }
         }
+    }
+}
+
+fn print_report(report: &serde_json::Value) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    let written = serde_json::to_writer_pretty(&mut stdout, report)
+        .map_err(io::Error::from)
+        .and_then(|()| stdout.write_all(b"\n"))
+        .and_then(|()| stdout.flush());
+    match written {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => Ok(result?),
     }
 }
 

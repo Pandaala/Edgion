@@ -208,6 +208,13 @@ edgion-cli get service backend-svc -n default -o json
 | backendtlspolicy | BackendTLSPolicy |
 | edgiongatewayconfig | Edgion Gateway configuration |
 
+### server-info - Inspect the Controller instance
+
+Run `edgion-cli server-info` with the default `center` target. When authorization
+is enabled, the token needs the `server-info` permission. The JSON response
+includes `data.server_id`, `data.mode` and `data.ready`. A successful query
+exits zero even when the Controller reports `ready: false`.
+
 ### diagnostics - Inspect Controller configuration
 
 ```bash

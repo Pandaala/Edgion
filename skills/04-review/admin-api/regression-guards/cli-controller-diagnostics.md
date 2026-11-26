@@ -18,6 +18,13 @@ for a manual retry. Closing the output pipe
 early ends a successful query quietly. For unknown fields, `truncated` describes
 the resource list; each resource's paths have independent display limits.
 
+For the common-05 server inspection follow-up, the resource-list HTTP 5xx hint
+must name a working command. The top-level `server-info` command uses the default
+center target and the Controller's separate `server-info` permission. A valid
+response reports the instance ID, mode and readiness, including an empty ID and
+`ready: false` during initialization. Query failures exit nonzero with empty
+stdout. The CLI process tests cover the endpoint, authentication and both readiness states.
+
 The Controller owns the findings in `api/diagnostics_handlers.rs`. Recheck the CLI
 mapping and its [command-line tests](../../../../edgion-cli/tests/diagnostics.rs) if
 the routes, response envelope or truncation contract change. Fleet sync and other

@@ -4,12 +4,56 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn cli(url: &str, report: &str) -> Command {
+    let mut command = controller_cli(url);
+    command.args(["diagnostics", report]);
+    command
+}
+
+fn controller_cli(url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_edgion-cli"));
     command
-        .args(["--server", url, "--token", "cli-test", "diagnostics", report])
+        .args(["--server", url, "--token", "cli-test"])
         .env_remove("EDGION_CA_CERT")
         .env("NO_PROXY", "*");
     command
+}
+
+#[tokio::test]
+async fn server_info_reports_readiness_and_fails_on_invalid_responses() {
+    for (status, body, success) in [
+        (
+            200,
+            json!({"success":true,"data":{"server_id":"instance-a","ready":true,"mode":"controller"}}),
+            true,
+        ),
+        (
+            200,
+            json!({"success":true,"data":{"server_id":"","ready":false,"mode":"controller"}}),
+            true,
+        ),
+        (200, json!({"success":true,"data":{}}), false),
+        (403, json!({"message":"private-response-detail"}), false),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/server-info"))
+            .and(header("authorization", "Bearer cli-test"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(&body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let url = server.uri();
+        let output = tokio::task::spawn_blocking(move || controller_cli(&url).arg("server-info").output().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(output.status.success(), success);
+        if success {
+            assert_eq!(serde_json::from_slice::<Value>(&output.stdout).unwrap(), body);
+        } else {
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("private-response-detail"));
+        }
+    }
 }
 
 async fn run_report(command: &'static str, endpoint: &str, response: ResponseTemplate) -> Output {

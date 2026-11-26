@@ -185,6 +185,12 @@ edgion-cli get service backend-svc -n default -o json
 | backendtlspolicy | BackendTLSPolicy |
 | edgiongatewayconfig | Edgion Gateway 配置 |
 
+### server-info - 查询 Controller 实例
+
+使用默认的 `center` 目标运行 `edgion-cli server-info`。启用授权时，令牌需要
+`server-info` 权限。JSON 响应包含实例标识 `data.server_id`、模式 `data.mode`
+和就绪状态 `data.ready`。查询成功时退出码为零，包括 Controller 返回 `ready: false` 的情况。
+
 ### diagnostics - 查询 Controller 配置诊断
 
 ```bash

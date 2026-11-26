@@ -348,6 +348,29 @@ impl EdgionClient {
         })
     }
 
+    pub(crate) async fn server_info(&self) -> Result<Value> {
+        let url = self.build_url("/api/v1/server-info");
+        let response = self.send_request(self.client.get(&url), &url).await?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("Controller server-info request failed with HTTP {status}");
+        }
+        let envelope: Value = response
+            .json()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("Failed to read Controller server-info JSON")?;
+        let data = &envelope["data"];
+        if envelope["success"] != true
+            || !data["server_id"].is_string()
+            || !data["ready"].is_boolean()
+            || !data["mode"].is_string()
+        {
+            bail!("Controller did not return valid server information");
+        }
+        Ok(envelope)
+    }
+
     pub(crate) async fn diagnostics(&self, report: super::DiagnosticReport) -> Result<Value> {
         let path = match report {
             super::DiagnosticReport::Conflicts => "/api/v1/diagnostics/conf-conflicts",
