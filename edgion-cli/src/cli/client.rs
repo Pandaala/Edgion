@@ -441,6 +441,70 @@ impl EdgionClient {
         self.send_request(request, &url).await
     }
 
+    /// Submit one document to the read-only Controller validation endpoint.
+    pub(crate) async fn validate(&self, kind: edgion_resources::ResourceKind, body: String) -> Result<&'static str> {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            success: bool,
+            data: Verdict,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Verdict {
+            ok: bool,
+            unknown_field_check: Coverage,
+            unknown_fields: Vec<String>,
+            schema_errors: Vec<String>,
+            validation_errors: Vec<String>,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        enum Coverage {
+            Performed,
+            Unsupported,
+        }
+
+        let url = self.build_url(&format!("/api/v1/validate/{}", kind.as_str()));
+        let request = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/yaml")
+            .body(body);
+        let response = self.send_request(request, &url).await?;
+        if !response.status().is_success() {
+            bail!("Controller validation returned HTTP {}", response.status());
+        }
+        let envelope: Envelope = response
+            .json()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("Invalid Controller validation response")?;
+        if !envelope.success {
+            bail!("Controller validation request failed");
+        }
+        let verdict = envelope.data;
+        let mut diagnostics = Vec::new();
+        for (label, entries) in [
+            ("schema error", verdict.schema_errors),
+            ("unknown field", verdict.unknown_fields),
+            ("validation error", verdict.validation_errors),
+        ] {
+            diagnostics.extend(entries.into_iter().map(|entry| format!("{label}: {entry}")));
+        }
+        if !diagnostics.is_empty() {
+            bail!("{}", diagnostics.join("\n"));
+        }
+        if !verdict.ok {
+            bail!("Controller rejected the document without diagnostics");
+        }
+        Ok(match verdict.unknown_field_check {
+            Coverage::Performed => "performed",
+            Coverage::Unsupported => "unsupported",
+        })
+    }
+
     /// POST request - create a resource (center target only)
     pub async fn create(&self, kind: &str, namespace: Option<&str>, body: String) -> Result<Response> {
         let url = if let Some(ns) = namespace {

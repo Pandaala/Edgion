@@ -175,7 +175,7 @@ edgion-cli -t client get httproute -o json | jq length
 | `--namespace` | `-n` | `get` / `delete` namespace filter |
 | `--output` | `-o` | `get` format: table, json, yaml, wide |
 | `--file` | `-f` | `apply` / `delete` file or directory path |
-| `--dry-run` | | `apply` local preview; parses metadata and sends no request |
+| `--dry-run` | | Read-only Controller validation for each document submitted by `apply` |
 | `--metadata-only` | | `get` via the ConfCenter metadata-key endpoint; center target only |
 | `--limit`, `--continue`, `--all` | | `get` pagination controls |
 

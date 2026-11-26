@@ -89,15 +89,104 @@ fn cli_apply_without_file_flag_fails() {
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 }
 
-#[tokio::test]
-async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() {
-    let client = EdgionClient::new(
+async fn validation_server() -> (wiremock::MockServer, EdgionClient) {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/validate/Service"))
+        .and(header("Authorization", "Bearer dry-run-test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true, "data": {
+                "ok": true, "unknownFieldCheck": "unsupported",
+                "schemaErrors": [], "unknownFields": [], "validationErrors": []
+            }
+        })))
+        .mount(&server)
+        .await;
+    let client = EdgionClient::with_static_bearer(
         crate::cli::TargetType::Center,
-        None,
+        Some(server.uri()),
         None,
         &crate::cli::client::ServerTrust::System,
+        "dry-run-test",
     )
     .unwrap();
+    (server, client)
+}
+
+#[tokio::test]
+async fn dry_run_reports_controller_errors_for_the_failed_document_without_writing() {
+    use wiremock::matchers::{body_string, method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    let (server, client) = validation_server().await;
+    let doc = "kind: EdgionPlugins\nmetadata:\n  name: invalid\nspec: {}\n";
+    Mock::given(method("POST"))
+        .and(path("/api/v1/validate/EdgionPlugins"))
+        .and(body_string(doc))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "success": true, "data": {"ok": false, "unknownFieldCheck": "performed",
+                "schemaErrors": ["missing spec field"], "unknownFields": ["spec.typo"],
+                "validationErrors": ["invalid plugin"]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("documents.yaml");
+    std::fs::write(&file, format!("kind: Service\nmetadata:\n  name: good\n---\n{doc}")).unwrap();
+    let error = apply_many(&client, &[file.display().to_string()], true)
+        .await
+        .unwrap_err()
+        .to_string();
+    for expected in [
+        "doc 2/2",
+        "schema error: missing spec field",
+        "unknown field: spec.typo",
+        "validation error: invalid plugin",
+    ] {
+        assert!(error.contains(expected), "{error}");
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|r| r.method == "POST" && r.url.path().starts_with("/api/v1/validate/")));
+}
+
+#[tokio::test]
+async fn dry_run_requires_a_successful_request_and_a_recognized_verdict() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    for (status, body) in [
+        (403, "denied"),
+        (200, "{}"),
+        (200, r#"{"success":true,"data":{"ok":true}}"#),
+    ] {
+        let (server, client) = validation_server().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/validate/Secret"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(apply_doc(
+            &client,
+            Path::new("secret.yaml"),
+            "kind: Secret\nmetadata:\n  name: example\n",
+            1,
+            1,
+            true
+        )
+        .await
+        .is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() {
+    let (_server, client) = validation_server().await;
     for (valid, invalid) in [(0, 0), (2, 0), (0, 2), (1, 1)] {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ignored.txt"), "not yaml").unwrap();
@@ -125,13 +214,7 @@ async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() 
 
 #[tokio::test]
 async fn batch_dry_run_propagates_directory_and_single_file_failures() {
-    let client = EdgionClient::new(
-        crate::cli::TargetType::Center,
-        None,
-        None,
-        &crate::cli::client::ServerTrust::System,
-    )
-    .unwrap();
+    let (_server, client) = validation_server().await;
     let root = tempfile::tempdir().unwrap();
     let failed_dir = root.path().join("failed");
     std::fs::create_dir(&failed_dir).unwrap();

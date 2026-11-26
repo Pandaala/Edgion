@@ -66,7 +66,7 @@ async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Re
                     Ok(_) => count += 1,
                     Err(e) => {
                         failed += 1;
-                        print_error(&format!("Failed to apply {}: {}", path.display(), e));
+                        print_error(&format!("Failed to apply {}: {e:#}", path.display()));
                     }
                 }
             }
@@ -74,7 +74,11 @@ async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Re
     }
 
     if count > 0 {
-        print_success(&format!("Applied {} resource(s) from {}", count, dir.display()));
+        if dry_run {
+            print_success(&format!("Validated {} YAML file(s) from {}", count, dir.display()));
+        } else {
+            print_success(&format!("Applied {} resource(s) from {}", count, dir.display()));
+        }
     } else if attempted == 0 {
         print_error(&format!("No YAML files found in {}", dir.display()));
     }
@@ -158,7 +162,13 @@ async fn apply_doc(
     let namespace = metadata.namespace.as_deref();
 
     if dry_run {
-        println!("Would apply {} {} in namespace {:?}", kind, name, namespace);
+        let resource_kind = edgion_resources::ResourceKind::from_kind_name(kind)
+            .with_context(|| format!("Unknown resource kind in {}{}", file.display(), suffix))?;
+        let coverage = client
+            .validate(resource_kind, content)
+            .await
+            .with_context(|| format!("Failed to validate {kind} {name} in {}{suffix}", file.display()))?;
+        println!("Validated {kind} {name} (unknown-field check: {coverage})");
         return Ok(());
     }
 

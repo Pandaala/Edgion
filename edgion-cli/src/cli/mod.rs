@@ -91,7 +91,7 @@ pub enum Commands {
         #[arg(short, long, required = true, action = clap::ArgAction::Append)]
         file: Vec<String>,
 
-        /// Perform a dry run without actually applying changes
+        /// Validate each document with the Controller without applying changes
         #[arg(long, default_value = "false")]
         dry_run: bool,
     },

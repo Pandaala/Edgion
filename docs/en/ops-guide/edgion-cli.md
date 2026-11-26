@@ -218,7 +218,7 @@ edgion-cli apply -f <FILE|DIR> [-f <FILE|DIR> ...] [OPTIONS]
 
 **Options:**
 - `-f, --file <PATH>`: YAML file or directory path (required and repeatable; processed in command-line order)
-- `--dry-run`: Dry run, do not actually apply
+- `--dry-run`: Send each document to the Controller for read-only validation. Requires a reachable Controller and, when scoped tokens are used, diagnostics permission. Schema errors, reported unknown fields, business validation errors and request failures produce a nonzero exit code. Unknown-field coverage varies by resource kind.
 
 **Examples:**
 

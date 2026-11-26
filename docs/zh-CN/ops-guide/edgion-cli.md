@@ -195,7 +195,7 @@ edgion-cli apply -f <FILE|DIR> [-f <FILE|DIR> ...] [OPTIONS]
 
 **选项:**
 - `-f, --file <PATH>`: YAML 文件或目录路径（必需，可重复；按命令行顺序处理）
-- `--dry-run`: 试运行，不实际应用
+- `--dry-run`: 逐份文档提交到 Controller 进行只读校验。Controller 必须可访问，使用受限令牌时需具备 diagnostics 权限。发现 schema 错误、未知字段、业务校验错误或请求失败时，命令返回非零退出码。未知字段检查的覆盖范围取决于资源类型。
 
 **示例:**
 

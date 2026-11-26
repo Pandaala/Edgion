@@ -22,14 +22,14 @@ edgion-cli apply -f <file|directory> [-f <file|directory> ...] [--dry-run]
 | Argument | Description |
 |------|------|
 | `-f, --file` | YAML file path or a directory containing YAML files; repeatable and processed in command-line order using one client |
-| `--dry-run` | Local preview: parse resource metadata and print the intended operation without contacting the Controller |
+| `--dry-run` | Submit each document for read-only Controller validation |
 
 ### Implementation logic
 
 1. Process each `-f` path in command-line order using one CLI runtime and HTTP client
 2. Determine path type: file → single-file processing; directory → traverse all `.yaml`/`.yml` files in the directory
 3. Split multi-document YAML streams and parse `kind`, `metadata.name`, and `metadata.namespace` from each document
-4. In `--dry-run` mode, print `Would apply ...` and return without any network request; this is not schema validation
+4. In `--dry-run` mode, POST the document to `/api/v1/validate/{kind}` with the configured credentials. Report schema, unknown-field and business validation diagnostics. A failed request, unreadable verdict or negative verdict fails the command. A successful verdict reports the unknown-field check coverage
 5. Otherwise determine whether the resource already exists:
    - Does not exist → call `POST /api/v1/namespaced/{kind}/{ns}` to create
    - Already exists → call `PUT /api/v1/namespaced/{kind}/{ns}/{name}` to update

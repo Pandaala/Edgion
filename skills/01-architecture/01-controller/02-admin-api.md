@@ -329,22 +329,17 @@ POST /api/v1/validate/EdgionPlugins
 }
 ```
 
-Steps run in order: (1) `extract_resource_metadata` on the raw body, same early sanity check
-the write path performs; (2) a typed parse with `update_version: false`; (3) the CRD-schema
-validator, forced on regardless of conf_center mode (a validation *query* should answer
-fully regardless of who else validates in production); (4) the unknown-field schema walk on
-the raw document (`edgion-resources::schema_check::unknown_key_paths`) — the one check no
-other layer performs, because the CRD preserves these `config`
-`x-kubernetes-preserve-unknown-fields`. `validationErrors` additionally carries
-`EdgionPlugins::validate_plugins()` output when `kind == EdgionPlugins` — the same
-preparse business-rule check the conf_sync apply path runs, minus the DSL VM init step
-(which needs the gateway plugin runtime and cannot run side-effect-free); it stays empty for
-every other kind.
+The Controller extracts the resource metadata and validates Gateway API resources against the
+registered source schema before typed parsing. For other kinds it parses the typed resource
+without updating its version and validates the serialized resource against the CRD schema.
+The unknown-field walk inspects the original document. Shared business validation covers
+EdgionPlugins (including DSL compilation, with VM initialization left to the Gateway),
+LinkSys and supported HTTPRoute checks.
 
-`unknownFieldCheck` is `"performed"` for `EdgionPlugins`, `EdgionStreamPlugins`,
-`EdgionConfigData`, and `LinkSys`, and `"unsupported"` for every other kind. This discriminator exists so a caller can never misread an empty
-`unknownFields: []` as "checked, nothing found" when it actually means "this kind is not
-covered by the walk at all".
+`unknownFieldCheck` is `performed` when the unknown-field walk runs for EdgionPlugins,
+EdgionStreamPlugins, EdgionConfigData or LinkSys. An `unsupported` value means the response
+does not establish unknown-field coverage. The CLI consumes this endpoint for
+`apply --dry-run` and treats a negative verdict as a failed preflight.
 
 Backend behaviour:
 
