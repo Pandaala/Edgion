@@ -43,7 +43,7 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_UDP_PACKET_SIZE: usize = 65535;
 
 /// Maximum number of concurrent client sessions per listener.
-/// Prevents resource exhaustion from UDP reflection/amplification attacks.
+/// Bounds the upstream sockets and receiver tasks held by this listener's sessions.
 const MAX_UDP_SESSIONS: usize = 10000;
 
 /// Stable UDP failure-status tokens. Plugin denials keep their own

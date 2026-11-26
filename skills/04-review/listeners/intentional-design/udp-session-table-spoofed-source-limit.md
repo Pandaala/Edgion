@@ -21,6 +21,22 @@ The decision covers only spoofed-source admission. The
 [UDP proxy](../../../../edgion-gateway/src/routes/udp/edgion_udp.rs) owns the
 session cap, idle timeout and receive buffers.
 
+## Operator configuration
+
+For `gw-core3-05` item 1, the two fixed limits were reviewed separately:
+
+- **Capacity.** Each listener owns 10,000 permits. A UDPRoute can apply
+  `ConnectionLimit` to reject new sessions at a lower listener-local count.
+  Revisit an `EdgionGatewayConfig` cap if a deployment needs one resource
+  budget applied independently to every listener it covers.
+- **Idle lifetime.** Cleanup waits 10 seconds between scans. For idle expiry,
+  it rechecks that more than 60 seconds have elapsed since creation or the
+  most recent successful transfer in either direction. Revisit a configurable
+  timeout if a workload needs to retain its upstream socket across longer
+  silent intervals or a deployment requires earlier idle resource reclamation.
+
+Both values stay fixed until a deployment establishes such a need.
+
 ## Rationale and evidence
 
 - A UDP proxy cannot prove that a source address is genuine. The backend
