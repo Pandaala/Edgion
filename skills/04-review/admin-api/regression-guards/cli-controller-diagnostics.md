@@ -27,5 +27,8 @@ stdout. The CLI process tests cover the endpoint, authentication and both readin
 
 The Controller owns the findings in `api/diagnostics_handlers.rs`. Recheck the CLI
 mapping and its [command-line tests](../../../../edgion-cli/tests/diagnostics.rs) if
-the routes, response envelope or truncation contract change. Fleet sync and other
-[deferred CLI work](../../../../tasks/todo/cli-operational-inspection.md) have separate acceptance criteria.
+the routes, response envelope or truncation contract change. Separate common-05 tasks cover
+[route status](../../../../tasks/todo/cli-route-status.md),
+[fleet sync](../../../../tasks/todo/cli-fleet-sync-status.md),
+[source diff](../../../../tasks/todo/cli-config-diff.md) and
+[target names](../../../../tasks/todo/cli-target-names.md).
