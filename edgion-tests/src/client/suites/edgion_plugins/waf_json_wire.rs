@@ -426,7 +426,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) ->
                                 version,
                                 "/waf-wire",
                                 br#"{"a":"safe""#,
-                                if detection { 200 } else { 500 },
+                                if detection { 200 } else { 400 },
                             )
                             .await?;
                             verify(

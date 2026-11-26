@@ -550,6 +550,10 @@ strict PL4 可在响应头提交前通过响应状态规则拦截后端 500；st
 不会启用该 PL2 检测。上游响应体不参与扫描。运行预算保持默认，
 大 body 仍可能触发工作量或内存上限；DetectionOnly 不会忽略致命运行错误。
 
+请求检查终止时，JSON、XML 或 multipart 格式错误，以及查询参数数量超限，返回 HTTP 400。
+请求头数量、请求头大小或 Cookie 数量超限返回 431。请求输入大小、请求体结构、
+检查候选项或记录数量超限返回 413。内部故障及执行预算耗尽（如规则工作量、捕获存储和解析工作量）返回 500。
+
 使用 `cargo run -p edgion-resources --example generate_supported_crs -- --check`
 从仓库内的来源复核生成结果。规则包 README 和 `generated/acceptance.json`
 记录排除项、来源 pin、profile 设置及输出 digest。

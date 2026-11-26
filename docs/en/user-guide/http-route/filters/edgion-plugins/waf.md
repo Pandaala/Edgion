@@ -710,6 +710,12 @@ PL1 does not enable that PL2 predicate. No upstream response body is inspected.
 Runtime budgets remain unchanged, so large bodies may still fail a work or
 memory limit. DetectionOnly does not suppress fatal runtime failures.
 
+When request inspection terminates, malformed JSON, XML or multipart data and
+excess query arguments return HTTP 400. Request header count, header size and
+cookie count limits return 431. Request input size, body structure and inspected
+candidate or record count limits return 413. Internal failures and execution
+budgets such as rule work, capture storage and parser work return 500.
+
 Reproduce the package from repository sources with
 `cargo run -p edgion-resources --example generate_supported_crs -- --check`.
 The package README and `generated/acceptance.json` describe exact exclusions,

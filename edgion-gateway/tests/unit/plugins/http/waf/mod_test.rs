@@ -549,7 +549,7 @@ async fn malformed_structured_body_fails_closed_without_payload_logging() {
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::ErrResponse {
-            status: 500,
+            status: 400,
             body: None
         }
     );
@@ -1101,16 +1101,64 @@ async fn json_physical_failure_still_rejects_detection_only() {
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::ErrResponse {
-            status: 500,
+            status: 413,
             body: None
         }
     );
 }
 
 #[test]
-fn json_error_categories_preserve_status_without_exposing_payloads() {
+fn runtime_error_categories_preserve_status_without_exposing_payloads() {
     use edgion_waf::seclang::{JsonResultLimit, JsonStructureLimit};
     let cases = [
+        (
+            RuntimeError::HeaderByteLimit { actual: 2, limit: 1 },
+            431,
+            WafErrorCode::InputLimit,
+        ),
+        (
+            RuntimeError::HeaderLimit { actual: 2, limit: 1 },
+            431,
+            WafErrorCode::InputLimit,
+        ),
+        (RuntimeError::CookieLimit { limit: 1 }, 431, WafErrorCode::InputLimit),
+        (
+            RuntimeError::QueryArgumentLimit { limit: 1 },
+            400,
+            WafErrorCode::InputLimit,
+        ),
+        (
+            RuntimeError::InputByteLimit { actual: 2, limit: 1 },
+            413,
+            WafErrorCode::InputLimit,
+        ),
+        (
+            RuntimeError::CollectionEntryLimit { limit: 1 },
+            413,
+            WafErrorCode::RuntimeLimit,
+        ),
+        (
+            RuntimeError::ResponseHeaderLimit { actual: 2, limit: 1 },
+            500,
+            WafErrorCode::ResponseLimit,
+        ),
+        (
+            RuntimeError::OperatorWorkLimit { limit: 1 },
+            500,
+            WafErrorCode::RuntimeLimit,
+        ),
+        (
+            RuntimeError::CaptureByteLimit { limit: 1 },
+            500,
+            WafErrorCode::RuntimeLimit,
+        ),
+        (
+            RuntimeError::Body {
+                kind: BodyError::MultipartBoundary,
+            },
+            400,
+            WafErrorCode::BodyProcessing,
+        ),
         (
             RuntimeError::JsonChecker {
                 kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
@@ -1128,7 +1176,7 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
                     limit: 0,
                 }),
             },
-            500,
+            413,
             WafErrorCode::RuntimeLimit,
         ),
         (
@@ -1194,7 +1242,7 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
             RuntimeError::JsonChecker {
                 kind: JsonCheckerError::Lexical(JsonStreamError::Syntax),
             },
-            500,
+            400,
             WafErrorCode::BodyProcessing,
         ),
         (
@@ -1208,7 +1256,7 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
             RuntimeError::JsonResultLimit {
                 kind: JsonResultLimit::Records,
             },
-            500,
+            413,
             WafErrorCode::RuntimeLimit,
         ),
         (
@@ -1227,7 +1275,9 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
         );
         let mut session = MockPluginSession::new();
         let mut waf = MockWafSessionCapability::new();
-        waf.expect_record_terminal_error().times(1).returning(|_, _, _, _| ());
+        waf.expect_record_terminal_error()
+            .times(1)
+            .returning(move |_, _, _, recorded| assert_eq!(recorded, status));
         session
             .expect_waf()
             .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);

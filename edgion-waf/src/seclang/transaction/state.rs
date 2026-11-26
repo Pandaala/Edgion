@@ -116,7 +116,12 @@ impl RequestState<'_> {
         ];
         let mut input_bytes = 0_usize;
         for value in fixed {
-            check_value(value, limits.max_value_bytes)?;
+            if value.len() > limits.max_value_bytes {
+                return Err(RuntimeError::InputByteLimit {
+                    actual: value.len(),
+                    limit: limits.max_value_bytes,
+                });
+            }
             input_bytes = checked_add(input_bytes, value.len())?;
         }
         let mut header_bytes = 0_usize;
@@ -127,8 +132,13 @@ impl RequestState<'_> {
             if memchr::memchr3(b'\r', b'\n', 0, header.value).is_some() {
                 return Err(RuntimeError::InvalidHeaderValue { ordinal });
             }
-            check_value(header.name, limits.max_value_bytes)?;
-            check_value(header.value, limits.max_value_bytes)?;
+            let field_bytes = header.name.len().max(header.value.len());
+            if field_bytes > limits.max_value_bytes {
+                return Err(RuntimeError::HeaderByteLimit {
+                    actual: field_bytes,
+                    limit: limits.max_value_bytes,
+                });
+            }
             header_bytes = checked_add(header_bytes, checked_add(header.name.len(), header.value.len())?)?;
             if header_bytes > limits.max_header_bytes {
                 return Err(RuntimeError::HeaderByteLimit {

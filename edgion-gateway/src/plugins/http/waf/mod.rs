@@ -198,24 +198,86 @@ impl WafPlugin {
     }
 
     pub(crate) fn runtime_error_status(error: &RuntimeError) -> u16 {
+        use edgion_waf::seclang::{JsonResultLimit, JsonStructureLimit};
+
         match error {
             RuntimeError::Body {
-                kind: BodyError::ByteLimit { .. },
+                kind: BodyError::Malformed { .. } | BodyError::MultipartBoundary,
+            }
+            | RuntimeError::JsonChecker {
+                kind:
+                    JsonCheckerError::Lexical(
+                        JsonStreamError::Syntax
+                        | JsonStreamError::Utf8
+                        | JsonStreamError::Escape
+                        | JsonStreamError::Number
+                        | JsonStreamError::Incomplete,
+                    ),
+            }
+            | RuntimeError::XmlStream {
+                kind: XmlStreamError::Syntax | XmlStreamError::Character | XmlStreamError::Incomplete,
+            }
+            | RuntimeError::QueryArgumentLimit { .. } => 400,
+            RuntimeError::HeaderLimit { .. }
+            | RuntimeError::HeaderByteLimit { .. }
+            | RuntimeError::CookieLimit { .. } => 431,
+            RuntimeError::InputByteLimit { .. }
+            | RuntimeError::CollectionEntryLimit { .. }
+            | RuntimeError::Body {
+                kind:
+                    BodyError::ByteLimit { .. }
+                    | BodyError::EntryLimit { .. }
+                    | BodyError::DecodedByteLimit { .. }
+                    | BodyError::NameByteLimit { .. }
+                    | BodyError::DepthLimit { .. }
+                    | BodyError::MultipartPartLimit { .. }
+                    | BodyError::MultipartHeaderLimit { .. },
+            }
+            | RuntimeError::JsonResultLimit {
+                kind: JsonResultLimit::Candidates | JsonResultLimit::Records,
+            }
+            | RuntimeError::XmlResultLimit {
+                kind: JsonResultLimit::Candidates | JsonResultLimit::Records,
+            }
+            | RuntimeError::JsonChecker {
+                kind:
+                    JsonCheckerError::Limit {
+                        kind:
+                            JsonStructureLimit::KeyBytes
+                            | JsonStructureLimit::Members
+                            | JsonStructureLimit::PathBytes
+                            | JsonStructureLimit::Depth,
+                        ..
+                    },
             }
             | RuntimeError::JsonChecker {
                 kind:
                     JsonCheckerError::Lexical(JsonStreamError::Limit {
-                        kind: JsonStreamLimit::SourceBytes,
+                        kind:
+                            JsonStreamLimit::SourceBytes
+                            | JsonStreamLimit::RawTokenBytes
+                            | JsonStreamLimit::DecodedBytes
+                            | JsonStreamLimit::Events
+                            | JsonStreamLimit::Depth,
                         ..
                     }),
             }
             | RuntimeError::XmlStream {
                 kind:
                     XmlStreamError::Limit {
-                        kind: XmlStreamLimit::SourceBytes,
+                        kind:
+                            XmlStreamLimit::SourceBytes
+                            | XmlStreamLimit::RawTokenBytes
+                            | XmlStreamLimit::NameBytes
+                            | XmlStreamLimit::DecodedBytes
+                            | XmlStreamLimit::Events
+                            | XmlStreamLimit::Depth
+                            | XmlStreamLimit::Attributes
+                            | XmlStreamLimit::Namespaces,
                         ..
                     },
             } => 413,
+            // Execution budgets can be exhausted by policy alone, including on response phases.
             _ => 500,
         }
     }

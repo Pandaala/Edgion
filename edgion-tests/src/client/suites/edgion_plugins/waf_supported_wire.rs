@@ -35,7 +35,7 @@ fn status(v: &Vector, detection: bool) -> u16 {
     if detection {
         200
     } else if v.malformed {
-        500
+        400
     } else if v.rule.is_some() {
         403
     } else {

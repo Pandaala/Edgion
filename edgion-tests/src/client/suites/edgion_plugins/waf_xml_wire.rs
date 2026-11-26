@@ -41,7 +41,7 @@ pub(super) fn matrix(version: &'static str, detection: bool) -> TestCase {
                                     "/waf-wire",
                                     "application/xml",
                                     malformed.as_bytes(),
-                                    if detection { 200 } else { 500 },
+                                    if detection { 200 } else { 400 },
                                 ),
                                 (
                                     version,
@@ -57,7 +57,7 @@ pub(super) fn matrix(version: &'static str, detection: bool) -> TestCase {
                                     "/waf-wire",
                                     "application/xml",
                                     b" ",
-                                    if detection { 200 } else { 500 },
+                                    if detection { 200 } else { 400 },
                                 ),
                                 (
                                     version,

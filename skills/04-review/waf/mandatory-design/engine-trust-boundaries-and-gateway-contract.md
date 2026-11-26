@@ -71,6 +71,15 @@ per-asset/total phrase counts and bytes. A missing optional member is a hard err
   policy fork is `RuleEngineMode::DetectionOnly`, which turns a malformed body into a raw-only fallback
   publication instead of an error (`seclang/transaction/phases.rs:92-113`; consequences tracked in
   `tasks/improve-issues/waf5-01-*`).
+- *Request error attribution (waf-05).* Both streamed and buffered request
+  paths use the gateway's `runtime_error_status` for the reply and terminal
+  access-log status. Malformed bodies and excessive query arguments map to
+  400, header size/count and cookie count to 431, and request input size and
+  body structure/count limits to 413. Rule work, capture storage, internal
+  memory/work budgets and response faults can depend on policy or upstream
+  data and retain 500. Check the error producer when adding a limit shared
+  across phases. The gateway unit status table and JSON/XML wire matrices
+  cover this boundary. Rule-visible parse errors remain tracked under waf5-02.
 - *No panic.* Request-path code returns `RuntimeError` for every reachable failure. `expect` /
   `unreachable!` are allowed only where the panic is logically impossible and the message states why
   (`skills/00-design-rules.md` section J); the current site-by-site classification is in the

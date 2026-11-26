@@ -1289,7 +1289,7 @@ fn request_head_alias_admission_boundaries_and_error_precedence_stay_ordered() {
                 max_input_bytes: 0,
                 ..RuntimeLimits::default()
             },
-            RuntimeError::ValueByteLimit {
+            RuntimeError::InputByteLimit {
                 actual: max_value,
                 limit: max_value - 1,
             },
@@ -1344,6 +1344,19 @@ fn request_head_alias_admission_boundaries_and_error_precedence_stay_ordered() {
     for (limits, expected) in cases {
         assert_eq!(RequestState::build(head, limits).err(), Some(expected));
     }
+    let value = vec![b'x'; max_value + 1];
+    let headers = [RequestHeader::new(b"x-test", &value)];
+    let limits = RuntimeLimits {
+        max_value_bytes: max_value,
+        ..RuntimeLimits::default()
+    };
+    assert_eq!(
+        RequestState::build(request(&headers, b"/"), limits).err(),
+        Some(RuntimeError::HeaderByteLimit {
+            actual: value.len(),
+            limit: max_value,
+        })
+    );
     let invalid = [RequestHeader::new(b"Bad Name", b"\n")];
     assert_eq!(
         RequestState::build(
