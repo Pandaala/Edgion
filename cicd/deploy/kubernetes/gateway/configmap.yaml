@@ -34,6 +34,7 @@ data:
     server:
       # threads: 4
       # work_stealing: true
+      readiness_drain_seconds: 10
       # grace_period_seconds: 30
       # graceful_shutdown_timeout_seconds: 10
       # upstream_keepalive_pool_size: 128

@@ -408,6 +408,7 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 | `downstream_tls_offload_threadpools` | `Integer` | Disabled | Dedicated handshake pools per terminating TLS listener; `1`–`4`, requires the paired field |
 | `downstream_tls_offload_thread_per_pool` | `Integer` | Disabled | Threads per handshake pool; `1`–`4`, requires the paired field |
 | `work_stealing` | `Boolean` | `true` | Enable Tokio work-stealing to improve CPU utilization |
+| `readiness_drain_seconds` | `Integer` | `0` | On Unix SIGTERM, return 503 from `/ready` and continue accepting connections for this many seconds before Pingora drains. The shipped Kubernetes ConfigMap sets 10s and the Pod allows 70s for termination. Size these for endpoint propagation, both Pingora timeouts, UDP cleanup and telemetry flush. |
 | `grace_period_seconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | Upstream keepalive connection pool size |

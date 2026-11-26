@@ -86,14 +86,19 @@ async fn health_check() -> Json<ApiResponse<String>> {
 
 /// Readiness check endpoint - returns OK only when all caches are ready
 async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http::StatusCode {
+    gateway_readiness(&client)
+}
+
+fn gateway_readiness(client: &ConfigClient) -> axum::http::StatusCode {
     readiness_status(
         client.is_ready().is_ok(),
         get_global_proxy_protocol_policy_runtime().is_fatal(),
+        crate::cli::is_terminating(),
     )
 }
 
-fn readiness_status(config_ready: bool, policy_fatal: bool) -> axum::http::StatusCode {
-    if config_ready && !policy_fatal {
+fn readiness_status(config_ready: bool, policy_fatal: bool, terminating: bool) -> axum::http::StatusCode {
+    if config_ready && !policy_fatal && !terminating {
         axum::http::StatusCode::OK
     } else {
         axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -106,7 +111,7 @@ fn readiness_status(config_ready: bool, policy_fatal: bool) -> axum::http::Statu
 /// After a reload, this value should change to match the Controller's new server_id.
 async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<ServerInfoResponse>> {
     let server_id = client.current_server_id();
-    let ready = client.is_ready().is_ok() && !get_global_proxy_protocol_policy_runtime().is_fatal();
+    let ready = gateway_readiness(&client).is_success();
     Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 

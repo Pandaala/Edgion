@@ -56,7 +56,11 @@ fn gateway(state: ResolvedInboundProxyProtocol) -> edgion_resources::Gateway {
 
 #[tokio::test]
 async fn external_shutdown_semantics_are_preserved() {
-    let watcher = PolicyShutdownSignalWatch::new(ExternalFast, Arc::new(ProxyProtocolPolicyRuntime::new()));
+    let watcher = PolicyShutdownSignalWatch::new(
+        ExternalFast,
+        Arc::new(ProxyProtocolPolicyRuntime::new()),
+        Duration::from_secs(60),
+    );
     assert!(matches!(watcher.recv().await, ShutdownSignal::FastShutdown));
 }
 
@@ -74,6 +78,6 @@ async fn internal_policy_fatal_requests_fast_shutdown() {
     });
     runtime.observe_snapshot([&changed]);
 
-    let watcher = PolicyShutdownSignalWatch::new(ExternalPending, runtime);
+    let watcher = PolicyShutdownSignalWatch::new(ExternalPending, runtime, Duration::from_secs(60));
     assert!(matches!(watcher.recv().await, ShutdownSignal::FastShutdown));
 }

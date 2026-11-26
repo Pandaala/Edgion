@@ -25,6 +25,8 @@ spec:
       labels:
         app: edgion-gateway
     spec:
+      # 10s for endpoint removal, 30s + 10s for Pingora, then UDP and telemetry cleanup.
+      terminationGracePeriodSeconds: 70
       containers:
       - name: edgion-gateway
         image: docker.io/pandaala/edgion-gateway:0.1.5

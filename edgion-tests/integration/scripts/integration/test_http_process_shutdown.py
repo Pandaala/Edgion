@@ -175,11 +175,12 @@ class Backend:
 
 
 class Topology(ProcessTopology):
-    def __init__(self, root, label, binaries, cert_source, work_stealing=True, grace=2, drain=6):
+    def __init__(self, root, label, binaries, cert_source, work_stealing=True, grace=2, drain=6, readiness_drain=0):
         super().__init__(root, label, binaries, cert_source)
         self.work_stealing = work_stealing
         self.grace = grace
         self.drain = drain
+        self.readiness_drain = readiness_drain
 
     def reserve_ports(self):
         for name in ("ctrl_admin", "ctrl_grpc", "ctrl_probe", "ctrl_metrics", "gw_admin", "gw_probe", "gw_metrics", "http_a", "http_b", "backend_h1", "backend_h2"):
@@ -220,7 +221,7 @@ class Topology(ProcessTopology):
         path = self.work / "gateway.yaml"
         config = path.read_text()
         config = config.replace("threads: 1", f"threads: 4\n  work_stealing: {str(self.work_stealing).lower()}")
-        config = config.replace("grace_period_seconds: 2", f"grace_period_seconds: {self.grace}")
+        config = config.replace("grace_period_seconds: 2", f"readiness_drain_seconds: {self.readiness_drain}\n  grace_period_seconds: {self.grace}")
         config = config.replace("graceful_shutdown_timeout_seconds: 0", f"graceful_shutdown_timeout_seconds: {self.drain}")
         path.write_text(config)
 
@@ -319,7 +320,7 @@ class GrpcClient:
 
 def run_case(root, binaries, cert_source, stealing, abort=False):
     label = f"stealing-{str(stealing).lower()}-{'abort' if abort else 'drain'}"
-    topology = Topology(root, label, binaries, cert_source, stealing, grace=2, drain=3 if abort else 6)
+    topology = Topology(root, label, binaries, cert_source, stealing, grace=2, drain=3 if abort else 6, readiness_drain=0 if abort else 2)
     idle, sse, grpc = [], [], []
     try:
         topology.prepare()
@@ -358,9 +359,16 @@ def run_case(root, binaries, cert_source, stealing, abort=False):
         topology.backend.check()
         started = time.monotonic()
         topology.gateway.send_signal(signal.SIGTERM)
-        topology.wait_log_text("Graceful shutdown: grace period 2s starts", timeout=3)
+        topology.wait("withdraw readiness", lambda: http_status(topology.ports["gw_probe"], "/ready") == 503,
+                      process=topology.gateway, timeout=2)
+        if topology.readiness_drain:
+            require(http_status(topology.ports["gw_probe"], "/health") == 200, "Liveness failed during withdrawal")
+            require(http_status(topology.ports["http_a"], "/load") == 200, "Fresh connection failed during withdrawal")
+        topology.wait_log_text("Graceful shutdown: grace period 2s starts", timeout=topology.readiness_drain + 3)
+        drain_started = time.monotonic()
+        require(drain_started - started >= topology.readiness_drain, "Listeners drained before withdrawal window elapsed")
         for connection in idle:
-            connection.sock.settimeout(max(0.01, 3 - (time.monotonic() - started)))
+            connection.sock.settimeout(max(0.01, 3 - (time.monotonic() - drain_started)))
             require(connection.sock.recv(1) == b"", "Idle keepalive was not closed by shutdown")
         require(topology.gateway.poll() is None, "Gateway exited before active stream release")
         if abort:
@@ -381,7 +389,7 @@ def run_case(root, binaries, cert_source, stealing, abort=False):
             # Intentionally hold active streams halfway through the configured
             # grace period. Shutdown entry and idle wakeup were already observed;
             # this delay tests grace preservation, not waiter-registration timing.
-            remaining = started + topology.grace / 2 - time.monotonic()
+            remaining = drain_started + topology.grace / 2 - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
             require(topology.gateway.poll() is None, "Gateway exited during active-stream grace")

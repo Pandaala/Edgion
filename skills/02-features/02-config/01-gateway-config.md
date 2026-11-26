@@ -458,6 +458,7 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 | `downstream_h2_max_concurrent_streams` | `u32?` | `100` | Startup HTTP/2 concurrent client streams per connection |
 | `max_downstream_connections` | `NonZeroU64?` | unlimited | Startup process-wide cap on concurrent downstream sockets (HTTP/HTTPS/TCP/TLS listeners, UDP excluded); enforced at accept before PROXY/TLS; see [downstream connection admission](../../04-review/listeners/regression-guards/downstream-connection-admission.md) |
 | `work_stealing` | `bool` | `true` | Tokio task stealing |
+| `readiness_drain_seconds` | `u64` | `0` | Unix SIGTERM endpoint withdrawal window before Pingora stops accepting. The Kubernetes ConfigMap selects 10 seconds. |
 | `grace_period_seconds` | `u64` | `30` | Graceful shutdown wait time in seconds |
 | `graceful_shutdown_timeout_seconds` | `u64` | `10` | Shutdown timeout in seconds |
 | `upstream_keepalive_pool_size` | `usize` | `128` | Upstream keepalive connection pool size |

@@ -15,7 +15,16 @@ use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::{RunArgs, Server};
 #[cfg(unix)]
 use pingora_core::server::{ShutdownSignal, ShutdownSignalWatch, UnixShutdownSignalWatch};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+// One Gateway per process. Once termination begins, readiness cannot recover.
+static TERMINATING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn is_terminating() -> bool {
+    TERMINATING.load(Ordering::Relaxed)
+}
 
 /// Pingora counts the initial upstream request inside `ServerConf.max_retries`,
 /// while Edgion's public `attempts` fields count retries after that request.
@@ -168,7 +177,7 @@ pub fn create_and_configure_server(
 /// Run the Pingora server (synchronous, blocks until shutdown).
 ///
 /// Call this after the Tokio runtime has been moved to a background thread.
-pub fn run_server(server: Server) -> Result<()> {
+pub fn run_server(server: Server, readiness_drain: Duration) -> Result<()> {
     tracing::info!("Starting Pingora server");
     let policy_runtime = get_global_proxy_protocol_policy_runtime();
     #[cfg(unix)]
@@ -176,6 +185,7 @@ pub fn run_server(server: Server) -> Result<()> {
         shutdown_signal: Box::new(PolicyShutdownSignalWatch::new(
             UnixShutdownSignalWatch,
             policy_runtime.clone(),
+            readiness_drain,
         )),
     };
     #[cfg(not(unix))]
@@ -192,14 +202,16 @@ pub fn run_server(server: Server) -> Result<()> {
 struct PolicyShutdownSignalWatch<W> {
     external: W,
     policy_runtime: Arc<ProxyProtocolPolicyRuntime>,
+    readiness_drain: Duration,
 }
 
 #[cfg(unix)]
 impl<W> PolicyShutdownSignalWatch<W> {
-    fn new(external: W, policy_runtime: Arc<ProxyProtocolPolicyRuntime>) -> Self {
+    fn new(external: W, policy_runtime: Arc<ProxyProtocolPolicyRuntime>, readiness_drain: Duration) -> Self {
         Self {
             external,
             policy_runtime,
+            readiness_drain,
         }
     }
 }
@@ -212,12 +224,33 @@ where
 {
     async fn recv(&self) -> ShutdownSignal {
         let mut fatal_rx = self.policy_runtime.subscribe_fatal();
-        if *fatal_rx.borrow() {
-            return ShutdownSignal::FastShutdown;
-        }
-        tokio::select! {
+        let signal = tokio::select! {
+            biased;
+            _ = wait_for_policy_fatal(&mut fatal_rx) => return ShutdownSignal::FastShutdown,
             signal = self.external.recv() => signal,
-            _ = wait_for_policy_fatal(&mut fatal_rx) => ShutdownSignal::FastShutdown,
+        };
+        if !matches!(signal, ShutdownSignal::GracefulTerminate) {
+            return signal;
+        }
+
+        TERMINATING.store(true, Ordering::Relaxed);
+        if self.readiness_drain.is_zero() {
+            return signal;
+        }
+
+        let delay = tokio::time::sleep(self.readiness_drain);
+        tokio::pin!(delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = wait_for_policy_fatal(&mut fatal_rx) => return ShutdownSignal::FastShutdown,
+                _ = &mut delay => return signal,
+                next = self.external.recv() => {
+                    if matches!(next, ShutdownSignal::FastShutdown) {
+                        return next;
+                    }
+                }
+            }
         }
     }
 }

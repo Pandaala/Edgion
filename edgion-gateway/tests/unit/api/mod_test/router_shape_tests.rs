@@ -38,9 +38,10 @@ async fn probe_router_serves_health_and_ready() {
 
 #[test]
 fn policy_fatal_overrides_ready_config_cache() {
-    assert_eq!(readiness_status(true, false), StatusCode::OK);
-    assert_eq!(readiness_status(true, true), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(readiness_status(false, false), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(readiness_status(true, false, false), StatusCode::OK);
+    assert_eq!(readiness_status(true, true, false), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(readiness_status(false, false, false), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(readiness_status(true, false, true), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

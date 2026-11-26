@@ -325,6 +325,7 @@ gateway:
 | `downstream_tls_offload_threadpools` | `Integer` | 关闭 | 每个终止 TLS 的监听器使用的专用握手线程池数，范围 `1`–`4`；必须同时设置另一字段 |
 | `downstream_tls_offload_thread_per_pool` | `Integer` | 关闭 | 每个握手线程池的线程数，范围 `1`–`4`；必须同时设置另一字段 |
 | `work_stealing` | `Boolean` | `true` | 启用 Tokio 任务窃取，提高 CPU 利用率 |
+| `readiness_drain_seconds` | `Integer` | `0` | Unix 下收到 SIGTERM 时，`/ready` 立即返回 503，Gateway 在指定秒数内继续接收新连接，然后由 Pingora 排空。随附 Kubernetes ConfigMap 设置为 10 秒，Pod 终止宽限期为 70 秒。请按端点摘除传播耗时、Pingora 的两个超时、UDP 清理和遥测刷新所需时间调整。 |
 | `grace_period_seconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | 优雅关闭超时，超过后强制终止 |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | 上游 keepalive 连接池大小 |

@@ -19,6 +19,7 @@ use std::time::Duration;
 
 pub mod config;
 mod pingora;
+pub(crate) use pingora::is_terminating;
 
 use crate::conf_sync::init_global_config_client;
 use config::{EdgionGatewayConfig, MAX_UNKNOWN_CONFIG_FIELDS};
@@ -795,6 +796,7 @@ impl EdgionGatewayCli {
         tracing::info!("All loggers initialized (access, ssl, tcp, tls, udp)");
 
         // 21. Create and configure Pingora server (in Tokio runtime context for UDP listeners)
+        let readiness_drain = Duration::from_secs(config.server.readiness_drain_seconds.unwrap_or_default());
         let pingora_server = runtime.block_on(async {
             tokio::task::spawn_blocking(move || create_and_configure_server(config_client, &config))
                 .await
@@ -833,7 +835,7 @@ impl EdgionGatewayCli {
         });
 
         // 23. Run Pingora server (blocks until shutdown)
-        let run_result = run_server(pingora_server);
+        let run_result = run_server(pingora_server, readiness_drain);
 
         // 24. Signal auxiliary services to shut down
         get_udp_listener_registry().cancel_all();

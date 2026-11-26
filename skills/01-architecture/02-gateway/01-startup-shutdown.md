@@ -105,8 +105,10 @@ semantics; the internal fatal branch returns `FastShutdown`. Non-Unix builds use
 
 ## Shutdown
 
-1. Pingora handles SIGTERM/SIGINT and its configured grace period (default 30 seconds) plus
-   graceful-shutdown timeout (default 10 seconds).
+1. On Unix SIGTERM the signal adapter makes readiness fail immediately and continues
+   serving for `server.readiness_drain_seconds` (default zero, Kubernetes ConfigMap ten).
+   SIGINT or policy fatal interrupts this window. Then Pingora stops accepting and runs
+   its configured grace period (default 30 seconds) and runtime shutdown timeout (default ten).
 2. During process shutdown, the HTTP proxy disables keepalive and adds `Connection: close` where
    applicable.
 3. After `Server::run(RunArgs)` returns, the main thread checks the bounded internal fatal

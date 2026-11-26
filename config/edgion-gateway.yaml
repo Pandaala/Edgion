@@ -171,6 +171,9 @@ server:
   # ，
   # work_stealing: true
 
+  # Seconds to serve new connections after SIGTERM withdraws readiness (Kubernetes manifest: 10).
+  # readiness_drain_seconds: 0
+
   # Grace period for shutdown in seconds (default: 30)
   # ，
   # grace_period_seconds: 30

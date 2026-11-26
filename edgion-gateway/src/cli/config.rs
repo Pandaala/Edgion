@@ -719,6 +719,11 @@ pub struct ServerConfig {
     #[serde(default)]
     pub work_stealing: Option<bool>,
 
+    /// Seconds to continue accepting after SIGTERM marks the Gateway unready (default: 0).
+    #[arg(long = "readiness-drain-seconds", value_name = "SECS")]
+    #[serde(default)]
+    pub readiness_drain_seconds: Option<u64>,
+
     /// Grace period for shutdown in seconds (default: 30)
     #[arg(long = "grace-period", value_name = "SECS")]
     #[serde(default)]
@@ -1305,6 +1310,9 @@ impl EdgionGatewayConfig {
 
         if cli.server.work_stealing.is_some() {
             base.server.work_stealing = cli.server.work_stealing;
+        }
+        if cli.server.readiness_drain_seconds.is_some() {
+            base.server.readiness_drain_seconds = cli.server.readiness_drain_seconds;
         }
         if cli.server.grace_period_seconds.is_some() {
             base.server.grace_period_seconds = cli.server.grace_period_seconds;
