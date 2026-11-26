@@ -24,7 +24,13 @@ async fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = cli.run().await {
+        if e.is::<edgion_cli::cli::commands::diff::Differences>() {
+            std::process::exit(1);
+        }
         eprintln!("Error: {:#}", e);
+        if matches!(cli.command, edgion_cli::cli::Commands::Diff { .. }) {
+            std::process::exit(2);
+        }
         std::process::exit(1);
     }
 }

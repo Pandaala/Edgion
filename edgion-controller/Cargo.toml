@@ -48,7 +48,7 @@ thiserror.workspace = true
 
 # Serialization/Deserialization
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 yaml_serde.workspace = true
 jsonschema.workspace = true
 json-patch.workspace = true

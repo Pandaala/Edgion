@@ -97,6 +97,13 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Compare local manifests with the Controller's persisted source objects
+    Diff {
+        /// Manifest file in YAML or JSON; repeat for multiple files
+        #[arg(short, long, required = true, action = clap::ArgAction::Append)]
+        file: Vec<PathBuf>,
+    },
+
     /// Get resources
     Get {
         /// Resource kind (e.g., httproute, service, gateway)
@@ -291,37 +298,65 @@ impl Cli {
             anyhow::bail!("server-info requires --target center");
         }
 
+        let diff = matches!(self.command, Commands::Diff { .. });
+        if diff && self.target != TargetType::Center {
+            anyhow::bail!("diff requires --target center");
+        }
+        let client = self.authenticated_client(diff).await?;
+        self.dispatch(client).await
+    }
+
+    async fn authenticated_client(&self, diff: bool) -> Result<EdgionClient> {
+        // Diff diagnostics must never include server-supplied text or paths.
+        let setup_error = |error, message| if diff { anyhow::Error::msg(message) } else { error };
         // Resolve the bearer token (token-only auth):
         //   --token flag > EDGION_TOKEN env var > ~/.edgion/token file.
         // When a token is resolved we inject it as a static Bearer and skip
         // ensure_auth entirely. Lazy validation: the first real request returns
         // 401 (unknown token) or 403 (denied).
         let cli_token = auto_auth::resolve_token(self.token.as_deref());
-        let trust = ServerTrust::from_ca_cert(self.ca_cert.as_deref())?;
+        let trust = ServerTrust::from_ca_cert(self.ca_cert.as_deref())
+            .map_err(|e| setup_error(e, "could not configure Controller trust"))?;
+        let mut server = self.server.clone();
+        if diff {
+            anyhow::ensure!(self.socket.is_none(), "diff requires an HTTP(S) Controller endpoint");
+            if let Some(base) = &mut server {
+                let url = url::Url::parse(base).map_err(|_| anyhow::anyhow!("invalid Controller endpoint"))?;
+                anyhow::ensure!(
+                    matches!(url.scheme(), "http" | "https")
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.query().is_none()
+                        && url.fragment().is_none(),
+                    "invalid Controller endpoint"
+                );
+                *base = url.as_str().trim_end_matches('/').to_owned();
+            }
+        }
 
         if let Some(bearer) = cli_token {
-            let client = EdgionClient::with_static_bearer(
-                self.target,
-                self.server.clone(),
-                self.socket.clone(),
-                &trust,
-                bearer.as_str(),
-            )?;
-            return self.dispatch(client).await;
+            return EdgionClient::with_static_bearer(self.target, server, self.socket.clone(), &trust, bearer.as_str())
+                .map_err(|e| setup_error(e, "could not configure Controller connection"));
         }
 
         // No token anywhere: create a token-less client and run the friendly
         // pre-flight check (prints an actionable message if a token is required).
-        let mut client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone(), &trust)?;
-
-        client.ensure_auth().await?;
-
-        self.dispatch(client).await
+        let mut client = EdgionClient::new(self.target, server, self.socket.clone(), &trust)
+            .map_err(|e| setup_error(e, "could not configure Controller connection"))?;
+        client.ensure_auth().await.map_err(|error| {
+            if diff && !error.is::<client::AuthProbeError>() {
+                anyhow::anyhow!("Controller authentication connection failed")
+            } else {
+                error
+            }
+        })?;
+        Ok(client)
     }
 
     /// Dispatch the subcommand after the client is authenticated.
     async fn dispatch(&self, client: EdgionClient) -> Result<()> {
         match &self.command {
+            Commands::Diff { file } => commands::diff::execute(&client, file).await,
             Commands::ServerInfo => print_report(&client.server_info().await?),
             Commands::Diagnostics { report } => print_report(&client.diagnostics(*report).await?),
             Commands::Apply { file, dry_run } => {

@@ -88,7 +88,10 @@ impl KubernetesStorage {
     ) -> Result<String, ConfWriterError> {
         query::validate_locator(kind, namespace, name)?;
         tokio::time::timeout(SOURCE_TIMEOUT, async {
-            let scopes = self.source_scopes(kind, namespace).await?;
+            let scopes = self.source_scopes(kind, namespace).await.map_err(|error| match error {
+                ConfWriterError::NotFound(_) => query::source_error(),
+                other => other,
+            })?;
             let api: Api<DynamicObject> = if let Some(namespace) = namespace {
                 Api::namespaced_with(self.client.clone(), namespace, &scopes.resource)
             } else {
@@ -97,7 +100,8 @@ impl KubernetesStorage {
             let request = kube::core::Request::new(api.resource_url())
                 .get(name, &Default::default())
                 .map_err(|_| query::source_error())?;
-            let value: Value = super::super::source_transport::json(&self.client, request).await?;
+            let value: Value =
+                super::super::source_transport::named_json(&self.client, request, &scopes.resource, name).await?;
             let content = serde_json::to_string(&value).map_err(|_| query::source_error())?;
             if content.len() > MAX_SOURCE_BYTES {
                 return Err(query::budget_error());

@@ -21,3 +21,6 @@ pub mod secret_keys;
 
 // Re-export commonly used constants at module level
 pub use app::*;
+
+/// Set to "true" on a Controller source GET only for confirmed named-object absence.
+pub const SOURCE_NOT_FOUND_HEADER: &str = "x-edgion-source-not-found";

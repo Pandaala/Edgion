@@ -2,6 +2,18 @@ use crate::conf_mgr::ConfWriterError;
 use axum::http::{header::IF_MATCH, HeaderMap, StatusCode};
 use edgion_resources::ResourceKind;
 
+pub(super) fn source_get_response(
+    value: Option<serde_json::Value>,
+) -> axum::response::Result<super::bounded_json::BoundedJson<serde_json::Value>> {
+    value.map(super::bounded_json::BoundedJson).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            [(edgion_resources::constants::SOURCE_NOT_FOUND_HEADER, "true")],
+        )
+            .into()
+    })
+}
+
 /// Helper function to validate a resource against its schema
 ///
 /// In K8s mode, validation is skipped (handled by K8s API Server)

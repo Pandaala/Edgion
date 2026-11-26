@@ -312,7 +312,7 @@ async fn exact_source_get_preserves_fields_and_enforces_scope_identity_and_bound
         Err(ConfWriterError::PermissionDenied(_))
     ));
     for (status, body, expected) in [
-        (404, b"private-server-marker".to_vec(), 404),
+        (404, b"private-server-marker".to_vec(), 500),
         (200, vec![b'x'; MAX_SOURCE_BYTES + 1], 413),
     ] {
         let source = storage(&[], move |_| {
@@ -328,11 +328,66 @@ async fn exact_source_get_preserves_fields_and_enforces_scope_identity_and_bound
         assert!(!error.to_string().contains("private-server-marker"));
         assert!(matches!(
             (&error, expected),
-            (ConfWriterError::NotFound(_), 404) | (ConfWriterError::SourceBudget, 413)
+            (ConfWriterError::InternalError(_), 500) | (ConfWriterError::SourceBudget, 413)
         ));
     }
     let source = storage(&[], |_| response(StatusCode::OK, row("other", "one")));
     assert!(source.get_source_one("ConfigMap", Some("apps"), "one").await.is_err());
+}
+
+#[tokio::test]
+async fn named_source_preserves_adjacent_decimals_from_kubernetes_json() {
+    for decimal in ["51.248178375505404", "51.24817837550541"] {
+        let source = storage(&[], move |_| {
+            let body = format!(
+                r#"{{"kind":"EdgionPlugins","metadata":{{"name":"one","namespace":"apps"}},"spec":{{"minimum":{decimal}}}}}"#
+            );
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from(body.into_bytes()))
+                .unwrap()
+        });
+        let content = source
+            .get_source_one("EdgionPlugins", Some("apps"), "one")
+            .await
+            .unwrap();
+        let document: Value = yaml_serde::from_str(&content).unwrap();
+        assert_eq!(
+            document["spec"]["minimum"].as_f64().unwrap().to_bits(),
+            decimal.parse::<f64>().unwrap().to_bits()
+        );
+    }
+}
+
+#[tokio::test]
+async fn named_source_absence_requires_the_requested_object_in_a_served_collection() {
+    let mut unavailable = storage(&[], |_| panic!("no object request for an unserved kind"));
+    unavailable.legacy_versions = LegacySelections::default();
+    unavailable.legacy_versions.cell("TCPRoute").unwrap().set(None).unwrap();
+    assert!(matches!(
+        unavailable.get_source_one("TCPRoute", Some("apps"), "one").await,
+        Err(ConfWriterError::InternalError(_))
+    ));
+
+    for (details, missing) in [
+        (json!({"name":"one","kind":"configmaps"}), true),
+        (json!({"name":"two","kind":"configmaps"}), false),
+        (json!({"name":"one","kind":"secrets"}), false),
+        (json!({"name":"one","kind":"configmaps","group":"other"}), false),
+        (json!(null), false),
+    ] {
+        let source = storage(&[], move |_| {
+            response(
+                StatusCode::NOT_FOUND,
+                json!({"apiVersion":"v1","kind":"Status","status":"Failure","code":404,"reason":"NotFound","details":details}),
+            )
+        });
+        let error = source
+            .get_source_one("ConfigMap", Some("apps"), "one")
+            .await
+            .unwrap_err();
+        assert_eq!(matches!(error, ConfWriterError::NotFound(_)), missing);
+    }
 }
 
 #[tokio::test]

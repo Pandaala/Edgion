@@ -27,8 +27,23 @@ stdout. The CLI process tests cover the endpoint, authentication and both readin
 
 The Controller owns the findings in `api/diagnostics_handlers.rs`. Recheck the CLI
 mapping and its [command-line tests](../../../../edgion-cli/tests/diagnostics.rs) if
-the routes, response envelope or truncation contract change. Separate common-05 tasks cover
+the routes, response envelope or truncation contract change.
+
+For the common-05 source comparison (`cli-config-diff`), the center resource GET
+returns the persisted document directly. Validate its identity and compare the
+structured content before rendering only document ordinals and fixed categories.
+Rendering arbitrary paths can expose credentials in keys and annotations. A
+failed read or parse must suppress the batch and exit 2, distinct from a completed
+comparison with differences (1) or equality (0). Recheck the
+[CLI process tests](../../../../edgion-cli/tests/config_diff.rs) if the source GET,
+normalization, output, or failure contract changes. Only a confirmed named-object
+absence carries the source GET's missing-object header. Kubernetes discovery
+failure or a generic upstream 404 must never acquire that header. Match string
+keys and round-trip decimals across the YAML source and JSON response, reject
+duplicate keys and explicit null documents, and keep missing-token guidance
+distinct from Controller initialization.
+
+Separate common-05 tasks cover
 [route status](../../../../tasks/todo/cli-route-status.md),
-[fleet sync](../../../../tasks/todo/cli-fleet-sync-status.md),
-[source diff](../../../../tasks/todo/cli-config-diff.md) and
+[fleet sync](../../../../tasks/todo/cli-fleet-sync-status.md) and
 [target names](../../../../tasks/todo/cli-target-names.md).

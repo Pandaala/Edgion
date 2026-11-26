@@ -239,6 +239,39 @@ A successful query exits with status 0 even when it finds issues. Failed queries
 exit with a nonzero status. If an etcd standby returns a leader hint, retry
 against the active Controller.
 
+### diff - Compare manifests with persisted configuration
+
+Run `edgion-cli diff -f route.yaml -f plugins.yaml` against the default
+`center` target. The token needs read access to each resource. Files and
+nonempty YAML documents are compared in input order. Each file and each source
+response can contain up to 10 MiB. The command reads individual objects, so
+concurrent edits can be reflected between reads.
+
+Exit code **0** means all documents match. **1** means at least one object
+would be added or differs. **2** means the comparison failed. A failed
+comparison prints a diagnostic on stderr and suppresses the result batch.
+Only a Controller-confirmed missing object counts as an addition. An unavailable
+resource type, an unmarked 404 (including one from an older Controller), or an
+unrecognized response fails the comparison. Supply credentials using a bearer
+token. The diff command rejects usernames and passwords in the server URL.
+
+Empty YAML documents are skipped. An explicit top-level `null` or `~` fails
+the batch. Scalar mapping keys retain their spelling, including numeric keys,
+and duplicate keys are rejected. This is a structural source comparison. Map order and formatting are ignored,
+list order matters, and a missing namespace on a namespaced manifest means
+`default`. Cluster-scoped resources must omit the namespace or set it to null.
+The comparison ignores top-level `status` and the metadata fields `uid`,
+`resourceVersion`, `generation`, `creationTimestamp`, `managedFields`,
+`selfLink`, `deletionTimestamp` and `deletionGracePeriodSeconds`. Persisted
+backend defaults (for example, a Service port protocol), labels, annotations
+and other operator fields participate. Kubernetes admission or apply may
+produce a different result from this source comparison.
+
+Each line identifies the document by ordinal. Changed objects list only the
+affected categories (`labels`, `annotations`, other `metadata`, or `content`).
+This also detects changes in Secrets and opaque plugin configuration while
+keeping field names and values out of the report.
+
 ### apply - Apply Configuration
 
 Create or update resources from a YAML file. **Only supported with the center target.**

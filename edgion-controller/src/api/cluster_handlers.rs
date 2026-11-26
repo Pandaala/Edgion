@@ -36,15 +36,15 @@ pub async fn list_cluster(
 pub async fn get_cluster(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, name)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> axum::response::Result<Json<serde_json::Value>> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     if !is_kind_cluster_scoped(kind) {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into());
     }
 
     let resource = state.center_get_cluster_resource(kind, &name).await?;
-    resource.map(Json).ok_or(StatusCode::NOT_FOUND)
+    super::common::source_get_response(resource)
 }
 
 /// Create a cluster-scoped resource.

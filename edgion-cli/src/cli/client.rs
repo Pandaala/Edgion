@@ -10,6 +10,29 @@ use zeroize::Zeroizing;
 
 use super::TargetType;
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AuthProbeError {
+    Http(u16),
+    InvalidResponse,
+    Initializing,
+    TokenRequired,
+}
+
+impl std::fmt::Display for AuthProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http(status) => write!(f, "/auth/status returned HTTP {status}"),
+            Self::InvalidResponse => f.write_str("invalid Controller authentication response"),
+            Self::Initializing => f.write_str("Controller authentication is initializing, retry later"),
+            Self::TokenRequired => f.write_str(
+                "Controller requires a bearer token: pass --token, set EDGION_TOKEN, or use edgion-cli login --token",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AuthProbeError {}
+
 /// Append `limit` and `continue` query params to a URL.
 ///
 /// Uses `query_pairs_mut` so values are properly URL-encoded (continue tokens are
@@ -276,28 +299,23 @@ impl EdgionClient {
 
         let status_code = resp.status();
         if !status_code.is_success() {
-            bail!(
-                "/auth/status returned HTTP {} -- controller is too old or misconfigured",
-                status_code
-            );
+            return Err(AuthProbeError::Http(status_code.as_u16()).into());
         }
 
-        let wrapper: serde_json::Value = resp
-            .json()
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            data: AuthStatusResponse,
+        }
+        let status = resp
+            .json::<Envelope>()
             .await
-            .map_err(reqwest::Error::without_url)
-            .context("/auth/status response is not valid JSON (schema unrecognized)")?;
-        let data = wrapper
-            .get("data")
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
-        let status: AuthStatusResponse = serde_json::from_value(data)
-            .context("/auth/status schema unrecognized -- CLI/controller version mismatch")?;
+            .map_err(|_| AuthProbeError::InvalidResponse)?
+            .data;
 
         match status.status {
             AuthStatus::Disabled => return Ok(()),
             AuthStatus::Initializing => {
-                bail!("controller authentication subsystem initializing, please retry later");
+                return Err(AuthProbeError::Initializing.into());
             }
             AuthStatus::Ready => {}
         }
@@ -310,12 +328,7 @@ impl EdgionClient {
         // i.e. none of --token / EDGION_TOKEN / ~/.edgion/token resolved. Emit a
         // clear, actionable message. The CLI no longer performs any credential
         // exchange (token-only auth).
-        bail!(
-            "this controller requires a bearer token (mode: {}); \
-             pass --token <TOKEN>, set the EDGION_TOKEN environment variable, \
-             or run `edgion-cli login --token <TOKEN>` to persist one",
-            status.mode
-        )
+        Err(AuthProbeError::TokenRequired.into())
     }
 
     /// Get the target type

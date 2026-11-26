@@ -95,10 +95,10 @@ pub async fn list_namespaced(
 pub async fn get_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> axum::response::Result<Json<serde_json::Value>> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
     let resource = state.center_get_resource(kind, &ns, &name).await?;
-    resource.map(Json).ok_or(StatusCode::NOT_FOUND)
+    super::common::source_get_response(resource)
 }
 
 /// Establish the URL namespace before any backend persists the admitted body.

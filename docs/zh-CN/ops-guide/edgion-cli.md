@@ -211,6 +211,28 @@ EdgionStreamPlugins、具有类型化配置的 EdgionConfigData 和 LinkSys。�
 查询成功时退出码为 0，即使报告中列出了问题。查询失败时退出码非零。
 若 etcd 备用节点返回主节点提示，请连接当前主 Controller 后重试。
 
+### diff - 比较本地清单与已保存配置
+
+在默认的 `center` 目标上运行 `edgion-cli diff -f route.yaml -f plugins.yaml`。
+令牌需要每个资源的读取权限。命令按输入顺序比较各文件中的非空 YAML 文档，
+单个文件和单次源对象响应的上限均为 10 MiB。每个对象独立读取，期间的并发修改可能反映在后续结果中。
+
+退出码 **0** 表示全部一致，**1** 表示至少一个对象拟新增或有差异，**2** 表示比较失败。
+失败时仅向标准错误写入诊断，整批结果不输出。只有 Controller 确认指定对象不存在时才计为拟新增。
+资源类型不可用、404 缺少确认标记（包括旧版 Controller 的响应）或响应无法识别时，比较失败。
+请使用 Bearer 令牌认证。diff 会拒绝包含用户名或密码的服务器 URL。
+
+空 YAML 文档会跳过，显式顶层 `null` 或 `~` 会使整批失败。标量映射键保留原始拼写，包括数字键；重复键会被拒绝。
+比较基于源对象的结构。忽略格式和映射键顺序，保留列表顺序。有命名空间的资源省略
+`namespace` 时按 `default` 比较；集群级资源应省略命名空间或设为 null。
+忽略顶层 `status` 以及元数据中的 `uid`、`resourceVersion`、`generation`、
+`creationTimestamp`、`managedFields`、`selfLink`、`deletionTimestamp`、
+`deletionGracePeriodSeconds`。已持久化的后端默认值（例如 Service 端口协议）、标签、
+注解和其他用户字段均参与比较。Kubernetes 准入或实际应用清单后的结果可能与源对象比较结果不同。
+
+每行用序号标识文档。有差异时只列出涉及的类别（`labels`、`annotations`、其他
+`metadata` 或 `content`）。Secret 和插件配置中的变化也可检测，输出不会包含其键名或值。
+
 ### apply - 应用配置
 
 从 YAML 文件创建或更新资源。**仅 center target 支持此命令。**

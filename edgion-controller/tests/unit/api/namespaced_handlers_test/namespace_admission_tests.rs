@@ -28,6 +28,27 @@ fn encode(value: &Value, yaml: bool) -> String {
     }
 }
 
+#[tokio::test]
+async fn source_get_marks_confirmed_absence_in_both_scopes() {
+    use axum::response::IntoResponse;
+    let (state, _tmp) = make_fs_state().await;
+    let namespaced = get_namespaced(
+        State(state.clone()),
+        Path(("ConfigMap".into(), "apps".into(), "missing".into())),
+    )
+    .await;
+    let cluster =
+        crate::api::cluster_handlers::get_cluster(State(state), Path(("GatewayClass".into(), "missing".into()))).await;
+    for result in [namespaced, cluster] {
+        let response = result.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()[edgion_resources::constants::SOURCE_NOT_FOUND_HEADER],
+            "true"
+        );
+    }
+}
+
 #[test]
 fn namespace_admission_changes_only_omitted_or_null_namespace() {
     for yaml in [false, true] {

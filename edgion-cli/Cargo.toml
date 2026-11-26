@@ -39,7 +39,7 @@ anyhow.workspace = true
 
 clap.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 yaml_serde.workspace = true
 
 kube = { workspace = true, features = ["client", "rustls-tls", "ring"] }
