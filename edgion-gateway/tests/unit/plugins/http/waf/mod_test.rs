@@ -1764,3 +1764,114 @@ async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_de
         }
     );
 }
+
+#[tokio::test]
+async fn reqbody_error_rules_preserve_default_and_detection_decisions() {
+    for (mode, action, expected) in [
+        (WafMode::On, "pass,setvar:'tx.score=+1'", Some(400)),
+        (WafMode::On, "deny,status:422", Some(422)),
+        (WafMode::DetectionOnly, "deny,status:422", None),
+    ] {
+        let plugin = plugin(
+            &format!("SecRule REQBODY_ERROR \"@eq 1\" \"id:9,phase:2,{action}\"\n"),
+            mode,
+        );
+        let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head_with_headers(
+            &mut session,
+            &mut waf,
+            "/submit",
+            vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::default());
+        session
+            .expect_capture_request_body_with_consumer()
+            .once()
+            .return_once(|_, consumer| {
+                consumer.consume(b"?");
+                consumer.consume(b" ");
+                Ok(2)
+            });
+        session
+            .expect_request_body_available_len()
+            .once()
+            .return_once(|_| Ok(2));
+        session
+            .expect_read_request_body()
+            .once()
+            .return_once(|_| Ok(Bytes::from_static(b"? ")));
+        waf.expect_install_transaction()
+            .times(usize::from(expected.is_none()))
+            .returning(|_, tx| {
+                assert!(tx.request_body_error().is_some());
+                true
+            });
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+        let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
+        assert_eq!(
+            result,
+            expected.map_or(PluginRunningResult::GoodNext, |status| {
+                PluginRunningResult::ErrResponse { status, body: None }
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_multipart_field_uses_request_body_error_policy() {
+    let body = Bytes::from_static(
+        b"--unit\r\nContent-Disposition: form-data; name=one; name=two\r\n\r\nvalue\r\n--unit--\r\n",
+    );
+    for (mode, action, expected) in [
+        (WafMode::On, "pass", Some(400)),
+        (WafMode::On, "deny,status:422", Some(422)),
+        (WafMode::DetectionOnly, "deny,status:422", None),
+    ] {
+        let plugin = plugin(
+            &format!("SecRule REQBODY_ERROR \"@eq 1\" \"id:9,phase:2,{action}\"\n"),
+            mode,
+        );
+        let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head_with_headers(
+            &mut session,
+            &mut waf,
+            "/submit",
+            vec![(b"content-type".to_vec(), b"multipart/form-data; boundary=unit".to_vec())],
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::default());
+        let len = body.len() as u64;
+        session
+            .expect_ensure_request_body()
+            .once()
+            .return_once(move |_| Ok(len));
+        session
+            .expect_request_body_available_len()
+            .once()
+            .return_once(move |_| Ok(len));
+        let bytes = body.clone();
+        session
+            .expect_read_request_body()
+            .once()
+            .return_once(move |_| Ok(bytes));
+        waf.expect_install_transaction()
+            .times(usize::from(expected.is_none()))
+            .returning(|_, tx| {
+                assert!(tx.request_body_error().is_some());
+                true
+            });
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+        let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
+        assert_eq!(
+            result,
+            expected.map_or(PluginRunningResult::GoodNext, |status| {
+                PluginRunningResult::ErrResponse { status, body: None }
+            })
+        );
+    }
+}

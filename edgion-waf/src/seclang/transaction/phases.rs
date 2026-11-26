@@ -34,7 +34,11 @@ impl<'generation> Transaction<'generation> {
     }
 
     pub const fn request_body_error(&self) -> Option<BodyError> {
-        self.request_body_error
+        self.request.body_error
+    }
+
+    pub(super) fn permits_malformed_publication(&self) -> bool {
+        self.rule_engine_mode == RuleEngineMode::DetectionOnly || self.generation.reads_body_error
     }
 
     /// Narrow source admission after header controls and before body publication.
@@ -91,7 +95,7 @@ impl<'generation> Transaction<'generation> {
         let (publication, body_error) = match publication {
             Ok(publication) => (publication, None),
             Err(error @ (BodyError::Malformed { .. } | BodyError::MultipartBoundary))
-                if self.rule_engine_mode == RuleEngineMode::DetectionOnly =>
+                if self.permits_malformed_publication() =>
             {
                 (
                     if raw_policy.is_some() {
@@ -144,7 +148,7 @@ impl<'generation> Transaction<'generation> {
             });
         }
         self.request.body = Some(publication);
-        self.request_body_error = body_error;
+        self.request.body_error = body_error;
         self.request.entry_count = entry_count;
         self.request.retained_bytes = request_retained;
         Ok(())
@@ -294,6 +298,7 @@ impl<'generation> Transaction<'generation> {
     }
 
     /// Prepare the exact constant-memory raw-body lane selected by the compiler.
+    /// Rules that read REQBODY_ERROR in any phase require parsed publication.
     pub fn start_request_body_stream(&mut self) -> Result<(), RuntimeError> {
         self.ensure_json_healthy()?;
         if self.next_phase() != Some(Phase::RequestBody) {
@@ -313,7 +318,9 @@ impl<'generation> Transaction<'generation> {
             return Err(RuntimeError::RequestBodyStreamCtlUnavailable);
         }
         let summary = self.generation.request_body_execution_summary();
-        if summary.streaming_structured_rule_units() != 0
+        // The phase-2 summary alone cannot see a later reader of the parser outcome.
+        if self.generation.reads_body_error
+            || summary.streaming_structured_rule_units() != 0
             || summary.bounded_snapshot_rule_units() != 0
             || summary.unsupported_rule_units() != 0
         {

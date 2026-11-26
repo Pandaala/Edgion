@@ -64,22 +64,23 @@ are charged (commit `53229a191`, guard
 per-asset/total phrase counts and bytes. A missing optional member is a hard error, not a silent skip.
 
 **4. The gateway contract.**
-- *Fail-closed layering.* Request-path failures are `RuntimeError` values
-  (`seclang/transaction/mod.rs:321`). The crate never chooses an HTTP status, never logs, and never
-  degrades to "allow" on its own: a limit, invariant or parse failure ends the operation with an error, and
-  the gateway maps it (`edgion-gateway/src/plugins/http/waf/mod.rs`, `WafErrorCode`). The one in-crate
-  policy fork is `RuleEngineMode::DetectionOnly`, which turns a malformed body into a raw-only fallback
-  publication instead of an error (`seclang/transaction/phases.rs:92-113`; consequences tracked in
-  `tasks/improve-issues/waf5-01-*`).
-- *Request error attribution (waf-05).* Both streamed and buffered request
-  paths use the gateway's `runtime_error_status` for the reply and terminal
-  access-log status. Malformed bodies and excessive query arguments map to
-  400, header size/count and cookie count to 431, and request input size and
-  body structure/count limits to 413. Rule work, capture storage, internal
-  memory/work budgets and response faults can depend on policy or upstream
-  data and retain 500. Check the error producer when adding a limit shared
-  across phases. The gateway unit status table and JSON/XML wire matrices
-  cover this boundary. Rule-visible parse errors remain tracked under waf5-02.
+- *Fail-closed layering.* The engine owns typed parser outcomes. The Gateway owns HTTP
+  status and the canonical access log. On complete inspection, DetectionOnly can publish
+  the existing bounded fallback for malformed JSON, XML or multipart. An enforcing
+  generation with an effective `REQBODY_ERROR` consumer can publish the same fallback.
+  Phase 2 then runs once with the scalar set to 1. A disruptive rule supplies the
+  enforcing status. In the absence of an intervention, the Gateway returns 400 before
+  upstream dispatch in On mode and continues in DetectionOnly. Enforcing generations
+  without a consumer retain early rejection of detected malformed bodies.
+  See the [parser outcome specification](request-body-parser-outcome.md)
+  and [full inspection cutoff contract](../../http-body/regression-guards/waf-prefix-before-dispatch.md#explicit-full-mode-policy-cutoff).
+- *Request error attribution (waf-05).* Both streamed and buffered paths use
+  `runtime_error_status` for terminal engine failures. Malformed input and excessive
+  query arguments map to 400, header size/count and cookie count to 431, and request
+  input size and body structure/count limits to 413. Rule work, capture storage,
+  internal memory/work budgets and response faults retain 500. Independent limits
+  and storage/transport errors keep their existing paths. The gateway unit status
+  table and JSON/XML wire matrices cover this boundary.
 - *No panic.* Request-path code returns `RuntimeError` for every reachable failure. `expect` /
   `unreachable!` are allowed only where the panic is logically impossible and the message states why
   (`skills/00-design-rules.md` section J); the current site-by-site classification is in the

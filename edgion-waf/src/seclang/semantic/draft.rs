@@ -295,6 +295,7 @@ pub enum CtlErrorKind {
     Value,
     Delimiter,
     Collection,
+    Selector,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

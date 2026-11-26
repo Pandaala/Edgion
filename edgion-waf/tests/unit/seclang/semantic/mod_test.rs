@@ -83,7 +83,7 @@ fn registries_have_frozen_cardinality_and_case_policy() {
             ActionKind::ALL.len(),
             TransformationKind::ALL.len()
         ),
-        (33, 19, 23, 20)
+        (34, 19, 23, 20)
     );
     for &kind in CollectionKind::ALL {
         assert_eq!(
@@ -1366,6 +1366,23 @@ fn structured_action_grammars_reject_upstream_coercions_and_spacing() {
         let rendered = format!("{cause:?} {cause}").to_ascii_lowercase();
         assert!(!rendered.contains("private") && !rendered.contains("unknown"));
         source = cause.source();
+    }
+}
+
+#[test]
+fn ctl_target_rejects_named_selectors_on_scalars() {
+    for target in ["REQBODY_ERROR:field", "REQBODY_ERROR:/field/", "REQUEST_URI:field"] {
+        let rule = format!("SecAction \"ctl:ruleRemoveTargetByTag=check;{target}\"\n");
+        assert!(
+            matches!(
+                with_draft(&rule, |_| ()),
+                Err(SemanticError::CtlSyntax {
+                    kind: CtlErrorKind::Selector,
+                    ..
+                })
+            ),
+            "{target}"
+        );
     }
 }
 
@@ -3050,6 +3067,7 @@ fn collection_phase_and_selector_tables_cover_every_registered_collection() {
         CollectionKind::MultipartPartHeaders,
         CollectionKind::RequestBody,
         CollectionKind::RequestBodyLength,
+        CollectionKind::ReqbodyError,
         CollectionKind::Xml,
     ];
     let response_headers = [CollectionKind::ResponseHeaders, CollectionKind::ResponseStatus];

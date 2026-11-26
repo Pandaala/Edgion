@@ -351,6 +351,7 @@ impl CompiledGeneration {
             has_expensive_checks: optional_checks.hpp || optional_checks.multipart,
             prefix_validation: Ok(()),
             requires_complete_request_body: false,
+            reads_body_error: false,
             bytes,
             templates,
             segments,

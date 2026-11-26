@@ -768,6 +768,7 @@ pub(super) fn minimum_collection_phase(collection: CollectionKind) -> Phase {
         | CollectionKind::FilesNames
         | CollectionKind::MultipartPartHeaders
         | CollectionKind::RequestBody
+        | CollectionKind::ReqbodyError
         | CollectionKind::RequestBodyLength
         | CollectionKind::Xml => Phase::RequestBody,
         CollectionKind::ResponseHeaders | CollectionKind::ResponseStatus => Phase::ResponseHeaders,

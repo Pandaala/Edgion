@@ -97,6 +97,18 @@ fn map_collector_error(error: CollectorError) -> RuntimeError {
         CollectorError::State => RuntimeError::JsonInspectionState,
     }
 }
+fn check_fallback_source(len: usize, limits: JsonStreamLimits) -> Result<(), RuntimeError> {
+    if len > limits.max_source_bytes {
+        return Err(RuntimeError::JsonChecker {
+            kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
+                kind: crate::seclang::JsonStreamLimit::SourceBytes,
+                limit: limits.max_source_bytes,
+            }),
+        });
+    }
+    Ok(())
+}
+
 fn malformed(error: JsonCheckerError) -> bool {
     matches!(
         error,
@@ -185,6 +197,7 @@ impl<'generation> Transaction<'generation> {
         let mut body_error = None;
         let mut retain_raw = raw.unwrap_or(false);
         if !source.is_empty() {
+            let permits_malformed = self.permits_malformed_publication();
             let context = SingleInputContext {
                 generation: &self.generation,
                 request: &self.request,
@@ -236,9 +249,10 @@ impl<'generation> Transaction<'generation> {
                     let kind = BodyError::Malformed {
                         processor: BodyProcessorSelection::Json,
                     };
-                    if self.rule_engine_mode != RuleEngineMode::DetectionOnly {
+                    if !permits_malformed {
                         return Err(RuntimeError::Body { kind });
                     }
+                    check_fallback_source(source.len(), limits.lexical)?;
                     budget = collector.into_abandoned_budget().map_err(map_collector_error)?;
                     body_error = Some(kind);
                     retain_raw = raw.unwrap_or(true);
@@ -487,7 +501,7 @@ impl JsonInspectionSession<'_, '_> {
         if let Err(kind) = parsed {
             if malformed(kind) {
                 self.parse_error = Some(kind);
-                if tx.rule_engine_mode == RuleEngineMode::DetectionOnly {
+                if tx.permits_malformed_publication() {
                     return Ok(());
                 }
                 return Err(RuntimeError::Body {
@@ -527,6 +541,7 @@ impl JsonInspectionSession<'_, '_> {
                 self.feed_checker(JsonStreamInput::Complete)?;
             }
             self.accounting = Some(if self.parse_error.is_some() {
+                check_fallback_source(captured_len, self.limits.lexical)?;
                 BodyAccounting::json_prelude(captured_len, self.transaction.limits.body, raw.unwrap_or(true))
                     .map_err(|kind| RuntimeError::Body { kind })?
             } else {
@@ -542,10 +557,10 @@ impl JsonInspectionSession<'_, '_> {
         result
     }
     /// Raw targets do not override JSON visibility. Query after complete so only
-    /// actual detection-only syntax fallback requires its default raw source.
+    /// a published syntax fallback requires its default raw source.
     pub fn requires_raw_source(&self) -> bool {
         self.transaction.tx.force_request_body_variable.map_or(
-            self.parse_error.is_some() && self.transaction.rule_engine_mode == RuleEngineMode::DetectionOnly,
+            self.parse_error.is_some() && self.transaction.permits_malformed_publication(),
             |value| value == super::super::OnOff::On,
         )
     }
@@ -553,10 +568,14 @@ impl JsonInspectionSession<'_, '_> {
     /// provisional body facts. Genuine errors retain precedence over policy stop.
     pub fn stop_by_policy(mut self) -> Result<(), RuntimeError> {
         let error = self.failure.or_else(|| {
-            self.parse_error.map(|_| RuntimeError::Body {
-                kind: BodyError::Malformed {
-                    processor: BodyProcessorSelection::Json,
-                },
+            self.parse_error.map(|_| {
+                check_fallback_source(self.observed_bytes, self.limits.lexical)
+                    .err()
+                    .unwrap_or(RuntimeError::Body {
+                        kind: BodyError::Malformed {
+                            processor: BodyProcessorSelection::Json,
+                        },
+                    })
             })
         });
         self.finished = true;

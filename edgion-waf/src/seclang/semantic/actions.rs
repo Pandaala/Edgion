@@ -384,11 +384,19 @@ fn parse_ctl_plan<'source>(
             let target_text = action_mapped_text(operand, line, target_range.clone())?;
             let target = parse_single_target(target_text.text(), target_text.logical_range().start, line, line_index)
                 .map_err(SemanticError::CtlTarget)?;
-            if CollectionKind::lookup_ascii_insensitive(target.collection().text().as_bytes()).is_none() {
-                return Err(SemanticError::CtlSyntax {
+            let collection = CollectionKind::lookup_ascii_insensitive(target.collection().text().as_bytes()).ok_or(
+                SemanticError::CtlSyntax {
                     kind: CtlErrorKind::Collection,
                     position: target.collection().span().start,
-                });
+                },
+            )?;
+            if let Some(selector) = target.selector() {
+                if !collection_accepts_selector(collection) {
+                    return Err(SemanticError::CtlSyntax {
+                        kind: CtlErrorKind::Selector,
+                        position: selector.span().start,
+                    });
+                }
             }
             Ok(CtlPlan::RuleRemoveTargetByTag { tag, target_range })
         }

@@ -354,6 +354,14 @@ impl CandidateCursor {
         };
         let index = self.index;
         match collection {
+            CollectionKind::ReqbodyError => {
+                self.index = 1;
+                Ok((index == 0 && request.body.is_some()).then_some(SelectedValue {
+                    collection,
+                    name: None,
+                    value: SelectedBytes::BodyError,
+                }))
+            }
             CollectionKind::ReqbodyProcessor if request.body.is_none() && tx.request_body_processor.is_some() => {
                 self.index = 1;
                 Ok((index == 0).then_some(SelectedValue {

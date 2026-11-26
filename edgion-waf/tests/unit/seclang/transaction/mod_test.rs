@@ -207,6 +207,7 @@ fn owned_key_request() -> RequestState<'static> {
         bytes: Vec::new(),
         collections: std::array::from_fn(|_| Vec::new()),
         body: None,
+        body_error: None,
         entry_count: 0,
         retained_bytes: 0,
     }
@@ -3828,6 +3829,23 @@ fn ctl_target_removal_filters_only_the_named_value_in_chain_children() {
 }
 
 #[test]
+fn phase_one_ctl_can_exclude_the_whole_body_error_scalar() {
+    let rules = generation(concat!(
+        "SecAction \"id:1,phase:1,pass,ctl:ruleRemoveTargetByTag=optional;REQBODY_ERROR\"\n",
+        "SecRule REQBODY_ERROR \"@eq 1\" \"id:2,phase:2,deny,status:422,tag:optional\"\n",
+        "SecRule REQBODY_ERROR \"@eq 1\" \"id:3,phase:2,deny,status:403\"\n",
+    ));
+    let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::from_static(b"{"),
+        BodyProcessorSelection::Json,
+    ))
+    .unwrap();
+    assert_eq!(tx.execute_request_body().unwrap().intervention().unwrap().status(), 403);
+}
+
+#[test]
 fn ctl_processor_and_force_raw_body_apply_before_publication() {
     let generation = generation(concat!(
         "SecAction \"id:1,phase:1,pass,ctl:requestBodyProcessor=JSON,ctl:forceRequestBodyVariable=On\"\n",
@@ -4079,6 +4097,52 @@ fn body_macro_cannot_start_raw_stream_and_keeps_complete_body_value() {
     let outcome = transaction.execute_request_body().unwrap();
     assert_eq!(outcome.findings()[0].rule_id(), 1);
     assert!(outcome.intervention().is_some());
+}
+
+#[test]
+fn later_body_error_rules_require_parsed_publication_before_raw_stream_start() {
+    for phase in 3..=5 {
+        let rules = generation(&format!(
+            "SecRule REQBODY_ERROR \"@eq 1\" \"id:1,phase:{phase},pass\"\n"
+        ));
+        let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        assert_eq!(tx.start_request_body_stream(), Err(RuntimeError::GenerationInvariant));
+        tx.publish_request_body(RequestBody::new(
+            bytes::Bytes::from_static(b"{"),
+            BodyProcessorSelection::Json,
+        ))
+        .unwrap();
+        tx.execute_request_body().unwrap();
+        tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+        let outcomes = [
+            tx.execute_response_headers().unwrap(),
+            tx.execute_response_window(ResponseWindow::new(b"", true)).unwrap(),
+            tx.execute_logging().unwrap(),
+        ];
+        assert_eq!(outcomes[phase - 3].findings()[0].rule_id(), 1);
+    }
+}
+
+#[test]
+fn raw_stream_accepts_a_later_rule_that_excludes_the_body_error_scalar() {
+    let rules = generation(concat!(
+        "SecRule REQUEST_BODY \"@pm body\" \"id:1,phase:2,pass\"\n",
+        "SecRule REQUEST_URI|!ARGS:unused|REQBODY_ERROR|!REQBODY_ERROR \"@streq /\" \"id:2,phase:3,pass\"\n",
+    ));
+    let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.start_request_body_stream().unwrap();
+    assert_eq!(
+        tx.execute_request_body_stream_chunk(b"body", true)
+            .unwrap()
+            .unwrap()
+            .findings()[0]
+            .rule_id(),
+        1
+    );
+    tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+    assert_eq!(tx.execute_response_headers().unwrap().findings()[0].rule_id(), 2);
 }
 
 #[test]
@@ -6684,4 +6748,167 @@ fn unit_journal_keeps_at_most_the_base_value_of_each_entry() {
     assert_eq!(tx.tx_value(b"last"), None);
     assert_eq!(tx.tx.retained_bytes, base_tx_bytes);
     assert_tx_accounting(&tx.tx);
+}
+
+#[test]
+fn reqbody_error_reports_the_completed_processor_result_per_request() {
+    use BodyProcessorSelection::{Json, Multipart, Raw, UrlEncoded, Xml};
+    let rules = generation(concat!(
+        "SecRule REQBODY_ERROR \"@streq 1\" \"id:100,phase:2,pass,setvar:'tx.invalid=1'\"\n",
+        "SecRule REQBODY_ERROR \"@streq 0\" \"id:101,phase:2,pass\"\n",
+    ));
+    assert!(rules.requires_complete_request_body());
+    assert!(rules.validate_request_body_prefix().is_err());
+    for (processor, source, invalid) in [
+        (Json, &b"{"[..], true),
+        (Json, b"{}", false),
+        (Xml, b"<doc>", true),
+        (Xml, b"<doc/>", false),
+        (Multipart, b"missing boundary", true),
+        (UrlEncoded, b"field=%zz", false),
+        (Raw, b"plain", false),
+    ] {
+        let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.publish_request_body(RequestBody::new(bytes::Bytes::from_static(source), processor))
+            .unwrap();
+        assert_eq!(tx.request_body_error().is_some(), invalid);
+        assert_eq!(
+            tx.execute_request_body().unwrap().findings()[0].rule_id(),
+            if invalid { 100 } else { 101 }
+        );
+        assert_eq!(tx.tx_value(b"invalid"), invalid.then_some(&b"1"[..]));
+        assert!(tx.execute_request_body().is_err());
+    }
+}
+
+#[test]
+fn reqbody_error_in_a_chain_observes_stream_failure_only_after_full_admission() {
+    let rules = generation(concat!(
+        "SecRule REQUEST_BODY_LENGTH \"@gt 0\" \"id:100,phase:2,deny,status:422,chain\"\n",
+        "SecRule REQBODY_ERROR \"@eq 1\"\n",
+    ));
+    for limit in [2, 3] {
+        let mut limits = RuntimeLimits::default();
+        limits.body.max_body_bytes = limit;
+        let mut tx = Transaction::new(&rules, request(&[], b"/"), limits).unwrap();
+        tx.execute_request_headers().unwrap();
+        let mut stream = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+        stream.feed(b"?").unwrap();
+        stream.feed(b"  ").unwrap();
+        if limit == 2 {
+            assert!(matches!(
+                stream.complete(3),
+                Err(RuntimeError::Body {
+                    kind: BodyError::ByteLimit { .. }
+                })
+            ));
+        } else {
+            stream.complete(3).unwrap();
+            stream.finish(Some(bytes::Bytes::from_static(b"?  "))).unwrap();
+            assert_eq!(tx.execute_request_body().unwrap().intervention().unwrap().status(), 422);
+        }
+    }
+    let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert!(tx.execute_request_body_after_cutoff().unwrap().findings().is_empty());
+}
+
+#[test]
+fn reqbody_error_fallback_accounts_source_bytes_after_an_early_json_error() {
+    let rules = generation(
+        r#"SecRule REQBODY_ERROR "@eq 1" "id:100,phase:2,pass"
+"#,
+    );
+    let mut limits = JsonInspectionLimits::default();
+    limits.lexical.max_source_bytes = 2;
+    for streamed in [false, true] {
+        let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let result = if streamed {
+            let mut stream = tx.start_json_inspection(limits, None).unwrap();
+            stream.feed(b"?").unwrap();
+            stream.feed(b"  ").unwrap();
+            stream.complete(3)
+        } else {
+            tx.publish_request_body_with_json_limits(
+                RequestBody::new(bytes::Bytes::from_static(b"?  "), BodyProcessorSelection::Json),
+                limits,
+            )
+        };
+        assert!(matches!(
+            result,
+            Err(RuntimeError::JsonChecker {
+                kind: crate::seclang::JsonCheckerError::Lexical(crate::seclang::JsonStreamError::Limit {
+                    kind: crate::seclang::JsonStreamLimit::SourceBytes,
+                    limit: 2
+                })
+            })
+        ));
+        assert!(tx.request_body_error().is_none());
+    }
+}
+
+#[test]
+fn reqbody_error_dependencies_follow_ordered_scalar_selection() {
+    for (targets, update, reads_error, needs_body) in [
+        ("REQUEST_URI|!REQBODY_ERROR", "", false, false),
+        (
+            "REQUEST_URI|REQBODY_ERROR",
+            "SecRuleUpdateTargetById 100 !REQBODY_ERROR\n",
+            false,
+            false,
+        ),
+        ("REQUEST_URI|&REQBODY_ERROR|!REQBODY_ERROR", "", false, false),
+        ("REQUEST_URI|!REQBODY_ERROR|REQBODY_ERROR", "", true, true),
+        ("REQUEST_URI|!REQBODY_ERROR|&REQBODY_ERROR", "", true, true),
+        (
+            "REQUEST_URI|REQUEST_BODY_LENGTH|REQBODY_ERROR|!REQBODY_ERROR",
+            "",
+            false,
+            true,
+        ),
+    ] {
+        let rules = generation(&format!(
+            "SecRule {targets} \"@streq /check\" \"id:100,phase:2,deny,status:422\"\n{update}"
+        ));
+        assert_eq!(rules.requires_complete_request_body(), needs_body, "{targets}");
+        assert_eq!(rules.validate_request_body_prefix().is_err(), needs_body, "{targets}");
+        let mut tx = Transaction::new(&rules, request(&[], b"/check"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        assert_eq!(tx.permits_malformed_publication(), reads_error, "{targets}");
+        let outcome = tx.execute_request_body_after_cutoff().unwrap();
+        assert_eq!(
+            outcome.intervention().map(|i| i.status()),
+            (!needs_body).then_some(422),
+            "{targets}"
+        );
+    }
+}
+
+#[test]
+fn reqbody_error_policy_stop_preserves_json_source_limit_priority() {
+    let rules = generation("SecRule REQBODY_ERROR \"@eq 1\" \"id:100,phase:2,pass\"\n");
+    let mut limits = JsonInspectionLimits::default();
+    limits.lexical.max_source_bytes = 2;
+    let malformed = RuntimeError::Body {
+        kind: BodyError::Malformed {
+            processor: BodyProcessorSelection::Json,
+        },
+    };
+    let source_limit = RuntimeError::JsonChecker {
+        kind: crate::seclang::JsonCheckerError::Lexical(crate::seclang::JsonStreamError::Limit {
+            kind: crate::seclang::JsonStreamLimit::SourceBytes,
+            limit: 2,
+        }),
+    };
+    for (tail, expected) in [(&b" "[..], malformed), (b"  ", source_limit)] {
+        let mut tx = Transaction::new(&rules, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let mut stream = tx.start_json_inspection(limits, None).unwrap();
+        stream.feed(b"?").unwrap();
+        stream.feed(tail).unwrap();
+        assert_eq!(stream.stop_by_policy(), Err(expected));
+        assert_eq!(tx.execute_request_body_after_cutoff().unwrap_err(), expected);
+    }
 }

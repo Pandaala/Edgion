@@ -32,6 +32,8 @@ failed chain branches. Target filtering charges each exclusion visit even when
 its collection differs from the selected value, then charges selector work
 for matching collections. Unsupported XML exclusion paths are rejected during
 compilation; the runtime implements only `/*` and `//@*`.
+Target exclusions use the same collection selector eligibility as rule targets.
+A phase-1 control may exclude a whole scalar consumed by a later tagged rule.
 The raw streaming path rejects active controls because it cannot honor the
 full transaction semantics.
 

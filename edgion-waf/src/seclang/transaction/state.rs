@@ -6,6 +6,7 @@ pub(super) struct RequestState<'generation> {
     pub(super) bytes: Vec<u8>,
     pub(super) collections: [Vec<CollectionValue>; COLLECTION_COUNT],
     pub(super) body: Option<RequestBodyPublication<'generation>>,
+    pub(super) body_error: Option<BodyError>,
     pub(super) entry_count: usize,
     pub(super) retained_bytes: usize,
 }
@@ -193,6 +194,7 @@ impl RequestState<'_> {
             bytes: Vec::new(),
             collections: std::array::from_fn(|_| Vec::new()),
             body: None,
+            body_error: None,
             entry_count: 0,
             retained_bytes: 0,
         };
@@ -560,6 +562,7 @@ pub(super) fn collection_index(collection: CollectionKind) -> usize {
         CollectionKind::Tx => 30,
         CollectionKind::UniqueId => 31,
         CollectionKind::Xml => 32,
+        CollectionKind::ReqbodyError => 33,
     }
 }
 

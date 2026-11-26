@@ -572,7 +572,6 @@ pub struct Transaction<'generation> {
     tx_journal: TxJournal,
     capture_keys: Vec<MatchValue>,
     response: Option<ResponseState>,
-    request_body_error: Option<BodyError>,
     request_body_cutoff: bool,
     evaluation_mode: EvaluationMode,
     #[cfg(test)]
@@ -775,7 +774,6 @@ impl<'generation> Transaction<'generation> {
             tx_journal: TxJournal::default(),
             capture_keys: Vec::new(),
             response: None,
-            request_body_error: None,
             request_body_cutoff: false,
             evaluation_mode,
             #[cfg(test)]

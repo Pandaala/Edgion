@@ -2083,7 +2083,7 @@ fn body_dependency_classification_charges_each_visited_unit_and_chain_member() {
     let mut generation = with_validated(source, |v| {
         compile_validated(v, None, CompilerLimits::default()).unwrap()
     });
-    // Four units, no phase-one members, and respectively two, one and one members.
+    // Four units, no phase-one members, and respectively two, two and one members.
     let classify = |generation: &mut CompiledGeneration, cap| {
         let limits = CompilerLimits {
             max_group_key_record_comparisons: cap,
@@ -2093,10 +2093,10 @@ fn body_dependency_classification_charges_each_visited_unit_and_chain_member() {
         generation.classify_request_body_dependencies(&mut work, limits)?;
         Ok(work.record_comparisons)
     };
-    assert_eq!(classify(&mut generation, 8), Ok(8));
+    assert_eq!(classify(&mut generation, 9), Ok(9));
     assert_eq!(
-        classify(&mut generation, 7),
-        Err(CompilerError::GroupKeyRecordComparisonLimit { limit: 7 })
+        classify(&mut generation, 8),
+        Err(CompilerError::GroupKeyRecordComparisonLimit { limit: 8 })
     );
 }
 

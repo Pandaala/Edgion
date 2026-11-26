@@ -113,8 +113,9 @@ are checked even in ignored markup. DTD and external/general entities are reject
 there is no entity network IO, recursive expansion or encoding transcoding.
 
 Physical, allocation and arithmetic errors are sticky and fail closed even in
-DetectionOnly. Malformed DetectionOnly input discards provisional facts and uses
-existing metadata/raw visibility policy. XML selected-result budget errors stay
+DetectionOnly. Malformed input in DetectionOnly or an enforcing generation with a
+REQBODY_ERROR consumer discards provisional facts and uses the existing
+metadata/raw visibility policy on complete admission. XML selected-result budget errors stay
 XmlResultLimit through selector, match, macro/capture reads and subsequent
 preflight; parser physical limits use XmlStream limits and logical BodyLimits
 retain Body errors. JSON errors keep their original domain. Later multiMatch

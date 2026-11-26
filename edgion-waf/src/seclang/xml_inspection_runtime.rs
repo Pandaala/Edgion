@@ -235,7 +235,7 @@ impl XmlInspectionSession<'_, '_> {
             Ok(()) => Ok(()),
             Err(error) if malformed(error) => {
                 self.parse_error = Some(error);
-                if tx.rule_engine_mode == RuleEngineMode::DetectionOnly {
+                if tx.permits_malformed_publication() {
                     Ok(())
                 } else {
                     Err(RuntimeError::Body {
@@ -308,7 +308,7 @@ impl XmlInspectionSession<'_, '_> {
     }
     pub fn requires_raw_source(&self) -> bool {
         self.transaction.tx.force_request_body_variable.map_or(
-            self.parse_error.is_some() && self.transaction.rule_engine_mode == RuleEngineMode::DetectionOnly,
+            self.parse_error.is_some() && self.transaction.permits_malformed_publication(),
             |value| value == super::super::OnOff::On,
         )
     }

@@ -31,6 +31,7 @@ pub(super) enum SelectedBytes {
     MatchedVar,
     MatchedVars(usize),
     CtlProcessor,
+    BodyError,
     Json(CandidateId),
     XmlText(CandidateId),
     XmlAttribute(CandidateId),
@@ -120,6 +121,7 @@ impl SelectedValue {
                 .ok_or(RuntimeError::GenerationInvariant)?
                 .value
                 .bytes(request, json_budget),
+            SelectedBytes::BodyError => Ok(if request.body_error.is_some() { b"1" } else { b"0" }),
             SelectedBytes::CtlProcessor => tx
                 .request_body_processor
                 .map(BodyProcessorSelection::as_bytes)

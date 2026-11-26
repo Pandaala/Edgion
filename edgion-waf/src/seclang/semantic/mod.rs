@@ -205,7 +205,7 @@ registry_enum!(CollectionKind {
     RequestHeaders => "REQUEST_HEADERS", RequestHeadersNames => "REQUEST_HEADERS_NAMES", RequestLine => "REQUEST_LINE",
     RequestMethod => "REQUEST_METHOD", RequestProtocol => "REQUEST_PROTOCOL", RequestUri => "REQUEST_URI",
     RequestUriRaw => "REQUEST_URI_RAW", ResponseBody => "RESPONSE_BODY", ResponseHeaders => "RESPONSE_HEADERS",
-    ResponseStatus => "RESPONSE_STATUS", Tx => "TX", UniqueId => "UNIQUE_ID", Xml => "XML",
+    ResponseStatus => "RESPONSE_STATUS", Tx => "TX", UniqueId => "UNIQUE_ID", Xml => "XML", ReqbodyError => "REQBODY_ERROR",
 });
 
 registry_enum!(OperatorKind {

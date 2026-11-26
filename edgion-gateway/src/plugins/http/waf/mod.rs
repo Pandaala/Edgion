@@ -186,6 +186,9 @@ impl WafPlugin {
         if intervention.is_some() {
             return Self::intervention_result(intervention);
         }
+        if let (RuleEngineMode::On, Some(kind)) = (self.shared.engine_mode, transaction.request_body_error()) {
+            return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::Body { kind });
+        }
         self.restore_transaction(session, transaction, WafLogPhase::RequestBody)
     }
 

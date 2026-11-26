@@ -409,6 +409,9 @@ target of later tagged rules, including chain members. Failed chains commit no
 controls. Each transaction has a bounded control-entry count and work budget;
 exhaustion follows the normal WAF runtime failure policy.
 
+To exclude a scalar such as `REQBODY_ERROR` from a tagged rule, specify the
+whole target. A literal or regex selector on a scalar is rejected at compile time.
+
 Put these directives in a referenced WafRuleBundle member and set
 `requestBody.inspection: full` on the WAF plugin:
 
@@ -710,8 +713,26 @@ PL1 does not enable that PL2 predicate. No upstream response body is inspected.
 Runtime budgets remain unchanged, so large bodies may still fail a work or
 memory limit. DetectionOnly does not suppress fatal runtime failures.
 
-When request inspection terminates, malformed JSON, XML or multipart data and
-excess query arguments return HTTP 400. Request header count, header size and
+Full inspection exposes the read-only SecLang target `REQBODY_ERROR` from phase 2.
+A complete inspection returns `1` for a JSON, XML or multipart parse failure and
+`0` on success. Tolerated URL-encoded escapes retain their existing form values.
+A rule can request a specific rejection status, for example
+
+```apache
+SecRule REQBODY_ERROR "@eq 1" "id:10001,phase:2,deny,status:422"
+```
+
+In On mode a matched deny supplies the response status. A detected parse failure
+with no intervention, including a scoring-only match, returns HTTP 400 before
+upstream dispatch. DetectionOnly records matches and forwards the completed
+request. A partial inspection skips rules that need this target under the
+Continue policy. Explicit prefix inspection rejects rules using this target.
+
+During multipart inspection, a part with multiple Content-Disposition headers
+or conflicting values for its name or filename parameters triggers a parse
+failure. Separate parts may share a field name. Quoted boundary values are supported.
+
+Excess query arguments return HTTP 400. Request header count, header size and
 cookie count limits return 431. Request input size, body structure and inspected
 candidate or record count limits return 413. Internal failures and execution
 budgets such as rule work, capture storage and parser work return 500.

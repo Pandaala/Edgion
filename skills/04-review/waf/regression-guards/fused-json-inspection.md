@@ -189,7 +189,9 @@ bytes later without another JSON grammar pass.
 Gateway inspection now consumes real capture chunks before transport EOF. Cached
 bodies use bounded immutable snapshot input with pre-IO size admission and actual
 reader EOF/parity. JSON-only spill requires no complete materialization; forced raw
-visibility and DetectionOnly syntax fallback may require one. BodyStorage remains
+visibility and the raw view of a published syntax fallback may require one.
+DetectionOnly and enforcing generations with a REQBODY_ERROR consumer publish
+the fallback after complete admission. BodyStorage remains
 the sole forwarding/retry cache; no cache-free forwarding is claimed. Future header
 or nested-JSON adapters require explicit source ownership and aggregate limits.
 

@@ -656,8 +656,10 @@ fn parse_multipart_part(part: &[u8], builder: &mut BodyBuilder) -> Result<usize,
     };
     let headers = &part[..separator];
     let content = &part[separator + 4..];
-    let mut field_name = None;
-    let mut filename = None;
+    let malformed = BodyError::Malformed {
+        processor: BodyProcessorSelection::Multipart,
+    };
+    let mut disposition = None;
     for line in headers.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.is_empty() || line[0].is_ascii_whitespace() {
@@ -673,12 +675,14 @@ fn parse_multipart_part(part: &[u8], builder: &mut BodyBuilder) -> Result<usize,
             });
         }
         if name.eq_ignore_ascii_case(b"content-disposition") {
-            (field_name, filename) = disposition_parameters(value);
+            if disposition.is_some() {
+                return Err(malformed);
+            }
+            disposition = Some(disposition_parameters(value)?);
         }
     }
-    let field_name = field_name.ok_or(BodyError::Malformed {
-        processor: BodyProcessorSelection::Multipart,
-    })?;
+    let (field_name, filename) = disposition.ok_or(malformed)?;
+    let field_name = field_name.ok_or(malformed)?;
     for line in headers.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         builder.push(CollectionKind::MultipartPartHeaders, Some(field_name), line, false)?;
@@ -767,9 +771,11 @@ fn is_header_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
 }
 
-fn disposition_parameters(value: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
+type DispositionParameters<'a> = (Option<&'a [u8]>, Option<&'a [u8]>);
+
+fn disposition_parameters(value: &[u8]) -> Result<DispositionParameters<'_>, BodyError> {
     let Some(mut cursor) = memchr::memchr(b';', value).and_then(|index| index.checked_add(1)) else {
-        return (None, None);
+        return Ok((None, None));
     };
     let mut field_name = None;
     let mut filename = None;
@@ -791,28 +797,36 @@ fn disposition_parameters(value: &[u8]) -> (Option<&[u8]>, Option<&[u8]>) {
             cursor += 1;
         }
         let parameter = &value[start..cursor];
-        let (name, value) = split_once(trim_ascii(parameter), b'=');
-        let destination = if field_name.is_none() && name.eq_ignore_ascii_case(b"name") {
+        let (mut name, value) = split_once(trim_ascii(parameter), b'=');
+        while let [prefix @ .., b' ' | b'\t'] = name {
+            name = prefix;
+        }
+        let destination = if name.eq_ignore_ascii_case(b"name") {
             Some(&mut field_name)
-        } else if filename.is_none() && name.eq_ignore_ascii_case(b"filename") {
+        } else if name.eq_ignore_ascii_case(b"filename") {
             Some(&mut filename)
         } else {
             None
         };
         if let Some(destination) = destination {
             let value = trim_ascii(value);
-            *destination = if value.len() >= 2 && value.first() == Some(&b'"') && value.last() == Some(&b'"') {
-                Some(&value[1..value.len() - 1])
+            let value = if value.len() >= 2 && value.first() == Some(&b'"') && value.last() == Some(&b'"') {
+                &value[1..value.len() - 1]
             } else {
-                Some(value)
+                value
             };
+            if destination.replace(value).is_some_and(|previous| previous != value) {
+                return Err(BodyError::Malformed {
+                    processor: BodyProcessorSelection::Multipart,
+                });
+            }
         }
-        if (field_name.is_some() && filename.is_some()) || cursor == value.len() {
+        if cursor == value.len() {
             break;
         }
         cursor += 1;
     }
-    (field_name, filename)
+    Ok((field_name, filename))
 }
 
 fn multipart_boundary(content_type: Option<&[u8]>) -> Option<&[u8]> {

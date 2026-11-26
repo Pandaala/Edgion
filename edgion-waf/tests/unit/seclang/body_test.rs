@@ -324,10 +324,13 @@ fn multipart_zero_length_part_stays_malformed() {
 fn multipart_disposition_keeps_semicolons_inside_quoted_parameters() {
     let disposition = b"form-data; name=\"prefix&amp;suffix\"; filename=\"safe.txt\"";
     assert_eq!(
-        disposition_parameters(disposition).0,
+        disposition_parameters(disposition).unwrap().0,
         Some(b"prefix&amp;suffix".as_slice())
     );
-    assert_eq!(disposition_parameters(disposition).1, Some(b"safe.txt".as_slice()));
+    assert_eq!(
+        disposition_parameters(disposition).unwrap().1,
+        Some(b"safe.txt".as_slice())
+    );
 }
 
 #[test]
@@ -952,21 +955,21 @@ fn numeric_publication_metadata_owns_decimal_boundary_values() {
 }
 
 #[test]
-fn multipart_disposition_preserves_first_values_and_tolerant_grammar() {
+fn multipart_disposition_accepts_consistent_values_and_tolerant_grammar() {
     let check = |input: &[u8], name: Option<&[u8]>, filename: Option<&[u8]>| {
-        assert_eq!(disposition_parameters(input), (name, filename));
+        assert_eq!(disposition_parameters(input), Ok((name, filename)));
     };
     check(b"form-data", None, None);
     check(b"form-data;", None, None);
     check(
-        b"form-data; name=a; name=b; filename=x; filename=y",
+        br#"form-data; name=a; name="a"; filename=x; filename=x"#,
         Some(b"a"),
         Some(b"x"),
     );
     check(b"form-data; filename=x; name=a", Some(b"a"), Some(b"x"));
-    check(b"form-data; name=; name=b; filename=", Some(b""), Some(b""));
+    check(b"form-data; name=; name=; filename=", Some(b""), Some(b""));
     check(b"form-data; name; filename=x", Some(b""), Some(b"x"));
-    check(b"form-data; name =a; filename=x", None, Some(b"x"));
+    check(b"form-data; name =a; filename=x", Some(b"a"), Some(b"x"));
     check(b"form-data; NaMe= a ; FILENAME= x ", Some(b"a"), Some(b"x"));
     check(br#"form-data; name="a;b"; filename="x;y""#, Some(b"a;b"), Some(b"x;y"));
     check(br#"form-data; name="a\";b"; filename=x"#, Some(br#"a\";b"#), Some(b"x"));
@@ -979,23 +982,53 @@ fn multipart_disposition_preserves_first_values_and_tolerant_grammar() {
 }
 
 #[test]
-fn multipart_later_disposition_replaces_missing_filename() {
+fn conflicting_multipart_identity_is_malformed() {
+    for value in [
+        b"form-data; name=a; filename=x; NAME=b".as_slice(),
+        b"form-data; name=a; filename=x; FILENAME=y",
+        b"form-data; name=; name=b",
+        b"form-data; name=a; filename=x; NAME \t=b",
+        b"form-data; filename\t=x; name=a; filename=y",
+    ] {
+        assert_eq!(
+            disposition_parameters(value),
+            Err(BodyError::Malformed {
+                processor: BodyProcessorSelection::Multipart,
+            })
+        );
+    }
     let input = concat!(
-        "--x\r\n",
+        "--edge\r\n",
         "Content-Disposition: form-data; name=\"old\"; filename=\"old.txt\"\r\n",
         "Content-Disposition: form-data; name=\"new\"\r\n",
-        "\r\nvalue\r\n--x--\r\n"
+        "\r\nvalue\r\n--edge--\r\n"
+    );
+    assert!(matches!(
+        multipart_edge_publication(input.as_bytes()),
+        Err(BodyError::Malformed {
+            processor: BodyProcessorSelection::Multipart,
+        })
+    ));
+}
+
+#[test]
+fn multipart_separate_parts_can_repeat_a_field_name() {
+    let body = concat!(
+        "--edge\r\nContent-Disposition: form-data; name=a\r\n\r\nfirst\r\n",
+        "--edge\r\nContent-Disposition: form-data; name=a\r\n\r\nsecond\r\n--edge--\r\n"
     );
     let published = publication(
-        input.as_bytes(),
+        body.as_bytes(),
         BodyProcessorSelection::Multipart,
-        Some(b"multipart/form-data; boundary=x"),
+        Some(br#"multipart/form-data; boundary="edge""#),
     );
     assert_eq!(
         values(&published, CollectionKind::Args),
-        [(Some(b"new".as_slice()), b"value".as_slice())]
+        [
+            (Some(b"a".as_slice()), b"first".as_slice()),
+            (Some(b"a".as_slice()), b"second".as_slice()),
+        ]
     );
-    assert!(values(&published, CollectionKind::Files).is_empty());
 }
 
 #[test]

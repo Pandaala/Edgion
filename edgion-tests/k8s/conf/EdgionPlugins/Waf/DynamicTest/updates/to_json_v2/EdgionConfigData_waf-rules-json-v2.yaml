@@ -10,7 +10,7 @@ spec:
       version: '1'
       profile: json-v2
       provenance: edgion-tests/waf-dynamic
-      digest: 3d39e074e16f3d4c7372e684c1564736048161d0aaf55ccabdb6d73fcfcf78f5
+      digest: 25733ee3025cddf4169e585640d0ad318f71e4c50c1577deb334a08ff5b6978f
       roots:
       - main.conf
       rules:
@@ -20,5 +20,7 @@ spec:
           SecRule ARGS:q "@pm query-deny" "id:6102,phase:2,deny,status:409"
 
           SecRule ARGS "@pm forbidden" "id:6103,phase:2,deny,status:406"
+
+          SecRule REQBODY_ERROR "@eq 1" "id:6104,phase:2,deny,status:422"
 
           '

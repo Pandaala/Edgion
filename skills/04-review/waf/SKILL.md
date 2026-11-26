@@ -11,6 +11,7 @@ Check the current compiler, transaction, and detector code before applying a pas
 ## Mandatory design
 
 - [Engine trust boundaries and the gateway contract](mandatory-design/engine-trust-boundaries-and-gateway-contract.md)
+- [Request body parser outcome in SecLang](mandatory-design/request-body-parser-outcome.md)
 
 ## Review evidence
 

@@ -304,6 +304,7 @@ pub(super) struct CompiledTargetRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompiledTargetPlan {
+    pub(super) reads_body_error: bool,
     pub(super) requires_request_body: bool,
     pub(super) record_start: usize,
     pub(super) record_count: usize,
@@ -395,6 +396,7 @@ pub struct CompiledGeneration {
     pub(super) xml_inspection: json_inspection_plan::CompiledJsonPlan,
     pub(super) prefix_validation: Result<(), &'static str>,
     pub(super) requires_complete_request_body: bool,
+    pub(super) reads_body_error: bool,
     pub(super) bytes: Vec<u8>,
     pub(super) templates: Vec<CompiledTemplate>,
     pub(super) segments: Vec<CompiledTemplateSegment>,
@@ -747,14 +749,11 @@ impl CompiledGeneration {
             }
             for member in &self.members[unit.member_start..unit.member_start + unit.member_count] {
                 work.charge_records(1, limits)?;
-                if member.has_body_macro
-                    || member
-                        .target_plan
-                        .is_some_and(|id| self.target_plans[id].requires_request_body)
-                {
+                let target = member.target_plan.map(|id| self.target_plans[id]);
+                self.reads_body_error |= target.is_some_and(|plan| plan.reads_body_error);
+                if member.has_body_macro || target.is_some_and(|plan| plan.requires_request_body) {
                     unit.requires_request_body = true;
                     self.requires_complete_request_body = true;
-                    break;
                 }
             }
         }
@@ -864,6 +863,7 @@ pub(super) fn collection_requires_request_body(collection: CollectionKind) -> bo
             | CollectionKind::MultipartPartHeaders
             | CollectionKind::Xml
             | CollectionKind::ReqbodyProcessor
+            | CollectionKind::ReqbodyError
     )
 }
 
@@ -950,7 +950,8 @@ fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRul
                 // This value depends on the processor selected from the real
                 // content type (or ctl action). Publishing an empty Raw body
                 // at streamed EOS would silently change its semantics.
-                CollectionKind::ReqbodyProcessor => {
+                CollectionKind::ReqbodyError if !target_plan.reads_body_error => {}
+                CollectionKind::ReqbodyProcessor | CollectionKind::ReqbodyError => {
                     class = merge_request_body_class(class, RequestBodyExecutionClass::BoundedSnapshot);
                 }
                 CollectionKind::ResponseBody | CollectionKind::ResponseHeaders | CollectionKind::ResponseStatus => {
